@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "646841655886",
+    "firebase_url": "https://sistemacompraschabely-default-rtdb.firebaseio.com",
+    "project_id": "sistemacompraschabely",
+    "storage_bucket": "sistemacompraschabely.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:646841655886:android:1db980686a21a5a002991f",
+        "android_client_info": {
+          "package_name": "com.example.sistema_compras"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBLBL4Y77HAJ4XHGsqn0bYwNUt2Zl6GlGI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
