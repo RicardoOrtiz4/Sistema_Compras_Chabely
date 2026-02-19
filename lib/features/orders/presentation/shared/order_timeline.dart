@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/extensions.dart';
@@ -15,12 +15,14 @@ class OrderTimeline extends StatelessWidget {
     final statuses = List<PurchaseOrderStatus>.from(defaultStatusFlow);
     var currentIndex = -1;
     for (final event in events) {
-      final index = statuses.indexWhere((status) => status == event.toStatus);
+      final normalized = _normalizeStatus(event.toStatus);
+      final index = statuses.indexWhere((status) => status == normalized);
       if (index > currentIndex) {
         currentIndex = index;
       }
     }
-    final fallbackIndex = statuses.indexWhere((status) => status == order.status);
+    final fallbackIndex =
+        statuses.indexWhere((status) => status == _normalizeStatus(order.status));
     if (fallbackIndex > currentIndex) {
       currentIndex = fallbackIndex;
     }
@@ -39,11 +41,18 @@ class OrderTimeline extends StatelessWidget {
 
   PurchaseOrderEvent? _eventForStatus(PurchaseOrderStatus status) {
     for (final event in events) {
-      if (event.toStatus == status) {
+      if (_normalizeStatus(event.toStatus) == status) {
         return event;
       }
     }
     return null;
+  }
+
+  PurchaseOrderStatus? _normalizeStatus(PurchaseOrderStatus? status) {
+    if (status == PurchaseOrderStatus.orderPlaced) {
+      return PurchaseOrderStatus.eta;
+    }
+    return status;
   }
 }
 
@@ -83,8 +92,9 @@ class _TimelineTile extends StatelessWidget {
         const SizedBox(width: 12),
         Expanded(
           child: Card(
-            color:
-                isCompleted ? color.withValues(alpha: color.a * 0.1) : Theme.of(context).cardColor,
+            color: isCompleted
+                ? color.withValues(alpha: color.a * 0.1)
+                : Theme.of(context).cardColor,
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Column(
@@ -100,7 +110,7 @@ class _TimelineTile extends StatelessWidget {
                   if (event?.byRole != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
-                      child: Text('Rol: ${event!.byRole}',
+                      child: Text('Área: ${event!.byRole}',
                           style: Theme.of(context).textTheme.bodySmall),
                     ),
                   if (event?.comment != null)
@@ -117,6 +127,3 @@ class _TimelineTile extends StatelessWidget {
     );
   }
 }
-
-
-

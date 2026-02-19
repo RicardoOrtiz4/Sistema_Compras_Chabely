@@ -1,6 +1,7 @@
 import 'package:riverpod/riverpod.dart';
 import 'package:riverpod/legacy.dart';
 
+import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/providers.dart';
 import 'package:sistema_compras/features/auth/data/auth_repository.dart';
 
@@ -8,9 +9,9 @@ class LoginState {
   const LoginState({this.isLoading = false, this.error});
 
   final bool isLoading;
-  final String? error;
+  final Object? error;
 
-  LoginState copyWith({bool? isLoading, String? error, bool clearError = false}) {
+  LoginState copyWith({bool? isLoading, Object? error, bool clearError = false}) {
     return LoginState(
       isLoading: isLoading ?? this.isLoading,
       error: clearError ? null : (error ?? this.error),
@@ -33,8 +34,9 @@ class LoginController extends StateNotifier<LoginState> {
         await _authRepository.ensureUserDocument(user);
       }
       state = state.copyWith(isLoading: false, clearError: true);
-    } on Exception catch (error) {
-      state = state.copyWith(isLoading: false, error: error.toString());
+    } catch (error, stack) {
+      logError(error, stack, context: 'LoginController.signIn');
+      state = state.copyWith(isLoading: false, error: error);
     }
   }
 }

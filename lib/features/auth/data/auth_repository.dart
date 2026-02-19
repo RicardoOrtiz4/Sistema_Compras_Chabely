@@ -1,14 +1,14 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sistema_compras/core/providers.dart';
 
 class AuthRepository {
-  AuthRepository(this._auth, this._firestore);
+  AuthRepository(this._auth, this._database);
 
   final FirebaseAuth _auth;
-  final FirebaseFirestore _firestore;
+  final FirebaseDatabase _database;
 
   Stream<User?> authStateChanges() => _auth.authStateChanges();
 
@@ -19,23 +19,23 @@ class AuthRepository {
   Future<void> signOut() => _auth.signOut();
 
   Future<void> ensureUserDocument(User user) async {
-    final docRef = _firestore.collection('users').doc(user.uid);
-    final snapshot = await docRef.get();
-    if (!snapshot.exists) {
-      await docRef.set({
-        'name': user.displayName ?? user.email?.split('@').first ?? 'Usuario',
-        'email': user.email,
-        'role': 'usuario',
-        'areaId': 'por-definir',
-        'isActive': true,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-    }
+    final ref = _database.ref('users/${user.uid}');
+    final snapshot = await ref.get();
+    if (snapshot.exists) return;
+    await ref.set({
+      'name': user.displayName ?? user.email?.split('@').first ?? 'Usuario',
+      'email': user.email,
+      'role': 'usuario',
+      'areaId': 'por-definir',
+      'isActive': true,
+      'createdAt': ServerValue.timestamp,
+      'updatedAt': ServerValue.timestamp,
+    });
   }
 }
 
 final authRepositoryProvider = Provider<AuthRepository>((ref) {
   final auth = ref.watch(firebaseAuthProvider);
-  final firestore = ref.watch(firestoreProvider);
-  return AuthRepository(auth, firestore);
+  final database = ref.watch(firebaseDatabaseProvider);
+  return AuthRepository(auth, database);
 });

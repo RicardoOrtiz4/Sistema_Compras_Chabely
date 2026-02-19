@@ -1,76 +1,41 @@
-Gracias por el detalle. Quiero destrabar compilación YA, aunque sea con una estructura temporal. Haz esto en este orden y reporta resultados (sin detenerte):
+At least listener of the StateNotifier Instance of 'StateController<String?>' threw an exception when the notifier tried to update its state.
 
-A) Verificación dura de que los paths existen EXACTOS (case-sensitive)
-1) Desde la raíz (donde está pubspec.yaml), ejecuta y pega salida:
-   flutter --version
-   dart --version
-   flutter doctor -v
+The exceptions thrown are:
 
-2) Imprime el árbol real de 3 ejemplos que fallan (para detectar typos/case):
-   - Windows:
-     dir "lib\features\auth\presentation" /b
-     dir "lib\features\home\presentation" /b
-     dir "lib\features\orders\presentation" /b
-   Confirma que la carpeta se llama exactamente "presentation" (no "Presentation", "presentacion", "presentaion", etc.).
-   IMPORTANTE: si hay un solo archivo/folder con mayúsculas o typo, el analyzer puede fallar raro.
+Tried to modify a provider while the widget tree was building.
+If you are encountering this error, chances are you tried to modify a provider in a widget life-cycle, such as but not limited to:
 
-3) Confirma que esos archivos NO son links raros / OneDrive / junction:
-   fsutil reparsepoint query "lib\features\auth\presentation" 
-   (si da error de sintaxis, solo dime si el proyecto está dentro de OneDrive o carpeta sincronizada)
+build
 
-B) Confirma el nombre del paquete y los imports
-4) En pubspec.yaml, el name debe ser EXACTO "sistema_compras" (sin guiones).
-   - Busca en todo el repo:
-     rg "package:" lib -n
-   y confirma que no exista ni un solo "package:compras_system" u otro nombre.
+initState
 
-C) Limpieza fuerte de caches del analyzer (más agresiva que flutter clean)
-5) Cierra VS Code/Android Studio completamente.
-6) Borra carpetas (sí, borrar):
-   rmdir /s /q ".dart_tool"
-   rmdir /s /q "build"
-   (y si existe) rmdir /s /q ".idea"
-   (y si existe) rmdir /s /q ".vscode\.dart-tool"  (solo si la ves)
-7) Luego:
-   flutter pub get
-   flutter analyze
+dispose
 
-D) Si sigue fallando: prueba A/B para aislar si es el PATH con espacios
-8) Clona/copia el proyecto a una ruta SIN espacios y corta, por ejemplo:
-   D:\SistemaCompras
-   (misma carpeta, mismo contenido)
-   Repite:
-   flutter pub get
-   flutter analyze
-   Si aquí funciona, el culpable es el path/espacios/sync.
+didUpdateWidget
 
-E) Si sigue fallando: “smoke test” minimalista para ver si el analyzer resuelve features
-9) Crea un archivo nuevo:
-   lib/_smoke_import.dart
-   con contenido:
-   import 'package:sistema_compras/features/auth/presentation/login_screen.dart';
-   void main() {}
-   Luego:
-   flutter analyze lib/_smoke_import.dart
-   Si falla incluso aquí, es problema de resolución de URIs (no del router).
+didChangeDependencies
 
-F) Plan de desbloqueo (elige sin pedir permiso si el problema persiste)
-10) Si tras A-E sigue igual, NO te quedes atorado:
-   - Revertimos a estructura que compila: mueve features a lib/src/features
-   - Ajusta imports a package:sistema_compras/src/features/...
-   - Deja TODO para reestructura posterior.
-   El objetivo del sprint es funcionalidad; la estructura final la ajustamos cuando el analyzer esté estable.
+Modifying a provider inside those life-cycles is not allowed, as it could lead to an inconsistent UI state. For example, two widgets could listen to the same provider, but incorrectly receive different states.
 
-G) Router temporal (para no depender de imports masivos)
-11) Mientras resolvemos, usa router manual mínimo:
-   - MaterialApp(home: LoginScreen())
-   - rutas definidas localmente en router.dart
-   - sin generación
-   Compila y corre.
+To fix this problem, you have one of two solutions:
 
-Entrega al final:
-- 1) Resultado de cada bloque A-G (qué funcionó y qué no)
-- 2) Si el paso D (ruta sin espacios) lo arregla, dejamos esa ruta como recomendación
-- 3) Si el paso F (volver a lib/src) destraba, continúas sprint 1 con esa estructura
+(preferred) Move the logic for modifying your provider outside of a widget life-cycle. For example, maybe you could update your provider inside a button's onPressed instead.
 
-Prioridad: que compile y corra. Estructura “lib/app/core/features” es deseable pero no a costa de bloquear el proyecto.
+Delay your modification, such as by encapsulating the modification in a Future(() {...});
+This will perform your update after the widget tree is done building.
+dart-sdk/lib/internal/js_dev_runtime/private/ddc_runtime/errors.dart 274:3 throw
+package:flutter_riverpod/src/core/provider_scope.dart 333:7 [_debugCanModifyProviders]
+dart-sdk/lib/_internal/js_dev_runtime/private/ddc_runtime/operations.dart 118:77 tear
+package:riverpod/src/core/element.dart 735:30 [_debugAssertNotificationAllowed]
+package:riverpod/src/core/element.dart 777:38 [_notifyListeners]
+package:riverpod/src/core/element.dart 450:7 set value
+package:riverpod/src/core/element.dart 66:11 asyncTransition
+package:riverpod/src/core/element.dart 138:5 onData
+dart-sdk/lib/_internal/js_dev_runtime/private/ddc_runtime/operations.dart 118:77 tear
+package:riverpod/src/core/async_value.dart 158:20 AsyncValueExtensions.map
+package:riverpod/src/core/element.dart 75:14 set value
+package:riverpod/src/providers/legacy/state_provider.dart 120:7 <fn>
+package:state_notifier/state_notifier.dart 227:23 set state
+package:riverpod/src/providers/legacy/state_controller.dart 20:36 set state
+package:sistema_compras/features/home/presentation/home_screen.dart 353:42 _maybeShowReminder
+package:sistema_compras/features/home/presentation/home_screen.dart 138:11 <fn>

@@ -3,8 +3,11 @@ import 'package:flutter/material.dart';
 enum PurchaseOrderStatus {
   draft,
   pendingCompras,
+  cotizaciones,
   authorizedGerencia,
   paymentDone,
+  contabilidad,
+  almacen,
   orderPlaced,
   eta,
 }
@@ -13,17 +16,23 @@ extension PurchaseOrderStatusX on PurchaseOrderStatus {
   String get label {
     switch (this) {
       case PurchaseOrderStatus.draft:
-        return 'Borrador';
+        return 'Requiere corrección';
       case PurchaseOrderStatus.pendingCompras:
         return 'Por confirmar (Compras)';
+      case PurchaseOrderStatus.cotizaciones:
+        return 'Cotizaciones';
       case PurchaseOrderStatus.authorizedGerencia:
-        return 'Autorizado por Gerencia General';
+        return 'En Dirección General';
       case PurchaseOrderStatus.paymentDone:
-        return 'Pago realizado';
+        return 'Pendiente de ETA';
+      case PurchaseOrderStatus.contabilidad:
+        return 'En Contabilidad';
+      case PurchaseOrderStatus.almacen:
+        return 'En Almacén';
       case PurchaseOrderStatus.orderPlaced:
         return 'Orden realizada';
       case PurchaseOrderStatus.eta:
-        return 'Fecha estimada de entrega';
+        return 'Orden finalizada';
     }
   }
 
@@ -33,10 +42,16 @@ extension PurchaseOrderStatusX on PurchaseOrderStatus {
         return Icons.edit_note;
       case PurchaseOrderStatus.pendingCompras:
         return Icons.playlist_add_check_circle_outlined;
+      case PurchaseOrderStatus.cotizaciones:
+        return Icons.request_quote_outlined;
       case PurchaseOrderStatus.authorizedGerencia:
         return Icons.verified_user;
       case PurchaseOrderStatus.paymentDone:
-        return Icons.payments_outlined;
+        return Icons.event_available_outlined;
+      case PurchaseOrderStatus.contabilidad:
+        return Icons.receipt_long_outlined;
+      case PurchaseOrderStatus.almacen:
+        return Icons.inventory_2_outlined;
       case PurchaseOrderStatus.orderPlaced:
         return Icons.shopping_bag;
       case PurchaseOrderStatus.eta:
@@ -50,10 +65,16 @@ extension PurchaseOrderStatusX on PurchaseOrderStatus {
         return scheme.outline;
       case PurchaseOrderStatus.pendingCompras:
         return scheme.primary;
+      case PurchaseOrderStatus.cotizaciones:
+        return scheme.secondaryContainer;
       case PurchaseOrderStatus.authorizedGerencia:
         return scheme.secondary;
       case PurchaseOrderStatus.paymentDone:
         return scheme.tertiary;
+      case PurchaseOrderStatus.contabilidad:
+        return scheme.secondary;
+      case PurchaseOrderStatus.almacen:
+        return scheme.primaryFixed;
       case PurchaseOrderStatus.orderPlaced:
         return scheme.primaryFixed;
       case PurchaseOrderStatus.eta:
@@ -77,14 +98,35 @@ extension PurchaseOrderUrgencyX on PurchaseOrderUrgency {
         return 'Baja';
     }
   }
+
+  Color color(ColorScheme scheme) {
+    switch (this) {
+      case PurchaseOrderUrgency.urgente:
+        return scheme.error;
+      case PurchaseOrderUrgency.alta:
+        return Colors.orange;
+      case PurchaseOrderUrgency.media:
+        return scheme.primary;
+      case PurchaseOrderUrgency.baja:
+        return Colors.green;
+    }
+  }
 }
 
-const trackingButtonLabel = 'Seguimiento';
+const appLogoAsset = 'evidencias/LOGO CHABELY.png';
 
 const defaultStatusFlow = <PurchaseOrderStatus>[
   PurchaseOrderStatus.pendingCompras,
+  PurchaseOrderStatus.cotizaciones,
   PurchaseOrderStatus.authorizedGerencia,
   PurchaseOrderStatus.paymentDone,
-  PurchaseOrderStatus.orderPlaced,
+  PurchaseOrderStatus.contabilidad,
+  PurchaseOrderStatus.almacen,
   PurchaseOrderStatus.eta,
 ];
+
+const adminRoles = {'administrador', 'admin'};
+
+bool isAdminRole(String role) {
+  return adminRoles.contains(role.toLowerCase());
+}

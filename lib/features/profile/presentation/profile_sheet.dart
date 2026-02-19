@@ -1,8 +1,10 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sistema_compras/features/auth/data/auth_repository.dart';
 import 'package:sistema_compras/features/auth/domain/app_user.dart';
+import 'package:sistema_compras/core/error_reporter.dart';
+import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 
 Future<void> showProfileSheet(BuildContext context, WidgetRef ref) async {
@@ -16,7 +18,7 @@ Future<void> showProfileSheet(BuildContext context, WidgetRef ref) async {
       if (user == null) {
         return const Padding(
           padding: EdgeInsets.all(24),
-          child: Center(child: CircularProgressIndicator()),
+          child: SizedBox(height: 200, child: AppSplash()),
         );
       }
       return _ProfileContent(user: user, ref: ref);
@@ -24,11 +26,33 @@ Future<void> showProfileSheet(BuildContext context, WidgetRef ref) async {
   );
 }
 
-class _ProfileContent extends StatelessWidget {
+class _ProfileContent extends StatefulWidget {
   const _ProfileContent({required this.user, required this.ref});
 
   final AppUser user;
   final WidgetRef ref;
+
+  @override
+  State<_ProfileContent> createState() => _ProfileContentState();
+}
+
+class _ProfileContentState extends State<_ProfileContent> {
+  late final TextEditingController _contactEmailController;
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _contactEmailController = TextEditingController(
+      text: widget.user.contactEmail ?? '',
+    );
+  }
+
+  @override
+  void dispose() {
+    _contactEmailController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -38,24 +62,78 @@ class _ProfileContent extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(user.name, style: Theme.of(context).textTheme.titleLarge),
+          Text(widget.user.name, style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 8),
-          Text(user.email),
+          Text(widget.user.email),
           const SizedBox(height: 8),
-          Text('Área: ${user.areaDisplay}'),
-          Text('Rol: ${user.role}'),
+          Text('Área: ${widget.user.areaDisplay}'),
+          Text('Rol: ${widget.user.role}'),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _contactEmailController,
+            decoration: const InputDecoration(
+              labelText: 'Correo para enviar PDFs',
+              hintText: 'correo@ejemplo.com',
+            ),
+            keyboardType: TextInputType.emailAddress,
+            enabled: !_isSaving,
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton(
+              onPressed: _isSaving ? null : _saveContactEmail,
+              child: _isSaving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Guardar correo'),
+            ),
+          ),
           const SizedBox(height: 24),
           FilledButton.icon(
             onPressed: () async {
               final navigator = Navigator.of(context);
-              await ref.read(authRepositoryProvider).signOut();
+              await widget.ref.read(authRepositoryProvider).signOut();
               navigator.pop();
             },
             icon: const Icon(Icons.logout),
-            label: const Text('Cerrar sesión'),
+            label: const Text('Cerrar sesion'),
           ),
         ],
       ),
     );
+  }
+
+  Future<void> _saveContactEmail() async {
+    setState(() => _isSaving = true);
+    try {
+      await widget.ref
+          .read(profileRepositoryProvider)
+          .updateContactEmail(
+            uid: widget.user.id,
+            contactEmail: _contactEmailController.text,
+          );
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Correo actualizado.')));
+    } catch (error, stack) {
+      if (!mounted) return;
+      final message = reportError(
+        error,
+        stack,
+        context: 'ProfileSheet.saveEmail',
+      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    } finally {
+      if (mounted) {
+        setState(() => _isSaving = false);
+      }
+    }
   }
 }
