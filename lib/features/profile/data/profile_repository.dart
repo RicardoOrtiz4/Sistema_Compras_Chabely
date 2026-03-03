@@ -165,7 +165,7 @@ const _defaultAreas = <String, Map<String, String>>{
 final currentUserProfileProvider = StreamProvider<AppUser?>((ref) {
   final uid = ref.watch(currentUserIdProvider);
   if (uid == null) {
-    return const Stream.empty();
+    return Stream.value(null);
   }
   final repository = ref.watch(profileRepositoryProvider);
   return repository.watchProfile(uid);
@@ -180,4 +180,3 @@ final areasProvider = StreamProvider<List<AreaOption>>((ref) {
   final repository = ref.watch(profileRepositoryProvider);
   return repository.watchAreas();
 });
-

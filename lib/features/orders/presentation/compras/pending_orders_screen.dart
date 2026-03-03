@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,10 +9,13 @@ import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
+import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_status_duration.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_search.dart';
+import 'package:sistema_compras/core/navigation_guard.dart';
 
 class PendingOrdersScreen extends ConsumerStatefulWidget {
   const PendingOrdersScreen({super.key});
@@ -21,7 +26,10 @@ class PendingOrdersScreen extends ConsumerStatefulWidget {
 
 class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
   late final TextEditingController _searchController;
+  final OrderSearchCache _searchCache = OrderSearchCache();
+  Timer? _searchDebounce;
   String _searchQuery = '';
+  int _limit = defaultOrderPageSize;
 
   @override
   void initState() {
@@ -32,12 +40,31 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
   @override
   void dispose() {
     _searchController.dispose();
+    _searchDebounce?.cancel();
     super.dispose();
+  }
+
+  void _updateSearch(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted) return;
+      setState(() => _searchQuery = value);
+    });
+  }
+
+  void _clearSearch() {
+    _searchDebounce?.cancel();
+    _searchController.clear();
+    setState(() => _searchQuery = '');
+  }
+
+  void _loadMore() {
+    setState(() => _limit += orderPageSizeStep);
   }
 
   @override
   Widget build(BuildContext context) {
-    final ordersAsync = ref.watch(pendingComprasOrdersProvider);
+    final ordersAsync = ref.watch(pendingComprasOrdersPagedProvider(_limit));
 
     return Scaffold(
       appBar: AppBar(
@@ -48,10 +75,20 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
             if (context.canPop()) {
               context.pop();
             } else {
-              context.go('/home');
+              guardedGo(context, '/home');
             }
           },
         ),
+        actions: [
+          infoAction(
+            context,
+            title: 'Ordenes por confirmar',
+            message:
+                'Lista de ordenes pendientes de aprobacion.\n'
+                'Abre el PDF para revisar y autorizar o rechazar.\n'
+                'Usa el buscador y "Ver mas" para mas resultados.',
+          ),
+        ],
       ),
       body: ordersAsync.when(
         data: (orders) {
@@ -59,9 +96,15 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
             return const Center(child: Text('No hay órdenes por confirmar.'));
           }
 
-          final filtered = orders
-              .where((order) => orderMatchesSearch(order, _searchQuery))
-              .toList();
+          _searchCache.retainFor(orders);
+          final trimmedQuery = _searchQuery.trim();
+          final filtered = trimmedQuery.isEmpty
+              ? orders
+              : orders
+                  .where((order) =>
+                      orderMatchesSearch(order, trimmedQuery, cache: _searchCache))
+                  .toList();
+          final canLoadMore = orders.length >= _limit;
 
           final branding = ref.read(currentBrandingProvider);
           prefetchOrderPdfsForOrders(filtered, branding: branding);
@@ -80,28 +123,47 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
                         ? null
                         : IconButton(
                             icon: const Icon(Icons.clear),
-                            onPressed: () {
-                              _searchController.clear();
-                              setState(() => _searchQuery = '');
-                            },
+                            onPressed: _clearSearch,
                           ),
                   ),
-                  onChanged: (value) => setState(() => _searchQuery = value),
+                  onChanged: _updateSearch,
                 ),
               ),
               const SizedBox(height: 12),
               Expanded(
                 child: filtered.isEmpty
-                    ? const Center(child: Text('No hay órdenes con ese filtro.'))
+                    ? Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Text('No hay órdenes con ese filtro.'),
+                          if (canLoadMore) ...[
+                            const SizedBox(height: 12),
+                            OutlinedButton.icon(
+                              onPressed: _loadMore,
+                              icon: const Icon(Icons.expand_more),
+                              label: const Text('Ver más'),
+                            ),
+                          ],
+                        ],
+                      )
                     : ListView.separated(
                         padding: const EdgeInsets.all(16),
-                        itemCount: filtered.length,
+                        itemCount: filtered.length + (canLoadMore ? 1 : 0),
                         separatorBuilder: (_, __) => const SizedBox(height: 12),
                         itemBuilder: (context, index) {
+                          if (index >= filtered.length) {
+                            return Center(
+                              child: OutlinedButton.icon(
+                                onPressed: _loadMore,
+                                icon: const Icon(Icons.expand_more),
+                                label: const Text('Ver más'),
+                              ),
+                            );
+                          }
                           final order = filtered[index];
                           return _PendingOrderCard(
                             order: order,
-                            onReview: () => context.push('/orders/review/${order.id}'),
+                            onReview: () => guardedPush(context, '/orders/review/${order.id}'),
                           );
                         },
                       ),
@@ -151,6 +213,7 @@ class _PendingOrderCard extends ConsumerWidget {
               runSpacing: 4,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
+                _UrgencyPill(urgency: order.urgency),
                 if (wasReturned)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -173,24 +236,29 @@ class _PendingOrderCard extends ConsumerWidget {
             const SizedBox(height: 8),
             Text('Solicitante: ${order.requesterName}'),
             Text('Área: ${order.areaName}'),
-            Text('Urgencia: ${order.urgency.label}'),
-            Text('Creada: $createdLabel'),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: Text('Creada: $createdLabel')),
+                if (wasReturned)
+                  eventsAsync!.when(
+                    data: (events) {
+                      final duration = _timeInRejected(order, events);
+                      if (duration == null) return const SizedBox.shrink();
+                      return StatusDurationPill(
+                        text: 'Tiempo en rechazadas: ${_formatDuration(duration)}',
+                        alignRight: false,
+                      );
+                    },
+                    loading: () => const SizedBox.shrink(),
+                    error: (_, __) => const SizedBox.shrink(),
+                  ),
+              ],
+            ),
             const SizedBox(height: 8),
 
             // ✅ Reemplazo del widget corrupto:
             _OrderCardSummary(order: order),
-
-            if (wasReturned)
-              eventsAsync!.when(
-                data: (events) {
-                  final duration = _timeInRejected(order, events);
-                  if (duration == null) return const SizedBox.shrink();
-                  return Text('Tiempo en rechazadas: ${_formatDuration(duration)}');
-                },
-                loading: () => const SizedBox.shrink(),
-                error: (_, __) => const SizedBox.shrink(),
-              ),
-
             if (wasReturned && order.updatedAt != null)
               Text('Modificada: ${order.updatedAt!.toFullDateTime()}'),
 
@@ -245,11 +313,40 @@ class _OrderCardSummary extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Estado: ${order.status.label}'),
         if (supplier.isNotEmpty) Text('Proveedor: $supplier'),
         if (internalOrder.isNotEmpty) Text('OC interna: $internalOrder'),
         if (order.budget != null) Text('Presupuesto: ${order.budget}'),
       ],
+    );
+  }
+}
+
+class _UrgencyPill extends StatelessWidget {
+  const _UrgencyPill({required this.urgency});
+
+  final PurchaseOrderUrgency urgency;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final color = urgency.color(scheme);
+    final isDark = ThemeData.estimateBrightnessForColor(color) == Brightness.dark;
+    final textColor = isDark ? Colors.white : Colors.black;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        urgency.label,
+        style: TextStyle(
+          color: textColor,
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
     );
   }
 }
@@ -295,7 +392,7 @@ Duration? _timeInRejected(
 String _formatDuration(Duration duration) {
   final totalMinutes = duration.inMinutes;
   if (totalMinutes <= 0) {
-    return 'menos de 1 min';
+    return '< 1 min';
   }
 
   final days = duration.inDays;
@@ -313,3 +410,7 @@ String _formatDuration(Duration duration) {
   }
   return '$minutes min';
 }
+
+
+
+

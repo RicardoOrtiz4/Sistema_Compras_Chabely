@@ -20,7 +20,7 @@ class OrderStatusDuration extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final since = order.updatedAt ?? order.createdAt;
+    final since = order.statusEnteredAt ?? order.updatedAt ?? order.createdAt;
     if (since == null) {
       return Text(
         '${prefix ?? ''}Estado: ${order.status.label} (sin fecha)',
@@ -32,7 +32,7 @@ class OrderStatusDuration extends StatelessWidget {
     var diff = now.difference(since);
     if (diff.isNegative) diff = Duration.zero;
 
-    final durationLabel = _formatDuration(diff);
+    final durationLabel = formatDurationLabel(diff);
 
     if (compact) {
       return Text(
@@ -56,26 +56,92 @@ class OrderStatusDuration extends StatelessWidget {
       ],
     );
   }
+}
 
-  String _formatDuration(Duration d) {
-    final totalMinutes = d.inMinutes;
-    if (totalMinutes <= 0) return 'hace < 1 min';
+class OrderStatusDurationPill extends StatelessWidget {
+  const OrderStatusDurationPill({
+    super.key,
+    required this.order,
+    this.alignRight = true,
+    this.prefix,
+  });
 
-    final days = d.inDays;
-    final hours = d.inHours % 24;
-    final minutes = d.inMinutes % 60;
+  final PurchaseOrder order;
+  final bool alignRight;
+  final String? prefix;
 
-    if (days > 0) {
-      final dayLabel = days == 1 ? 'día' : 'días';
-      final hourPart = hours > 0 ? ' $hours h' : '';
-      return 'hace $days $dayLabel$hourPart';
-    }
-    if (hours > 0) {
-      final minPart = minutes > 0 ? ' $minutes min' : '';
-      return 'hace $hours h$minPart';
-    }
-    return 'hace $minutes min';
+  @override
+  Widget build(BuildContext context) {
+    final since = order.statusEnteredAt ?? order.updatedAt ?? order.createdAt;
+    if (since == null) return const SizedBox.shrink();
+
+    final now = DateTime.now();
+    var diff = now.difference(since);
+    if (diff.isNegative) diff = Duration.zero;
+
+    final durationLabel = formatDurationLabel(diff);
+    final statusLabel = order.status.label;
+    final text = '${prefix ?? 'Tiempo en $statusLabel'}: $durationLabel';
+
+    return StatusDurationPill(
+      text: text,
+      alignRight: alignRight,
+    );
   }
+}
+
+class StatusDurationPill extends StatelessWidget {
+  const StatusDurationPill({
+    super.key,
+    required this.text,
+    this.alignRight = true,
+  });
+
+  final String text;
+  final bool alignRight;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: alignRight ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: Colors.blueGrey.shade50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.blueGrey.shade200),
+        ),
+        child: Text(
+          text,
+          style: TextStyle(
+            color: Colors.blueGrey.shade800,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+String formatDurationLabel(Duration d) {
+  final totalMinutes = d.inMinutes;
+  if (totalMinutes <= 0) return '< 1 min';
+
+  final days = d.inDays;
+  final hours = d.inHours % 24;
+  final minutes = d.inMinutes % 60;
+
+  if (days > 0) {
+    final dayLabel = days == 1 ? 'día' : 'días';
+    final hourPart = hours > 0 ? ' $hours h' : '';
+    return '$days $dayLabel$hourPart';
+  }
+  if (hours > 0) {
+    final minPart = minutes > 0 ? ' $minutes min' : '';
+    return '$hours h$minPart';
+  }
+  return '$minutes min';
 }
 
 /// ---------------------------------------------------------------------------
@@ -100,3 +166,6 @@ class PrMq6aNvWB9RmWRCbyBDeDQD9oy469anXH8 extends OrderStatusDuration {
     super.prefix,
   });
 }
+
+
+

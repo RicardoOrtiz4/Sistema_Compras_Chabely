@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:printing/printing.dart';
 
 import 'package:sistema_compras/core/error_reporter.dart';
+import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 
 Future<void> openPdfExternal(
@@ -57,7 +58,7 @@ class _PdfLoadingDialog extends StatelessWidget {
             SizedBox(
               width: 24,
               height: 24,
-              child: CircularProgressIndicator(strokeWidth: 2),
+              child: AppSplash(compact: true, size: 24),
             ),
             SizedBox(width: 16),
             Expanded(child: Text('Generando PDF...')),

@@ -7,10 +7,48 @@ import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 final _shortDateSlash = DateFormat('dd/MM/yyyy');
 final _shortDateDash = DateFormat('dd-MM-yyyy');
 
-bool orderMatchesSearch(PurchaseOrder order, String query) {
+class OrderSearchCache {
+  final Map<String, _OrderSearchEntry> _cache = <String, _OrderSearchEntry>{};
+
+  String textFor(PurchaseOrder order) {
+    final version = _orderVersion(order);
+    final cached = _cache[order.id];
+    if (cached != null && cached.version == version) {
+      return cached.text;
+    }
+    final text = _buildOrderSearchText(order);
+    _cache[order.id] = _OrderSearchEntry(version, text);
+    return text;
+  }
+
+  void retainFor(Iterable<PurchaseOrder> orders) {
+    if (_cache.isEmpty) return;
+    final keep = {for (final order in orders) order.id};
+    _cache.removeWhere((key, _) => !keep.contains(key));
+  }
+}
+
+class _OrderSearchEntry {
+  const _OrderSearchEntry(this.version, this.text);
+
+  final int version;
+  final String text;
+}
+
+int _orderVersion(PurchaseOrder order) {
+  final timestamp = order.updatedAt ?? order.createdAt;
+  if (timestamp != null) return timestamp.millisecondsSinceEpoch;
+  return order.items.length;
+}
+
+bool orderMatchesSearch(
+  PurchaseOrder order,
+  String query, {
+  OrderSearchCache? cache,
+}) {
   final normalized = query.trim().toLowerCase();
   if (normalized.isEmpty) return true;
-  final haystack = _buildOrderSearchText(order);
+  final haystack = cache == null ? _buildOrderSearchText(order) : cache.textFor(order);
   final tokens = normalized.split(RegExp(r'\s+')).where((token) => token.isNotEmpty);
   for (final token in tokens) {
     if (!haystack.contains(token)) {

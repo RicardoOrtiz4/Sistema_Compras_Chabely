@@ -1,16 +1,19 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
+import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_search.dart';
+import 'package:sistema_compras/core/navigation_guard.dart';
 
 class OrderHistoryScreen extends ConsumerStatefulWidget {
   const OrderHistoryScreen({super.key});
@@ -25,7 +28,10 @@ class _OrderHistoryScreenState extends ConsumerState<OrderHistoryScreen> {
   DateTimeRange? dateRange;
 
   late final TextEditingController _searchController;
+  final OrderSearchCache _searchCache = OrderSearchCache();
+  Timer? _searchDebounce;
   String _searchQuery = '';
+  int _limit = defaultOrderPageSize;
 
   @override
   void initState() {
@@ -36,26 +42,60 @@ class _OrderHistoryScreenState extends ConsumerState<OrderHistoryScreen> {
   @override
   void dispose() {
     _searchController.dispose();
+    _searchDebounce?.cancel();
     super.dispose();
+  }
+
+  void _updateSearch(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted) return;
+      setState(() => _searchQuery = value);
+    });
+  }
+
+  void _clearSearch() {
+    _searchDebounce?.cancel();
+    _searchController.clear();
+    setState(() => _searchQuery = '');
+  }
+
+  void _loadMore() {
+    setState(() => _limit += orderPageSizeStep);
   }
 
   @override
   Widget build(BuildContext context) {
-    final ordersAsync = ref.watch(userOrdersProvider);
+    final ordersAsync = ref.watch(userOrdersPagedProvider(_limit));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Historial de órdenes')),
+      appBar: AppBar(
+        title: const Text('Historial de ordenes'),
+        actions: [
+          infoAction(
+            context,
+            title: 'Historial de ordenes',
+            message:
+                'Busca por folio, solicitante o fecha.\n'
+                'Filtra por estatus, urgencia y rango.\n'
+                'Abre una orden para ver detalle y documentos.',
+          ),
+        ],
+      ),
       body: ordersAsync.when(
         data: (orders) {
           if (orders.isEmpty) {
-            return _EmptyHistory(onCreate: () => context.push('/orders/create'));
+            return _EmptyHistory(onCreate: () => guardedPush(context, '/orders/create'));
           }
 
+          _searchCache.retainFor(orders);
           final filtered = orders
               .where(_isHistoryVisible)
               .where(_filterOrder)
-              .where((order) => orderMatchesSearch(order, _searchQuery))
+              .where((order) =>
+                  orderMatchesSearch(order, _searchQuery, cache: _searchCache))
               .toList();
+          final canLoadMore = orders.length >= _limit;
 
           final branding = ref.read(currentBrandingProvider);
           prefetchOrderPdfsForOrders(filtered, branding: branding);
@@ -74,13 +114,10 @@ class _OrderHistoryScreenState extends ConsumerState<OrderHistoryScreen> {
                         ? null
                         : IconButton(
                             icon: const Icon(Icons.clear),
-                            onPressed: () {
-                              _searchController.clear();
-                              setState(() => _searchQuery = '');
-                            },
+                            onPressed: _clearSearch,
                           ),
                   ),
-                  onChanged: (value) => setState(() => _searchQuery = value),
+                  onChanged: _updateSearch,
                 ),
               ),
               const Padding(
@@ -107,18 +144,40 @@ class _OrderHistoryScreenState extends ConsumerState<OrderHistoryScreen> {
               ),
               Expanded(
                 child: filtered.isEmpty
-                    ? _EmptyResults(
-                        onClear: () => setState(() {
-                          statusFilter = null;
-                          urgencyFilter = null;
-                          dateRange = null;
-                        }),
+                    ? Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          _EmptyResults(
+                            onClear: () => setState(() {
+                              statusFilter = null;
+                              urgencyFilter = null;
+                              dateRange = null;
+                            }),
+                          ),
+                          if (canLoadMore) ...[
+                            const SizedBox(height: 12),
+                            OutlinedButton.icon(
+                              onPressed: _loadMore,
+                              icon: const Icon(Icons.expand_more),
+                              label: const Text('Ver más'),
+                            ),
+                          ],
+                        ],
                       )
                     : ListView.separated(
                         padding: const EdgeInsets.all(16),
-                        itemCount: filtered.length,
+                        itemCount: filtered.length + (canLoadMore ? 1 : 0),
                         separatorBuilder: (_, __) => const SizedBox(height: 12),
                         itemBuilder: (context, index) {
+                          if (index >= filtered.length) {
+                            return Center(
+                              child: OutlinedButton.icon(
+                                onPressed: _loadMore,
+                                icon: const Icon(Icons.expand_more),
+                                label: const Text('Ver más'),
+                              ),
+                            );
+                          }
                           final order = filtered[index];
                           return _OrderHistoryCard(order: order);
                         },
@@ -374,21 +433,38 @@ class _OrderHistoryCard extends ConsumerWidget {
 
     return Card(
       child: InkWell(
-        onTap: () => context.push('/orders/${order.id}'),
+        onTap: () => guardedPush(context, '/orders/${order.id}'),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   Chip(label: Text(order.urgency.label)),
+                  if (resendLabel != null)
+                    Container(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade100,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.red.shade400),
+                      ),
+                      child: Text(
+                        resendLabel,
+                        style: TextStyle(
+                          color: Colors.red.shade800,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
                 ],
               ),
-              if (resendLabel != null) ...[
-                const SizedBox(height: 8),
-                Text(resendLabel),
-              ],
               const SizedBox(height: 8),
               Text('Estado: ${order.status.label}'),
               const SizedBox(height: 8),
@@ -406,7 +482,7 @@ class _OrderHistoryCard extends ConsumerWidget {
                 Align(
                   alignment: Alignment.centerLeft,
                   child: OutlinedButton.icon(
-                    onPressed: () => context.push(copyRoute),
+                    onPressed: () => guardedPush(context, copyRoute),
                     icon: const Icon(Icons.content_copy_outlined),
                     label: const Text('Volver a generar'),
                   ),

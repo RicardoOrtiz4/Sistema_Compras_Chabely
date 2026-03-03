@@ -153,7 +153,7 @@ final partnerRepositoryProvider = Provider<PartnerRepository>((ref) {
 
 final userSuppliersProvider = StreamProvider<List<PartnerEntry>>((ref) {
   final uid = ref.watch(currentUserIdProvider);
-  if (uid == null) return const Stream.empty();
+  if (uid == null) return Stream.value(const <PartnerEntry>[]);
 
   final repository = ref.watch(partnerRepositoryProvider);
   return repository.watchPartners(uid: uid, type: PartnerType.supplier);
@@ -161,7 +161,7 @@ final userSuppliersProvider = StreamProvider<List<PartnerEntry>>((ref) {
 
 final userClientsProvider = StreamProvider<List<PartnerEntry>>((ref) {
   final uid = ref.watch(currentUserIdProvider);
-  if (uid == null) return const Stream.empty();
+  if (uid == null) return Stream.value(const <PartnerEntry>[]);
 
   final repository = ref.watch(partnerRepositoryProvider);
   return repository.watchPartners(uid: uid, type: PartnerType.client);

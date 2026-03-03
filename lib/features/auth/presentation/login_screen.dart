@@ -18,19 +18,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
+  ProviderSubscription<LoginState>? _loginSubscription;
 
   @override
-  void dispose() {
-    _emailController.dispose();
-    _passwordController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final loginState = ref.watch(loginControllerProvider);
-
-    ref.listen(loginControllerProvider, (previous, next) {
+  void initState() {
+    super.initState();
+    _loginSubscription =
+        ref.listenManual<LoginState>(loginControllerProvider, (previous, next) {
       final prevErr = previous?.error;
       final nextErr = next.error;
 
@@ -40,12 +34,25 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           StackTrace.current,
           context: 'LoginScreen',
         );
-        if (!context.mounted) return;
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(message)),
         );
       }
     });
+  }
+
+  @override
+  void dispose() {
+    _loginSubscription?.close();
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final loginState = ref.watch(loginControllerProvider);
 
     if (loginState.isLoading) {
       return Scaffold(

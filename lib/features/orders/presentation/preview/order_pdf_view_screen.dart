@@ -6,6 +6,7 @@ import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
+import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
@@ -13,6 +14,7 @@ import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_inline_view.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_csv_export.dart';
+import 'package:sistema_compras/core/navigation_guard.dart';
 
 class OrderPdfViewScreen extends ConsumerStatefulWidget {
   const OrderPdfViewScreen({required this.orderId, super.key});
@@ -40,6 +42,14 @@ class _OrderPdfViewScreenState extends ConsumerState<OrderPdfViewScreen> {
               icon: const Icon(Icons.download_outlined),
               onPressed: () => exportOrderCsv(context, orderAsync.value!),
             ),
+          infoAction(
+            context,
+            title: 'PDF de orden',
+            message:
+                'Consulta el PDF generado.\n'
+                'Puedes descargar el CSV.\n'
+                'Si es borrador, veras acciones de editar o eliminar.',
+          ),
         ],
       ),
       body: orderAsync.when(
@@ -79,10 +89,7 @@ class _OrderPdfViewScreenState extends ConsumerState<OrderPdfViewScreen> {
                             ? const SizedBox(
                                 width: 18,
                                 height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
+                                child: AppSplash(compact: true, size: 18),
                               )
                             : const Icon(Icons.delete_outline),
                         label: const Text('Borrar'),
@@ -158,7 +165,7 @@ class _OrderPdfViewScreenState extends ConsumerState<OrderPdfViewScreen> {
         throw state.error!;
       }
       if (!mounted) return;
-      context.push('/orders/create?draftId=${order.id}');
+      guardedPush(context, '/orders/create?draftId=${order.id}');
     } catch (error, stack) {
       if (!mounted) return;
       final message = reportError(error, stack, context: 'OrderPdfViewScreen.edit');
@@ -215,3 +222,4 @@ class _OrderPdfViewScreenState extends ConsumerState<OrderPdfViewScreen> {
     return result;   
   }
 }
+

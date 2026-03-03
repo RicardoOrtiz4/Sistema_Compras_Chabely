@@ -19,6 +19,7 @@ class OrderItemDraft {
     required this.unit,
     this.customer,
     this.supplier,
+    this.budget,
     this.estimatedDate,
     this.reviewFlagged = false,
     this.reviewComment,
@@ -32,6 +33,7 @@ class OrderItemDraft {
   final String unit;
   final String? customer;
   final String? supplier;
+  final num? budget;
   final DateTime? estimatedDate;
   final bool reviewFlagged;
   final String? reviewComment;
@@ -45,10 +47,13 @@ class OrderItemDraft {
     String? unit,
     String? customer,
     String? supplier,
+    num? budget,
     DateTime? estimatedDate,
     bool? reviewFlagged,
     String? reviewComment,
     bool removeEstimatedDate = false,
+    bool clearBudget = false,
+    bool clearSupplier = false,
     bool clearReviewComment = false,
   }) {
     final nextPieces = pieces ?? this.pieces;
@@ -61,7 +66,8 @@ class OrderItemDraft {
       quantity: nextQuantity,
       unit: unit ?? this.unit,
       customer: customer ?? this.customer,
-      supplier: supplier ?? this.supplier,
+      supplier: clearSupplier ? null : (supplier ?? this.supplier),
+      budget: clearBudget ? null : (budget ?? this.budget),
       estimatedDate: removeEstimatedDate ? null : (estimatedDate ?? this.estimatedDate),
       reviewFlagged: reviewFlagged ?? this.reviewFlagged,
       reviewComment: clearReviewComment ? null : (reviewComment ?? this.reviewComment),
@@ -78,6 +84,7 @@ class OrderItemDraft {
       unit: unit,
       customer: customer,
       supplier: supplier,
+      budget: budget,
       estimatedDate: estimatedDate,
       reviewFlagged: reviewFlagged,
       reviewComment: reviewComment,
@@ -110,6 +117,7 @@ class OrderItemDraft {
       unit: item.unit,
       customer: item.customer,
       supplier: item.supplier,
+      budget: item.budget,
       estimatedDate: item.estimatedDate,
       reviewFlagged: item.reviewFlagged,
       reviewComment: item.reviewComment,
@@ -297,11 +305,19 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
   }
 
   void addItem() {
-    final base = OrderItemDraft.empty(state.items.length + 1);
+    final nextLine = state.items.isEmpty
+        ? 1
+        : state.items.map((item) => item.line).reduce((a, b) => a > b ? a : b) + 1;
+    final base = OrderItemDraft.empty(nextLine);
     final sharedDate = state.items.isEmpty ? null : state.items.first.estimatedDate;
     final next = sharedDate == null ? base : base.copyWith(estimatedDate: sharedDate);
-    final items = [...state.items, next];
-    state = state.copyWith(items: items);
+    final updated = [next, ...state.items];
+    var nextState = state.copyWith(items: updated);
+    final urgency = _urgencyFromItems(updated);
+    if (urgency != null) {
+      nextState = nextState.copyWith(urgency: urgency);
+    }
+    state = nextState;
   }
 
   void replaceItems(List<OrderItemDraft> items) {

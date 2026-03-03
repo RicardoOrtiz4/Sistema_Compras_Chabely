@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
+import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/auth/domain/app_user.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 
@@ -20,7 +21,20 @@ class AdminUsersScreen extends ConsumerWidget {
 
     if (!isAdmin) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Administrar usuarios')),
+        appBar: AppBar(
+          title: const Text('Administrar usuarios'),
+          actions: [
+            infoAction(
+              context,
+              title: 'Administrar usuarios',
+              message:
+                  'Gestiona cuentas, roles y areas.\n'
+                  'Crear agrega un usuario nuevo.\n'
+                  'Editar cambia rol y area.\n'
+                  'Eliminar quita el acceso.',
+            ),
+          ],
+        ),
         body: const Center(
           child: Text('No tienes permisos para ver esta pantalla.'),
         ),
@@ -30,7 +44,20 @@ class AdminUsersScreen extends ConsumerWidget {
     final usersAsync = ref.watch(allUsersProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Administrar usuarios')),
+      appBar: AppBar(
+        title: const Text('Administrar usuarios'),
+        actions: [
+          infoAction(
+            context,
+            title: 'Administrar usuarios',
+            message:
+                'Gestiona cuentas, roles y areas.\n'
+                'Crear agrega un usuario nuevo.\n'
+                'Editar cambia rol y area.\n'
+                'Eliminar quita el acceso.',
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _showCreateDialog(context, ref),
         icon: const Icon(Icons.person_add_alt_1_outlined),
@@ -192,7 +219,7 @@ class AdminUsersScreen extends ConsumerWidget {
                         ),
                         const SizedBox(height: 12),
                         if (areasAsync.isLoading)
-                          const LinearProgressIndicator()
+                          const SizedBox(height: 80, child: AppSplash(compact: true))
                         else if (areasAsync.hasError)
                           Text(
                             'Error al cargar áreas: ${reportError(areasAsync.error!, areasAsync.stackTrace, context: 'AdminUsersScreen')}',
@@ -215,7 +242,9 @@ class AdminUsersScreen extends ConsumerWidget {
                                               .read(profileRepositoryProvider)
                                               .seedAreas();
                                           if (!dialogContext.mounted ||
-                                              !messenger.mounted) return;
+                                              !messenger.mounted) {
+                                            return;
+                                          }
                                           messenger.showSnackBar(
                                             const SnackBar(
                                               content: Text('Áreas creadas.'),
@@ -223,7 +252,9 @@ class AdminUsersScreen extends ConsumerWidget {
                                           );
                                         } catch (error, stack) {
                                           if (!dialogContext.mounted ||
-                                              !messenger.mounted) return;
+                                              !messenger.mounted) {
+                                            return;
+                                          }
                                           _showErrorSnackBarWithMessenger(
                                             messenger,
                                             error,
@@ -241,9 +272,7 @@ class AdminUsersScreen extends ConsumerWidget {
                                     ? const SizedBox(
                                         width: 16,
                                         height: 16,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
+                                        child: AppSplash(compact: true, size: 16),
                                       )
                                     : const Icon(Icons.add_business_outlined),
                                 label: Text(
@@ -331,7 +360,9 @@ class AdminUsersScreen extends ConsumerWidget {
                                 navigator.pop();
                               } catch (error, stack) {
                                 if (!dialogContext.mounted ||
-                                    !messenger.mounted) return;
+                                    !messenger.mounted) {
+                                  return;
+                                }
                                 setState(() => isSaving = false);
                                 _showErrorSnackBarWithMessenger(
                                   messenger,
@@ -345,7 +376,7 @@ class AdminUsersScreen extends ConsumerWidget {
                           ? const SizedBox(
                               width: 20,
                               height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
+                              child: AppSplash(compact: true, size: 20),
                             )
                           : const Text('Guardar'),
                     ),
@@ -478,7 +509,7 @@ class AdminUsersScreen extends ConsumerWidget {
                         ),
                         const SizedBox(height: 12),
                         if (areasAsync.isLoading)
-                          const LinearProgressIndicator()
+                          const SizedBox(height: 80, child: AppSplash(compact: true))
                         else if (areasAsync.hasError)
                           Text(
                             'Error al cargar áreas: ${reportError(areasAsync.error!, areasAsync.stackTrace, context: 'AdminUsersScreen')}',
@@ -501,7 +532,9 @@ class AdminUsersScreen extends ConsumerWidget {
                                               .read(profileRepositoryProvider)
                                               .seedAreas();
                                           if (!dialogContext.mounted ||
-                                              !messenger.mounted) return;
+                                              !messenger.mounted) {
+                                            return;
+                                          }
                                           messenger.showSnackBar(
                                             const SnackBar(
                                               content: Text('Áreas creadas.'),
@@ -509,7 +542,9 @@ class AdminUsersScreen extends ConsumerWidget {
                                           );
                                         } catch (error, stack) {
                                           if (!dialogContext.mounted ||
-                                              !messenger.mounted) return;
+                                              !messenger.mounted) {
+                                            return;
+                                          }
                                           _showErrorSnackBarWithMessenger(
                                             messenger,
                                             error,
@@ -527,9 +562,7 @@ class AdminUsersScreen extends ConsumerWidget {
                                     ? const SizedBox(
                                         width: 16,
                                         height: 16,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
+                                        child: AppSplash(compact: true, size: 16),
                                       )
                                     : const Icon(Icons.add_business_outlined),
                                 label: Text(
@@ -650,7 +683,9 @@ class AdminUsersScreen extends ConsumerWidget {
                                 }
                               } catch (error, stack) {
                                 if (!dialogContext.mounted ||
-                                    !messenger.mounted) return;
+                                    !messenger.mounted) {
+                                  return;
+                                }
                                 setState(() => isSaving = false);
                                 _showErrorSnackBarWithMessenger(
                                   messenger,
@@ -664,7 +699,7 @@ class AdminUsersScreen extends ConsumerWidget {
                           ? const SizedBox(
                               width: 20,
                               height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
+                              child: AppSplash(compact: true, size: 20),
                             )
                           : const Text('Crear'),
                     ),
@@ -745,10 +780,7 @@ class AdminUsersScreen extends ConsumerWidget {
                       ? const SizedBox(
                           width: 20,
                           height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
+                          child: AppSplash(compact: true, size: 20),
                         )
                       : const Icon(Icons.delete_outline),
                   label: const Text('Eliminar'),
@@ -798,3 +830,5 @@ void _showErrorSnackBarWithMessenger(
   );
   messenger.showSnackBar(SnackBar(content: Text(message)));
 }
+
+

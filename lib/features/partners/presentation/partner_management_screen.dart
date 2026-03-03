@@ -5,6 +5,7 @@ import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/providers.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
+import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/partners/data/partner_repository.dart';
 
 class PartnerManagementScreen extends ConsumerWidget {
@@ -23,7 +24,20 @@ class PartnerManagementScreen extends ConsumerWidget {
         : 'Gestión de clientes';
 
     return Scaffold(
-      appBar: AppBar(title: Text(title)),
+      appBar: AppBar(
+        title: Text(title),
+        actions: [
+          infoAction(
+            context,
+            title: title,
+            message:
+                'Administra ${type.pluralLabel.toLowerCase()} de esta empresa.\n'
+                'Usa "Nuevo" para agregar.\n'
+                'Editar cambia el nombre.\n'
+                'Eliminar borra el registro para todos.',
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _showUpsertDialog(context, ref, type),
         icon: const Icon(Icons.add),
@@ -193,7 +207,7 @@ Future<void> _showUpsertDialog(
                     ? const SizedBox(
                         width: 18,
                         height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        child: AppSplash(compact: true, size: 18),
                       )
                     : const Text('Guardar'),
               ),
@@ -278,10 +292,7 @@ Future<void> _showDeleteDialog(
                     ? const SizedBox(
                         width: 18,
                         height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
+                        child: AppSplash(compact: true, size: 18),
                       )
                     : const Icon(Icons.delete_outline),
                 label: const Text('Eliminar'),

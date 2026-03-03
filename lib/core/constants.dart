@@ -114,6 +114,8 @@ extension PurchaseOrderUrgencyX on PurchaseOrderUrgency {
 }
 
 const appLogoAsset = 'evidencias/LOGO CHABELY.png';
+const int defaultOrderPageSize = 5;
+const int orderPageSizeStep = 5;
 
 const defaultStatusFlow = <PurchaseOrderStatus>[
   PurchaseOrderStatus.pendingCompras,

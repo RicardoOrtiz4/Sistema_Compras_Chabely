@@ -6,6 +6,7 @@ import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
+import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 
@@ -24,7 +25,19 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     final ordersAsync = ref.watch(allOrdersProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Panel Dirección General')),
+      appBar: AppBar(
+        title: const Text('Panel Direccion General'),
+        actions: [
+          infoAction(
+            context,
+            title: 'Panel Direccion General',
+            message:
+                'Filtra por rango de fechas para comparar periodos.\n'
+                'Revisa totales, promedios y tendencias.\n'
+                'Las tablas muestran resumen por proveedor, area y urgencia.',
+          ),
+        ],
+      ),
       body: ordersAsync.when(
         data: (orders) {
           if (orders.isEmpty) {

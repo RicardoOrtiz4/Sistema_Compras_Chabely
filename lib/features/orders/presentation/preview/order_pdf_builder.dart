@@ -1,5 +1,4 @@
 import 'dart:collection';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -124,6 +123,7 @@ void prefetchOrderPdfs(
   int limit = defaultPdfPrefetchLimit,
 }) {
   if (dataList.isEmpty || limit <= 0) return;
+  if (kIsWeb) return;
 
   final entries = dataList.take(limit).toList(growable: false);
   if (entries.isEmpty) return;
@@ -192,10 +192,6 @@ Future<Uint8List> _buildOrderPdfWithLogo(
             _buildMetaSection(data, dateFormat, timeFormat),
             pw.SizedBox(height: 8),
             _buildItemsTable(data, dateFormat),
-            if (data.budget != null) ...[
-              pw.SizedBox(height: 6),
-              _buildBudgetBanner(data),
-            ],
             pw.SizedBox(height: 8),
             _buildFooter(data),
           ],
@@ -342,15 +338,13 @@ pw.Widget _buildMetaSection(
 
   final requestedDate = data.requestedDeliveryDate;
   final hasFolio = _hasText(data.folio);
+  final hasInternalOrder = _hasText(data.internalOrder);
 
+  final resubmissionLabel = _resubmissionLabel(data.resubmissionDates);
+  final hasResubmissions = resubmissionLabel != null;
   final modification = _modificationDate(data);
-  final showModification = modification != null;
+  final showModification = hasResubmissions && modification != null;
   final sameDay = showModification && _isSameDate(data.createdAt, modification);
-
-  final resubmissionDates = _normalizedResubmissionDates(data.resubmissionDates);
-  final showResubmissions = resubmissionDates.isNotEmpty;
-  final resubmissionLabel =
-      showResubmissions ? null : _resubmissionLabel(data.resubmissionDates);
 
   return pw.Container(
     decoration: pw.BoxDecoration(border: border),
@@ -454,6 +448,27 @@ pw.Widget _buildMetaSection(
                 ),
                 pw.SizedBox(height: 6),
               ],
+              if (hasInternalOrder) ...[
+                pw.Row(
+                  children: [
+                    pw.Text('OC INT. ', style: labelStyle),
+                    pw.Expanded(
+                      child: pw.Container(
+                        decoration: pw.BoxDecoration(border: border),
+                        padding: const pw.EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 4,
+                        ),
+                        child: pw.Text(
+                          data.internalOrder ?? '',
+                          style: valueStyle,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                pw.SizedBox(height: 6),
+              ],
               pw.Container(
                 decoration: pw.BoxDecoration(border: border),
                 padding: const pw.EdgeInsets.symmetric(
@@ -468,7 +483,7 @@ pw.Widget _buildMetaSection(
                       style: valueStyle,
                     ),
                     pw.SizedBox(height: 2),
-                    if (showResubmissions) ...[
+                    if (hasResubmissions) ...[
                       pw.Text(
                         'HORA: ${timeFormat.format(data.createdAt)}',
                         style: valueStyle,
@@ -492,23 +507,12 @@ pw.Widget _buildMetaSection(
                         'HORA: ${timeFormat.format(data.createdAt)}',
                         style: valueStyle,
                       ),
-                      if (showModification && !showResubmissions) ...[
+                      if (showModification && !hasResubmissions) ...[
                         pw.SizedBox(height: 2),
                         pw.Text(
                           sameDay
                               ? 'HORA DE MODIFICACIÓN: ${timeFormat.format(modification)}'
                               : 'FECHA DE MODIFICACIÓN: ${dateFormat.format(modification)}',
-                          style: valueStyle,
-                        ),
-                      ],
-                    ],
-                    if (showResubmissions) ...[
-                      pw.SizedBox(height: 2),
-                      pw.Text('REENVÍOS:', style: valueStyle),
-                      for (var i = 0; i < resubmissionDates.length; i++) ...[
-                        pw.SizedBox(height: 2),
-                        pw.Text(
-                          'Reenvío ${i + 1}: ${dateFormat.format(resubmissionDates[i])} ${timeFormat.format(resubmissionDates[i])}',
                           style: valueStyle,
                         ),
                       ],
@@ -535,7 +539,7 @@ pw.Widget _buildMetaSection(
   );
 }
 
-pw.Widget _buildBudgetBanner(OrderPdfData data) {
+pw.Widget _buildBudgetFooter(OrderPdfData data) {
   final budgets = _normalizedBudgets(data.supplierBudgets);
   final total = budgets.isNotEmpty ? _sumBudgets(budgets) : data.budget;
   if (total == null) return pw.SizedBox.shrink();
@@ -544,38 +548,59 @@ pw.Widget _buildBudgetBanner(OrderPdfData data) {
   final entries = budgets.entries.toList()
     ..sort((a, b) => a.key.compareTo(b.key));
 
-  return pw.Container(
+  final supplierColumn = pw.Container(
     decoration: pw.BoxDecoration(border: border, color: PdfColors.yellow200),
-    padding: const pw.EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 8),
     child: pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
-        pw.Row(
-          mainAxisAlignment: pw.MainAxisAlignment.center,
-          children: [
-            pw.Text(
-              'MONTO A PAGAR: ',
-              style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold),
-            ),
-            pw.Text(
-              '\$${_formatBudget(total)}',
-              style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold),
-            ),
-          ],
+        pw.Text(
+          'MONTOS POR PROVEEDOR',
+          style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold),
         ),
-        if (entries.isNotEmpty) ...[
-          pw.SizedBox(height: 6),
+        pw.SizedBox(height: 4),
+        if (entries.isEmpty)
+          pw.Text('Sin desglose', style: const pw.TextStyle(fontSize: 8))
+        else
           for (final entry in entries)
             pw.Padding(
               padding: const pw.EdgeInsets.only(bottom: 2),
               child: pw.Text(
                 '${entry.key}: \$${_formatBudget(entry.value)}',
-                style: const pw.TextStyle(fontSize: 9),
+                style: const pw.TextStyle(fontSize: 8),
               ),
             ),
-        ],
       ],
     ),
+  );
+
+  final totalColumn = pw.Container(
+    decoration: pw.BoxDecoration(border: border, color: PdfColors.yellow200),
+    padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+    child: pw.Column(
+      mainAxisAlignment: pw.MainAxisAlignment.center,
+      crossAxisAlignment: pw.CrossAxisAlignment.center,
+      children: [
+        pw.Text(
+          'MONTO TOTAL A PAGAR',
+          style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold),
+        ),
+        pw.SizedBox(height: 4),
+        pw.Text(
+          '\$${_formatBudget(total)}',
+          style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold),
+        ),
+      ],
+    ),
+  );
+
+  return pw.Row(
+    crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+    children: [
+      pw.Expanded(flex: 2, child: supplierColumn),
+      pw.SizedBox(width: 8),
+      pw.Expanded(child: totalColumn),
+    ],
   );
 }
 
@@ -615,7 +640,6 @@ pw.Widget _buildItemsTable(OrderPdfData data, DateFormat dateFormat) {
   final hasCustomer = items.any((item) => _hasText(item.customer));
   final hasSupplier =
       _hasText(data.supplier) || items.any((item) => _hasText(item.supplier));
-  final hasInternalOrder = _hasText(data.internalOrder);
   final hasEta = data.etaDate != null;
 
   final columns = <_PdfColumn>[
@@ -659,12 +683,6 @@ pw.Widget _buildItemsTable(OrderPdfData data, DateFormat dateFormat) {
         label: 'CLIENTE',
         width: 1.0,
         value: (item) => item.customer ?? '',
-      ),
-    if (hasInternalOrder)
-      _PdfColumn(
-        label: 'ORDEN DE COMPRA INTERNA',
-        width: 1.1,
-        value: (_) => data.internalOrder ?? '',
       ),
     if (hasEta)
       _PdfColumn(
@@ -801,11 +819,6 @@ String? _resubmissionLabel(List<DateTime> dates) {
   return 'REENVIADA $count VECES';
 }
 
-List<DateTime> _normalizedResubmissionDates(List<DateTime> dates) {
-  if (dates.isEmpty) return const [];
-  final sorted = [...dates]..sort((a, b) => a.compareTo(b));
-  return sorted;
-}
 
 DateTime? _modificationDate(OrderPdfData data) {
   final updatedAt = data.updatedAt;
@@ -881,9 +894,19 @@ pw.Widget _buildFooter(OrderPdfData data) {
     footerSections.add(pw.SizedBox(height: 6));
   }
 
+  final showBudgetFooter =
+      data.budget != null || data.supplierBudgets.isNotEmpty;
+
   return pw.Column(
     crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-    children: [...footerSections, _buildSignatureRow(data)],
+    children: [
+      ...footerSections,
+      _buildSignatureRow(data),
+      if (showBudgetFooter) ...[
+        pw.SizedBox(height: 6),
+        _buildBudgetFooter(data),
+      ],
+    ],
   );
 }
 
@@ -1140,6 +1163,8 @@ String _pdfCacheKey(OrderPdfData data, PdfPageFormat? format) {
       ..write('|')
       ..write(item.supplier ?? '')
       ..write('|')
+      ..write(item.budget?.toString() ?? '')
+      ..write('|')
       ..write(item.estimatedDate?.millisecondsSinceEpoch.toString() ?? '')
       ..write('|')
       ..write(item.reviewFlagged ? '1' : '0')
@@ -1160,6 +1185,16 @@ final DateFormat _timeFormat = DateFormat('HH:mm');
 final Set<String> _warmedBrandings = <String>{};
 
 PdfColor _pdfColor(Color color) => PdfColor.fromInt(color.toARGB32());
+
+Uint8List? getCachedOrderPdf(
+  OrderPdfData data, {
+  PdfPageFormat? format,
+}) {
+  final cacheKey = _pdfCacheKey(data, format);
+  final cached = _pdfCache[cacheKey];
+  if (cached == null) return null;
+  return kIsWeb ? Uint8List.fromList(cached) : cached;
+}
 
 Map<String, dynamic> _serializePdfPayload(
   OrderPdfData data,
@@ -1188,6 +1223,7 @@ Map<String, dynamic> _serializePdfPayload(
             'unit': item.unit,
             'customer': item.customer,
             'supplier': item.supplier,
+            'budget': item.budget,
             'estimatedDate': item.estimatedDate?.millisecondsSinceEpoch,
             'reviewFlagged': item.reviewFlagged,
             'reviewComment': item.reviewComment,
@@ -1257,6 +1293,7 @@ OrderPdfData _deserializeOrderPdfData(
             unit: (raw['unit'] as String?) ?? '',
             customer: raw['customer'] as String?,
             supplier: raw['supplier'] as String?,
+            budget: raw['budget'] as num?,
             estimatedDate: _parseMillis(raw['estimatedDate']),
             reviewFlagged: (raw['reviewFlagged'] as bool?) ?? false,
             reviewComment: raw['reviewComment'] as String?,

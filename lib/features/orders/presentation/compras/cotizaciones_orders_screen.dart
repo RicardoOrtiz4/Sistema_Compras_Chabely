@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:intl/intl.dart';
+import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
 
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
@@ -11,23 +14,27 @@ import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/providers.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/core/widgets/searchable_select.dart';
+import 'package:sistema_compras/core/widgets/info_action.dart';
 
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart'; // <- OrderItemDraft
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
-import 'package:sistema_compras/features/orders/domain/shared_quote.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_inline_view.dart';
-import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
+import 'package:sistema_compras/features/orders/presentation/compras/cotizaciones_dashboard_screen.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/item_review_dialog.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_rejection_history.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_search.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_status_duration.dart';
 import 'package:sistema_compras/features/partners/data/partner_repository.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
+import 'package:sistema_compras/core/navigation_guard.dart';
 
 class CotizacionesOrdersScreen extends ConsumerStatefulWidget {
-  const CotizacionesOrdersScreen({super.key});
+  const CotizacionesOrdersScreen({this.initialTab = 0, super.key});
+
+  final int initialTab;
 
   @override
   ConsumerState<CotizacionesOrdersScreen> createState() => _CotizacionesOrdersScreenState();
@@ -35,7 +42,11 @@ class CotizacionesOrdersScreen extends ConsumerStatefulWidget {
 
 class _CotizacionesOrdersScreenState extends ConsumerState<CotizacionesOrdersScreen> {
   late final TextEditingController _searchController;
+  final OrderSearchCache _searchCache = OrderSearchCache();
+  Timer? _searchDebounce;
   String _searchQuery = '';
+  int _limit = defaultOrderPageSize;
+  String? _lastPrefetchKey;
 
   @override
   void initState() {
@@ -46,86 +57,200 @@ class _CotizacionesOrdersScreenState extends ConsumerState<CotizacionesOrdersScr
   @override
   void dispose() {
     _searchController.dispose();
+    _searchDebounce?.cancel();
     super.dispose();
+  }
+
+  void _updateSearch(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted) return;
+      setState(() => _searchQuery = value);
+    });
+  }
+
+  void _clearSearch() {
+    _searchDebounce?.cancel();
+    _searchController.clear();
+    setState(() => _searchQuery = '');
+  }
+
+  void _loadMore() {
+    setState(() => _limit += orderPageSizeStep);
+  }
+
+  void _openOrderPreview(String orderId) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _CotizacionOrderPreviewScreen(orderId: orderId),
+      ),
+    );
+  }
+
+  void _schedulePrefetch(
+    List<PurchaseOrder> orders,
+    CompanyBranding branding,
+  ) {
+    if (orders.isEmpty) return;
+    final entries = orders.take(defaultPdfPrefetchLimit).toList(growable: false);
+    if (entries.isEmpty) return;
+
+    final key = entries
+        .map((order) =>
+            '${order.id}:${order.updatedAt?.millisecondsSinceEpoch ?? 0}')
+        .join('|');
+    if (key == _lastPrefetchKey) return;
+    _lastPrefetchKey = key;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Future<void>.delayed(const Duration(milliseconds: 150), () {
+        if (!mounted) return;
+        prefetchOrderPdfsForOrders(entries, branding: branding, limit: 3);
+      });
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final ordersAsync = ref.watch(cotizacionesOrdersProvider);
+    final ordersAsync = ref.watch(cotizacionesOrdersPagedProvider(_limit));
+    final initialTab = widget.initialTab < 0
+        ? 0
+        : (widget.initialTab > 1 ? 1 : widget.initialTab);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Cotizaciones'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () {
-            if (context.canPop()) {
-              context.pop();
-            } else {
-              context.go('/home');
-            }
-          },
+    return DefaultTabController(
+      length: 2,
+      initialIndex: initialTab,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Cotizaciones'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () {
+              if (context.canPop()) {
+                context.pop();
+              } else {
+                guardedGo(context, '/home');
+              }
+            },
+          ),
+          bottom: const TabBar(
+            tabs: [
+              Tab(text: 'Pendientes'),
+              Tab(text: 'Dashboard'),
+            ],
+          ),
+          actions: [
+            infoAction(
+              context,
+              title: 'Cotizaciones',
+              message:
+                  'Completa OC interna y comentarios, y asigna proveedor y presupuesto.\n'
+                  'En Dashboard agrupas ordenes con el link de cotizacion y envias a Direccion.',
+            ),
+          ],
+        ),
+        body: TabBarView(
+          children: [
+            _buildPendientesTab(ordersAsync),
+            const CotizacionesDashboardScreen(
+              mode: CotizacionesDashboardMode.compras,
+              embedded: true,
+            ),
+          ],
         ),
       ),
-      body: ordersAsync.when(
-        data: (orders) {
-          if (orders.isEmpty) {
-            return const Center(child: Text('No hay órdenes en cotizaciones.'));
-          }
+    );
+  }
 
-          final filtered =
-              orders.where((order) => orderMatchesSearch(order, _searchQuery)).toList();
+  Widget _buildPendientesTab(AsyncValue<List<PurchaseOrder>> ordersAsync) {
+    return ordersAsync.when(
+      data: (orders) {
+        if (orders.isEmpty) {
+          return const Center(child: Text('No hay ordenes en cotizaciones.'));
+        }
 
-          final branding = ref.read(currentBrandingProvider);
-          prefetchOrderPdfsForOrders(filtered, branding: branding);
+        _searchCache.retainFor(orders);
+        final trimmedQuery = _searchQuery.trim();
+        final filtered = trimmedQuery.isEmpty
+            ? orders
+            : orders
+                .where(
+                  (order) => orderMatchesSearch(order, trimmedQuery, cache: _searchCache),
+                )
+                .toList();
+        final pendingOnly = filtered.where((order) => !_orderReady(order)).toList();
+        final canLoadMore = orders.length >= _limit;
 
-          return Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                child: TextField(
-                  controller: _searchController,
-                  decoration: InputDecoration(
-                    labelText: 'Buscar por folio (000001), solicitante, cliente, fecha...',
-                    prefixIcon: const Icon(Icons.search),
-                    suffixIcon: _searchQuery.isEmpty
-                        ? null
-                        : IconButton(
-                            icon: const Icon(Icons.clear),
-                            onPressed: () {
-                              _searchController.clear();
-                              setState(() => _searchQuery = '');
-                            },
-                          ),
-                  ),
-                  onChanged: (value) => setState(() => _searchQuery = value),
+        final branding = ref.read(currentBrandingProvider);
+        _schedulePrefetch(pendingOnly, branding);
+
+        return Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+              child: TextField(
+                controller: _searchController,
+                decoration: InputDecoration(
+                  labelText:
+                      'Buscar por folio (000001), solicitante, cliente, fecha...',
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: _searchQuery.isEmpty
+                      ? null
+                      : IconButton(
+                          icon: const Icon(Icons.clear),
+                          onPressed: _clearSearch,
+                        ),
                 ),
+                onChanged: _updateSearch,
               ),
-              const SizedBox(height: 12),
-              Expanded(
-                child: filtered.isEmpty
-                    ? const Center(child: Text('No hay órdenes con ese filtro.'))
-                    : ListView.separated(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: filtered.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 12),
-                        itemBuilder: (context, index) {
-                          final order = filtered[index];
-                          return _CotizacionOrderCard(
-                            order: order,
-                            onReview: () => context.push('/orders/cotizaciones/${order.id}'),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: pendingOnly.isEmpty
+                  ? Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Text('No hay ordenes con ese filtro.'),
+                        if (canLoadMore) ...[
+                          const SizedBox(height: 12),
+                          OutlinedButton.icon(
+                            onPressed: _loadMore,
+                            icon: const Icon(Icons.expand_more),
+                            label: const Text('Ver mas'),
+                          ),
+                        ],
+                      ],
+                    )
+                  : ListView.separated(
+                      padding: const EdgeInsets.all(16),
+                      itemCount: pendingOnly.length + (canLoadMore ? 1 : 0),
+                      separatorBuilder: (_, __) => const SizedBox(height: 12),
+                      itemBuilder: (context, index) {
+                        if (index >= pendingOnly.length) {
+                          return Center(
+                            child: OutlinedButton.icon(
+                              onPressed: _loadMore,
+                              icon: const Icon(Icons.expand_more),
+                              label: const Text('Ver mas'),
+                            ),
                           );
-                        },
-                      ),
-              ),
-            ],
-          );
-        },
-        loading: () => const AppSplash(),
-        error: (error, stack) => Center(
-          child: Text(
-            'Error: ${reportError(error, stack, context: 'CotizacionesOrdersScreen')}',
-          ),
+                        }
+                        final order = pendingOnly[index];
+                        return _CotizacionOrderCard(
+                          order: order,
+                          onPreview: () => _openOrderPreview(order.id),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        );
+      },
+      loading: () => const AppSplash(),
+      error: (error, stack) => Center(
+        child: Text(
+          'Error: ${reportError(error, stack, context: 'CotizacionesOrdersScreen')}',
         ),
       ),
     );
@@ -135,11 +260,11 @@ class _CotizacionesOrdersScreenState extends ConsumerState<CotizacionesOrdersScr
 class _CotizacionOrderCard extends StatelessWidget {
   const _CotizacionOrderCard({
     required this.order,
-    required this.onReview,
+    required this.onPreview,
   });
 
   final PurchaseOrder order;
-  final VoidCallback onReview;
+  final VoidCallback onPreview;
 
   @override
   Widget build(BuildContext context) {
@@ -147,6 +272,9 @@ class _CotizacionOrderCard extends StatelessWidget {
 
     final hasLink = order.cotizacionPdfUrls.isNotEmpty ||
         ((order.cotizacionPdfUrl ?? '').trim().isNotEmpty);
+
+    final totalItems = order.items.length;
+    final completedItems = order.items.where(_itemReady).length;
 
     final returnCount = order.returnCount;
     final wasReturned = returnCount > 0 ||
@@ -163,6 +291,7 @@ class _CotizacionOrderCard extends StatelessWidget {
               runSpacing: 4,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
+                _UrgencyPill(urgency: order.urgency),
                 if (wasReturned)
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -197,43 +326,354 @@ class _CotizacionOrderCard extends StatelessWidget {
                       ),
                     ),
                   ),
+                if (completedItems > 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: completedItems == totalItems
+                          ? Colors.green.shade100
+                          : Colors.orange.shade100,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: completedItems == totalItems
+                            ? Colors.green.shade400
+                            : Colors.orange.shade400,
+                      ),
+                    ),
+                    child: Text(
+                      completedItems == totalItems
+                          ? 'Datos completos'
+                          : 'En progreso $completedItems/$totalItems',
+                      style: TextStyle(
+                        color: completedItems == totalItems
+                            ? Colors.green.shade800
+                            : Colors.orange.shade800,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
               ],
             ),
             const SizedBox(height: 8),
             Text('Solicitante: ${order.requesterName}'),
-            Text('Urgencia: ${order.urgency.label}'),
+            Text('Área: ${order.areaName}'),
             Text('Creada: $createdLabel'),
-            Container(
-              margin: const EdgeInsets.only(top: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: Colors.blue.shade50,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.blue.shade200),
-              ),
-              child: DefaultTextStyle(
-                style: Theme.of(context).textTheme.bodySmall!.copyWith(
-                      color: Colors.blue.shade900,
-                    ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Área: ${order.areaName}'),
-                    const SizedBox(height: 4),
-                    OrahJ91ZuNL8Y2px8iYciYeHN8sfSh5eXH8(order: order),
-                  ],
-                ),
-              ),
-            ),
+            const SizedBox(height: 8),
+            _OrderCardSummary(order: order),
+            const SizedBox(height: 6),
+            OrderStatusDurationPill(order: order),
             const SizedBox(height: 12),
-            FilledButton(
-              onPressed: onReview,
-              child: const Text('Completar datos'),
+            OutlinedButton.icon(
+              onPressed: onPreview,
+              icon: const Icon(Icons.picture_as_pdf_outlined),
+              label: const Text('Previsualizar PDF'),
             ),
           ],
         ),
       ),
     );
+  }
+}
+
+class _OrderCardSummary extends StatelessWidget {
+  const _OrderCardSummary({required this.order});
+
+  final PurchaseOrder order;
+
+  @override
+  Widget build(BuildContext context) {
+    final supplier = (order.supplier ?? '').trim();
+    final internalOrder = (order.internalOrder ?? '').trim();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (supplier.isNotEmpty) Text('Proveedor: $supplier'),
+        if (internalOrder.isNotEmpty) Text('OC interna: $internalOrder'),
+        if (order.budget != null) Text('Presupuesto: ${order.budget}'),
+      ],
+    );
+  }
+}
+
+class _UrgencyPill extends StatelessWidget {
+  const _UrgencyPill({required this.urgency});
+
+  final PurchaseOrderUrgency urgency;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final color = urgency.color(scheme);
+    final isDark = ThemeData.estimateBrightnessForColor(color) == Brightness.dark;
+    final textColor = isDark ? Colors.white : Colors.black;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        urgency.label,
+        style: TextStyle(
+          color: textColor,
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+}
+
+bool _itemReady(PurchaseOrderItem item) {
+  final supplier = (item.supplier ?? '').trim();
+  final budget = item.budget ?? 0;
+  return supplier.isNotEmpty && budget > 0;
+}
+
+bool _orderReady(PurchaseOrder order) {
+  if (order.items.isEmpty) return false;
+  return order.items.every(_itemReady);
+}
+
+class _CotizacionOrderPreviewScreen extends ConsumerStatefulWidget {
+  const _CotizacionOrderPreviewScreen({required this.orderId});
+
+  final String orderId;
+
+  @override
+  ConsumerState<_CotizacionOrderPreviewScreen> createState() =>
+      _CotizacionOrderPreviewScreenState();
+}
+
+class _CotizacionOrderPreviewScreenState
+    extends ConsumerState<_CotizacionOrderPreviewScreen> {
+  bool _isBusy = false;
+  int _pdfRefreshTick = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final orderAsync = ref.watch(orderByIdStreamProvider(widget.orderId));
+
+    final actions = orderAsync.maybeWhen(
+      data: (order) {
+        if (order == null) return const <Widget>[];
+        final eventsAsync = ref.watch(orderEventsProvider(order.id));
+        final hasReturns = order.returnCount > 0;
+        return [
+          eventsAsync.when(
+            data: (events) {
+              final canShow =
+                  hasReturns && events.any((event) => event.type == 'return');
+              return IconButton(
+                icon: const Icon(Icons.history),
+                tooltip: 'Historial de cambios',
+                onPressed: canShow ? () => _showHistory(context, order, events) : null,
+              );
+            },
+            loading: () => IconButton(
+              icon: const Icon(Icons.history),
+              tooltip: 'Historial de cambios',
+              onPressed: null,
+            ),
+            error: (_, __) => IconButton(
+              icon: const Icon(Icons.history),
+              tooltip: 'Historial de cambios',
+              onPressed: null,
+            ),
+          ),
+        ];
+      },
+      orElse: () => const <Widget>[],
+    );
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Previsualizar PDF'),
+        actions: [
+          ...actions,
+          infoAction(
+            context,
+            title: 'Previsualizar PDF',
+            message:
+                'Revisa el PDF de la orden.\n'
+                'Completar datos abre el formulario de cotizacion.\n'
+                'Rechazar solicita motivos por articulo.',
+          ),
+        ],
+      ),
+      body: orderAsync.when(
+        data: (order) {
+          if (order == null) return const AppSplash();
+
+          final branding = ref.watch(currentBrandingProvider);
+          final actor = ref.watch(currentUserProfileProvider).value;
+          final reviewerName = (order.comprasReviewerName ?? '').trim().isNotEmpty
+              ? order.comprasReviewerName
+              : actor?.name;
+          final reviewerArea = (order.comprasReviewerArea ?? '').trim().isNotEmpty
+              ? order.comprasReviewerArea
+              : actor?.areaDisplay;
+          final pdfData = buildPdfDataFromOrder(
+            order,
+            branding: branding,
+            comprasReviewerName: reviewerName,
+            comprasReviewerArea: reviewerArea,
+          );
+
+          final maxCorrectionsReached = order.returnCount >= _maxCorrections;
+
+          return Column(
+            children: [
+              Expanded(
+                child: OrderPdfInlineView(
+                  key: ValueKey(
+                    '${order.id}-${order.updatedAt?.millisecondsSinceEpoch ?? 0}-$_pdfRefreshTick',
+                  ),
+                  data: pdfData,
+                ),
+              ),
+              if (maxCorrectionsReached)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: Text(
+                    'Maximo de correcciones alcanzado. Crea otra requisicion.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isNarrow = constraints.maxWidth < 360;
+
+                    final rejectButton = OutlinedButton(
+                      onPressed: _isBusy || maxCorrectionsReached
+                          ? null
+                          : () => _handleReject(order),
+                      child: _isBusy
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: AppSplash(compact: true, size: 18),
+                            )
+                          : const Text('Rechazar orden'),
+                    );
+
+                    final completeButton = FilledButton(
+                      onPressed: () async {
+                        await guardedPush(
+                          context,
+                          '/orders/cotizaciones/${order.id}',
+                        );
+                        if (!mounted) return;
+                        setState(() => _pdfRefreshTick += 1);
+                      },
+                      child: const Text('Completar datos'),
+                    );
+
+                    if (isNarrow) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          completeButton,
+                          const SizedBox(height: 8),
+                          rejectButton,
+                        ],
+                      );
+                    }
+
+                    return Row(
+                      children: [
+                        Expanded(child: completeButton),
+                        const SizedBox(width: 12),
+                        Expanded(child: rejectButton),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ],
+          );
+        },
+        loading: () => const AppSplash(),
+        error: (error, stack) => Center(
+          child: Text(
+            'Error: ${reportError(error, stack, context: 'CotizacionOrderPreview')}',
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showHistory(BuildContext context, PurchaseOrder order, List<PurchaseOrderEvent> events) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: OrderRejectionHistory(
+            order: order,
+            events: events,
+            showOriginalWithReturns: true,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleReject(PurchaseOrder order) async {
+    if (order.returnCount >= _maxCorrections) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Maximo de correcciones alcanzado. Crea otra requisicion.'),
+        ),
+      );
+      return;
+    }
+
+    final review = await showItemReviewDialog(
+      context: context,
+      order: order,
+      title: 'Rechazar orden ${order.id}',
+      confirmLabel: 'Rechazar',
+    );
+    if (review == null) return;
+
+    setState(() => _isBusy = true);
+    try {
+      final actor = ref.read(currentUserProfileProvider).value;
+      if (actor == null) {
+        throw StateError('Perfil no disponible.');
+      }
+
+      final repo = ref.read(purchaseOrderRepositoryProvider);
+      await repo.requestEdit(
+        order: order,
+        comment: review.summary,
+        items: review.items,
+        actor: actor,
+      );
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Orden devuelta al solicitante.')),
+      );
+      Navigator.of(context).pop();
+    } catch (error, stack) {
+      if (!mounted) return;
+      final message = reportError(error, stack, context: 'CotizacionOrderPreview.reject');
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    } finally {
+      if (mounted) {
+        setState(() => _isBusy = false);
+      }
+    }
   }
 }
 
@@ -250,37 +690,21 @@ class CotizacionOrderReviewScreen extends ConsumerStatefulWidget {
 class _CotizacionOrderReviewScreenState extends ConsumerState<CotizacionOrderReviewScreen> {
   final _internalController = TextEditingController();
   final _commentController = TextEditingController();
+  final TextEditingController _supplierController = TextEditingController();
+  final TextEditingController _budgetController = TextEditingController();
+  final Set<int> _selected = <int>{};
 
   final List<OrderItemDraft> _itemDrafts = [];
-  final List<TextEditingController> _itemSupplierControllers = [];
-
-  final Map<String, TextEditingController> _supplierBudgetControllers = {};
-  final List<String> _supplierBudgetKeys = [];
-
-  final Map<String, TextEditingController> _supplierLinkControllers = {};
-  final List<String> _supplierLinkKeys = [];
-
-  final Set<int> _selectedItems = <int>{};
 
   bool _prefilled = false;
   bool _itemsPrefilled = false;
-  bool _budgetsPrefilled = false;
-  bool _linksPrefilled = false;
 
   @override
   void dispose() {
     _internalController.dispose();
     _commentController.dispose();
-
-    for (final controller in _itemSupplierControllers) {
-      controller.dispose();
-    }
-    for (final controller in _supplierBudgetControllers.values) {
-      controller.dispose();
-    }
-    for (final controller in _supplierLinkControllers.values) {
-      controller.dispose();
-    }
+    _supplierController.dispose();
+    _budgetController.dispose();
 
     super.dispose();
   }
@@ -290,20 +714,27 @@ class _CotizacionOrderReviewScreenState extends ConsumerState<CotizacionOrderRev
     final orderAsync = ref.watch(orderByIdStreamProvider(widget.orderId));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Subir cotización')),
+      appBar: AppBar(
+        title: const Text('Completar datos de cotizacion'),
+        actions: [
+          infoAction(
+            context,
+            title: 'Completar datos de cotizacion',
+            message:
+                'Completa la OC interna y comentarios (opcional).\n'
+                'Asigna proveedor y presupuesto por articulo.\n'
+                'Guarda para continuar en el dashboard.',
+          ),
+        ],
+      ),
       body: orderAsync.when(
         data: (order) {
           if (order == null) return const AppSplash();
 
-          final sharedQuotes = ref.watch(sharedQuotesProvider).value ?? const <SharedQuote>[];
-          final sharedQuoteMap = {for (final quote in sharedQuotes) quote.id: quote};
-
-          final cotizacionesOrders =
-              ref.watch(cotizacionesOrdersProvider).value ?? const <PurchaseOrder>[];
-
           final supplierOptions = (ref.watch(userSuppliersProvider).value ?? const [])
               .map((e) => e.name)
-              .toList();
+              .toList()
+            ..sort();
 
           if (!_prefilled) {
             _prefilled = true;
@@ -312,33 +743,20 @@ class _CotizacionOrderReviewScreenState extends ConsumerState<CotizacionOrderRev
           }
 
           _syncItems(order);
-          _syncSupplierBudgets(order);
-          _syncSupplierLinks(order);
 
-          final sharedRefs = _sharedQuoteRefsBySupplier(order);
-          final supplierBudgets = _currentSupplierBudgets();
-          final totalBudget = _sumBudgets(supplierBudgets);
-
-          final branding = ref.read(currentBrandingProvider);
-
-          // Precalcula (por si tu builder usa caché interna)
-          buildPdfDataFromOrder(
-            order,
-            branding: branding,
-            supplier: order.supplier,
-            internalOrder: _internalController.text,
-            budget: totalBudget,
-            supplierBudgets: supplierBudgets,
-            comprasComment: _commentController.text,
-            items: _itemDrafts,
-          );
-
+          final pending = _itemDrafts.where((item) => !_isCompleted(item)).length;
+          final canContinue = _allSuppliersAssigned() && _allItemBudgetsAssigned();
           return Column(
             children: [
               Expanded(
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
                   children: [
+                    Text(
+                      '$pending artículos pendientes',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 12),
                     TextFormField(
                       controller: _internalController,
                       decoration: const InputDecoration(
@@ -347,76 +765,83 @@ class _CotizacionOrderReviewScreenState extends ConsumerState<CotizacionOrderRev
                       onChanged: (_) => setState(() {}),
                     ),
                     const SizedBox(height: 12),
-
-                    ExpansionTile(
-                      tilePadding: EdgeInsets.zero,
-                      title: const Text('Proveedores por artículo'),
-                      children: [
-                        const SizedBox(height: 8),
-                        _BulkSupplierActions(
-                          total: _itemDrafts.length,
-                          selected: _selectedItems.length,
-                          onSelectAll: _toggleSelectAll,
-                          onClear: _clearSelection,
-                        ),
-                        const SizedBox(height: 8),
-                        for (var i = 0; i < _itemDrafts.length; i++) ...[
-                          _ItemSupplierField(
-                            item: _itemDrafts[i],
-                            controller: _itemSupplierControllers[i],
-                            options: supplierOptions,
-                            selected: _selectedItems.contains(i),
-                            onSelected: (value) => _toggleSelection(i, value ?? false),
-                            onAdd: _addSupplierFromSearch,
-                            onChanged: (updated) => _updateItem(i, updated),
-                          ),
-                          const SizedBox(height: 8),
-                        ],
-                      ],
-                    ),
-
-                    const SizedBox(height: 12),
-
-                    _SupplierBudgetSection(
-                      suppliers: _supplierBudgetKeys,
-                      controllers: _supplierBudgetControllers,
-                      total: totalBudget,
-                      onChanged: () => setState(() {}),
-                    ),
-
-                    const SizedBox(height: 12),
-
-                    _SharedQuotesSection(
-                      suppliers: _supplierBudgetKeys,
-                      sharedRefs: sharedRefs,
-                      sharedQuoteMap: sharedQuoteMap,
-                      onCreate: (supplier) =>
-                          _createSharedQuote(order, supplier, cotizacionesOrders),
-                      onLink: (supplier) => _linkSharedQuote(order, supplier, sharedQuotes),
-                      onUpdate: (quote) => _updateSharedQuote(quote),
-                      onUnlink: (quote) => _unlinkSharedQuote(order, quote),
-                    ),
-
-                    const SizedBox(height: 12),
-
                     TextFormField(
                       controller: _commentController,
-                      decoration: const InputDecoration(labelText: 'Comentarios extras'),
+                      decoration: const InputDecoration(
+                        labelText: 'Comentarios extras',
+                      ),
                       minLines: 2,
                       maxLines: 4,
                       onChanged: (_) => setState(() {}),
                     ),
-
                     const SizedBox(height: 12),
-
-                    _SupplierLinksSection(
-                      suppliers: _supplierLinkKeys,
-                      controllers: _supplierLinkControllers,
-                      onOpen: _openLink,
-                      onChanged: () => setState(() {}),
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Selecciona los artículos pendientes y asigna proveedor y presupuesto.',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                            const SizedBox(height: 12),
+                            TextFormField(
+                              controller: _supplierController,
+                              readOnly: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Proveedor',
+                                prefixIcon: Icon(Icons.local_shipping_outlined),
+                              ),
+                              onTap: () => _pickSupplier(supplierOptions),
+                            ),
+                            const SizedBox(height: 8),
+                            TextFormField(
+                              controller: _budgetController,
+                              decoration: const InputDecoration(
+                                labelText: 'Presupuesto por artículo',
+                                prefixText: '\$ ',
+                              ),
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              inputFormatters: [
+                                FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: FilledButton(
+                                    onPressed: _selected.isEmpty ? null : _applySelection,
+                                    child: const Text('Aplicar a seleccionados'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 12),
+                    _SelectionToolbar(
+                      total: _itemDrafts.length,
+                      selected: _selected.length,
+                      pending: pending,
+                      onSelectPending: _toggleSelectPending,
+                      onClear: _clearSelection,
+                    ),
+                    const SizedBox(height: 8),
+                    for (var i = 0; i < _itemDrafts.length; i++) ...[
+                      _AssignmentItemCard(
+                        item: _itemDrafts[i],
+                        selected: _selected.contains(i),
+                        enabled: !_isCompleted(_itemDrafts[i]),
+                        onToggle: (value) => _toggleSelection(i, value ?? false),
+                        onRevert: () => _revertItem(i),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                    const SizedBox(height: 12),
                   ],
                 ),
               ),
@@ -425,9 +850,14 @@ class _CotizacionOrderReviewScreenState extends ConsumerState<CotizacionOrderRev
                 padding: const EdgeInsets.all(16),
                 child: SizedBox(
                   width: double.infinity,
-                  child: FilledButton(
-                    onPressed: () => _showPreview(order, sharedQuoteMap),
-                    child: const Text('Previsualizar PDF'),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      FilledButton(
+                        onPressed: canContinue ? () => _saveAndClose(order) : null,
+                        child: const Text('Guardar cambios'),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -448,69 +878,31 @@ class _CotizacionOrderReviewScreenState extends ConsumerState<CotizacionOrderRev
   // Envío
   // ---------------------------------------------------------------------------
 
-  Future<void> _handleSend(
-    PurchaseOrder order,
-    Map<String, SharedQuote> sharedQuoteMap,
-  ) async {
-    if (!_allSuppliersAssigned()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Completa los proveedores de todos los artículos.')),
-      );
+  Future<void> _saveAndClose(PurchaseOrder order) async {
+    final actor = ref.read(currentUserProfileProvider).value;
+    if (actor == null) {
+      _showMessage('Perfil no disponible.');
       return;
     }
-    if (!_allBudgetsAssigned()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Completa el presupuesto de cada proveedor.')),
-      );
-      return;
-    }
-    if (!_allLinksAssigned()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Agrega el link de cotización por proveedor.')),
-      );
-      return;
-    }
-
-    final sharedIssue = _sharedQuoteIssue(order, sharedQuoteMap);
-    if (sharedIssue != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(sharedIssue)));
-      return;
-    }
-
     try {
-      final actor = ref.read(currentUserProfileProvider).value;
-      if (actor == null) throw StateError('Perfil no disponible.');
-
-      final repo = ref.read(purchaseOrderRepositoryProvider);
-
       await _persistApprovalData(order, actor.name);
-
-      final links = _buildCotizacionLinks(order, sharedQuoteMap);
-
-      await repo.sendToDireccionWithCotizacion(
-        order: order,
-        cotizacionLinks: links,
-        actor: actor,
-      );
-
       if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Orden enviada a Dirección General.')),
-      );
-      context.go('/orders/cotizaciones');
+      _showMessage('Datos guardados.');
+      Navigator.of(context).pop();
     } catch (error, stack) {
       if (!mounted) return;
-      final message = reportError(error, stack, context: 'CotizacionOrderReview.send');
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+      final message =
+          reportError(error, stack, context: 'CotizacionOrderReview.save');
+      _showMessage(message);
     }
   }
+
 
   Future<void> _persistApprovalData(PurchaseOrder order, String reviewerName) async {
     final repo = ref.read(purchaseOrderRepositoryProvider);
     final reviewerArea = ref.read(currentUserProfileProvider).value?.areaDisplay ?? '';
 
-    final supplierBudgets = _currentSupplierBudgets();
+    final supplierBudgets = _supplierBudgetsFromItems();
     final budget = _sumBudgets(supplierBudgets);
 
     await repo.updateApprovalData(
@@ -527,583 +919,12 @@ class _CotizacionOrderReviewScreenState extends ConsumerState<CotizacionOrderRev
   }
 
   // ---------------------------------------------------------------------------
-  // Links por proveedor (excluyendo compartidos)
-  // ---------------------------------------------------------------------------
-
-  void _syncSupplierLinks(PurchaseOrder order) {
-    final suppliers = _supplierBudgetKeys;
-    final sharedSuppliers = _sharedSuppliers(order);
-    final seededLinks = _seedLinksFromOrder(order);
-    final unassigned = _seedUnassignedLinks(order);
-
-    final nextKeys = <String>[];
-    final existingKeys = _supplierLinkControllers.keys.toSet();
-
-    for (final supplier in suppliers) {
-      final supplierKey = _normalizeSupplierKey(supplier);
-
-      // Si es proveedor compartido -> no pide link individual
-      if (sharedSuppliers.contains(supplierKey)) {
-        if (_supplierLinkControllers.containsKey(supplier)) {
-          _supplierLinkControllers[supplier]?.dispose();
-          _supplierLinkControllers.remove(supplier);
-        }
-        continue;
-      }
-
-      nextKeys.add(supplier);
-
-      final existing = _supplierLinkControllers[supplier];
-      final seed = seededLinks[supplierKey] ??
-          (unassigned.isNotEmpty ? unassigned.removeAt(0) : '');
-
-      if (existing == null) {
-        _supplierLinkControllers[supplier] = TextEditingController(text: seed);
-      } else if (!_linksPrefilled && existing.text.trim().isEmpty && seed.isNotEmpty) {
-        existing.text = seed;
-      }
-    }
-
-    for (final key in existingKeys) {
-      if (!nextKeys.contains(key)) {
-        _supplierLinkControllers[key]?.dispose();
-        _supplierLinkControllers.remove(key);
-      }
-    }
-
-    _supplierLinkKeys
-      ..clear()
-      ..addAll(nextKeys);
-
-    _linksPrefilled = true;
-  }
-
-  Map<String, String> _seedLinksFromOrder(PurchaseOrder order) {
-    final seeded = <String, String>{};
-
-    if (order.cotizacionLinks.isNotEmpty) {
-      for (final link in order.cotizacionLinks) {
-        final supplier = link.supplier.trim();
-        final url = link.url.trim();
-        if (supplier.isEmpty || url.isEmpty) continue;
-        seeded[_normalizeSupplierKey(supplier)] = url;
-      }
-    }
-    return seeded;
-  }
-
-  List<String> _seedUnassignedLinks(PurchaseOrder order) {
-    final unassigned = <String>[];
-
-    if (order.cotizacionLinks.isNotEmpty) {
-      for (final link in order.cotizacionLinks) {
-        if (link.supplier.trim().isEmpty && link.url.trim().isNotEmpty) {
-          unassigned.add(link.url.trim());
-        }
-      }
-      return unassigned;
-    }
-
-    for (final url in order.cotizacionPdfUrls) {
-      final trimmed = url.trim();
-      if (trimmed.isNotEmpty) unassigned.add(trimmed);
-    }
-    final single = order.cotizacionPdfUrl?.trim();
-    if (single != null && single.isNotEmpty && !unassigned.contains(single)) {
-      unassigned.insert(0, single);
-    }
-    return unassigned;
-  }
-
-  Map<String, String> _currentSupplierLinks() {
-    final links = <String, String>{};
-    for (final supplier in _supplierLinkKeys) {
-      final controller = _supplierLinkControllers[supplier];
-      final raw = controller?.text.trim() ?? '';
-      if (raw.isEmpty) continue;
-      links[supplier] = _normalizeLink(raw);
-    }
-    return links;
-  }
-
-  bool _allLinksAssigned() {
-    if (_supplierLinkKeys.isEmpty) return true;
-    for (final supplier in _supplierLinkKeys) {
-      final controller = _supplierLinkControllers[supplier];
-      final raw = controller?.text.trim() ?? '';
-      if (raw.isEmpty) return false;
-      if (!_isValidUrl(raw)) return false;
-    }
-    return true;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Cotizaciones compartidas
-  // ---------------------------------------------------------------------------
-
-  String? _sharedQuoteIssue(PurchaseOrder order, Map<String, SharedQuote> sharedQuoteMap) {
-    if (order.sharedQuoteRefs.isEmpty) return null;
-
-    for (final ref in order.sharedQuoteRefs) {
-      if (ref.quoteId.trim().isEmpty) continue;
-
-      final quote = sharedQuoteMap[ref.quoteId];
-      if (quote == null) return 'Falta la cotización compartida de ${ref.supplier}.';
-      if (quote.pdfUrl.trim().isEmpty) {
-        return 'Agrega el link de la cotización compartida de ${quote.supplier}.';
-      }
-      if (quote.needsUpdate) {
-        return 'La cotización compartida de ${quote.supplier} requiere actualización.';
-      }
-    }
-    return null;
-  }
-
-  List<CotizacionLink> _buildCotizacionLinks(
-    PurchaseOrder order,
-    Map<String, SharedQuote> sharedQuoteMap,
-  ) {
-    final links = <CotizacionLink>[];
-
-    final directLinks = _currentSupplierLinks();
-    for (final entry in directLinks.entries) {
-      final supplier = entry.key.trim();
-      final url = entry.value.trim();
-      if (supplier.isEmpty || url.isEmpty) continue;
-      _addUniqueCotizacionLink(links, CotizacionLink(supplier: supplier, url: url));
-    }
-
-    for (final ref in order.sharedQuoteRefs) {
-      if (ref.quoteId.trim().isEmpty) continue;
-      final quote = sharedQuoteMap[ref.quoteId];
-      if (quote == null) continue;
-
-      final url = quote.pdfUrl.trim();
-      if (url.isEmpty) continue;
-
-      final supplier =
-          ref.supplier.trim().isNotEmpty ? ref.supplier.trim() : quote.supplier.trim();
-      if (supplier.isEmpty) continue;
-
-      _addUniqueCotizacionLink(links, CotizacionLink(supplier: supplier, url: url));
-    }
-
-    return links;
-  }
-
-  void _addUniqueCotizacionLink(List<CotizacionLink> links, CotizacionLink next) {
-    final normalizedSupplier = next.supplier.trim().toLowerCase();
-    final normalizedUrl = next.url.trim().toLowerCase();
-
-    final exists = links.any(
-      (link) =>
-          link.supplier.trim().toLowerCase() == normalizedSupplier &&
-          link.url.trim().toLowerCase() == normalizedUrl,
-    );
-    if (!exists) links.add(next);
-  }
-
-  Map<String, SharedQuoteRef> _sharedQuoteRefsBySupplier(PurchaseOrder order) {
-    final refs = <String, SharedQuoteRef>{};
-    for (final ref in order.sharedQuoteRefs) {
-      final key = _normalizeSupplierKey(ref.supplier);
-      if (key.isEmpty) continue;
-      refs[key] = ref;
-    }
-    return refs;
-  }
-
-  Set<String> _sharedSuppliers(PurchaseOrder order) {
-    final suppliers = <String>{};
-    for (final ref in order.sharedQuoteRefs) {
-      final key = _normalizeSupplierKey(ref.supplier);
-      if (key.isNotEmpty) suppliers.add(key);
-    }
-    return suppliers;
-  }
-
-  String _normalizeSupplierKey(String value) => value.trim().toLowerCase();
-
-  bool _isValidUrl(String raw) {
-    final link = _normalizeLink(raw);
-    final uri = Uri.tryParse(link);
-    return uri != null &&
-        uri.isAbsolute &&
-        (uri.scheme == 'http' || uri.scheme == 'https') &&
-        uri.host.isNotEmpty;
-  }
-
-  Future<void> _createSharedQuote(
-    PurchaseOrder order,
-    String supplier,
-    List<PurchaseOrder> availableOrders,
-  ) async {
-    final supplierKey = _normalizeSupplierKey(supplier);
-
-    final candidates = availableOrders
-        .where((entry) => _orderHasSupplier(entry, supplierKey))
-        .toList()
-      ..sort((a, b) => a.id.compareTo(b.id));
-
-    if (!candidates.any((entry) => entry.id == order.id)) {
-      candidates.insert(0, order);
-    }
-
-    final selected = <String>{order.id};
-    final linkController = TextEditingController();
-
-    final result = await showDialog<_SharedQuoteDraftResult>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Cotización compartida: $supplier'),
-        content: StatefulBuilder(
-          builder: (context, setState) => SizedBox(
-            width: double.maxFinite,
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Selecciona las órdenes que compartirán esta cotización.'),
-                  const SizedBox(height: 8),
-                  if (candidates.isEmpty)
-                    const Text('No hay otras órdenes con este proveedor.'),
-                  for (final entry in candidates)
-                    CheckboxListTile(
-                      value: selected.contains(entry.id),
-                      onChanged: entry.id == order.id
-                          ? null
-                          : (value) {
-                              setState(() {
-                                if (value == true) {
-                                  selected.add(entry.id);
-                                } else {
-                                  selected.remove(entry.id);
-                                }
-                              });
-                            },
-                      title: Text(entry.requesterName),
-                      subtitle: Text(entry.areaName),
-                    ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: linkController,
-                    decoration: const InputDecoration(
-                      labelText: 'Link del PDF (Drive)',
-                      prefixIcon: Icon(Icons.link),
-                    ),
-                    keyboardType: TextInputType.url,
-                    textInputAction: TextInputAction.done,
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Si no tienes el link, déjalo vacío. Quedará pendiente de actualizar.',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () {
-              Navigator.pop(
-                context,
-                _SharedQuoteDraftResult(
-                  orderIds: selected.toList(),
-                  link: linkController.text.trim(),
-                ),
-              );
-            },
-            child: const Text('Crear'),
-          ),
-        ],
-      ),
-    );
-
-    linkController.dispose();
-    if (result == null) return;
-
-    if (result.orderIds.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Selecciona al menos una orden.')),
-      );
-      return;
-    }
-    if (result.link.isNotEmpty && !_isValidUrl(result.link)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('El link no es válido.')),
-      );
-      return;
-    }
-
-    try {
-      final repo = ref.read(purchaseOrderRepositoryProvider);
-      final quote = await repo.createSharedQuote(
-        supplier: supplier,
-        orderIds: result.orderIds,
-        pdfUrl: result.link.isEmpty ? null : _normalizeLink(result.link),
-      );
-      await repo.linkOrdersToSharedQuote(quote: quote, orderIds: result.orderIds);
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Cotización compartida creada.')),
-      );
-    } catch (error, stack) {
-      if (!mounted) return;
-      final message = reportError(
-        error,
-        stack,
-        context: 'CotizacionOrderReview.createSharedQuote',
-      );
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-    }
-  }
-
-  Future<void> _linkSharedQuote(
-    PurchaseOrder order,
-    String supplier,
-    List<SharedQuote> sharedQuotes,
-  ) async {
-    final supplierKey = _normalizeSupplierKey(supplier);
-
-    final candidates = sharedQuotes
-        .where((quote) => _normalizeSupplierKey(quote.supplier) == supplierKey)
-        .toList()
-      ..sort((a, b) => a.id.compareTo(b.id));
-
-    if (candidates.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No hay cotizaciones compartidas para este proveedor.')),
-      );
-      return;
-    }
-
-    final selectedId = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Vincular cotización: $supplier'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: ListView.builder(
-            shrinkWrap: true,
-            itemCount: candidates.length,
-            itemBuilder: (context, index) {
-              final quote = candidates[index];
-              return ListTile(
-                title: Text('ID ${quote.id}'),
-                subtitle: Text(
-                  quote.pdfUrl.trim().isEmpty
-                      ? 'Sin link'
-                      : 'Link cargado (${quote.orderIds.length} órdenes)',
-                ),
-                onTap: () => Navigator.pop(context, quote.id),
-              );
-            },
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancelar'),
-          ),
-        ],
-      ),
-    );
-
-    if (selectedId == null) return;
-
-    final selectedQuote = candidates.firstWhere((quote) => quote.id == selectedId);
-
-    try {
-      final repo = ref.read(purchaseOrderRepositoryProvider);
-      await repo.linkOrdersToSharedQuote(quote: selectedQuote, orderIds: [order.id]);
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Orden vinculada a cotización compartida.')),
-      );
-    } catch (error, stack) {
-      if (!mounted) return;
-      final message = reportError(error, stack, context: 'CotizacionOrderReview.linkSharedQuote');
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-    }
-  }
-
-  Future<void> _updateSharedQuote(SharedQuote quote) async {
-    final controller = TextEditingController(text: quote.pdfUrl);
-
-    final updated = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Actualizar cotización compartida'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            labelText: 'Link del PDF (Drive)',
-            prefixIcon: Icon(Icons.link),
-          ),
-          keyboardType: TextInputType.url,
-          textInputAction: TextInputAction.done,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('Guardar'),
-          ),
-        ],
-      ),
-    );
-
-    controller.dispose();
-    if (updated == null) return;
-
-    if (updated.isEmpty || !_isValidUrl(updated)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('El link no es válido.')),
-      );
-      return;
-    }
-
-    try {
-      final repo = ref.read(purchaseOrderRepositoryProvider);
-      await repo.updateSharedQuoteLink(quote: quote, pdfUrl: _normalizeLink(updated));
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Cotización compartida actualizada.')),
-      );
-    } catch (error, stack) {
-      if (!mounted) return;
-      final message =
-          reportError(error, stack, context: 'CotizacionOrderReview.updateSharedQuote');
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-    }
-  }
-
-  Future<void> _unlinkSharedQuote(PurchaseOrder order, SharedQuote quote) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Desvincular cotización compartida'),
-        content: Text(
-          'Se quitará la cotización compartida de ${quote.supplier} para la orden ${order.id}.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Desvincular'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-
-    try {
-      final repo = ref.read(purchaseOrderRepositoryProvider);
-      await repo.unlinkOrderFromSharedQuote(order: order, quote: quote);
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Cotización compartida desvinculada.')),
-      );
-    } catch (error, stack) {
-      if (!mounted) return;
-      final message =
-          reportError(error, stack, context: 'CotizacionOrderReview.unlinkSharedQuote');
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-    }
-  }
-
-  bool _orderHasSupplier(PurchaseOrder order, String supplierKey) {
-    if (supplierKey.isEmpty) return false;
-    for (final item in order.items) {
-      final key = _normalizeSupplierKey((item.supplier ?? '').trim());
-      if (key == supplierKey) return true;
-    }
-    return false;
-  }
-
-  // ---------------------------------------------------------------------------
   // Preview
   // ---------------------------------------------------------------------------
 
-  Future<void> _showPreview(
-    PurchaseOrder order,
-    Map<String, SharedQuote> sharedQuoteMap,
-  ) async {
-    final branding = ref.read(currentBrandingProvider);
 
-    final supplierBudgets = _currentSupplierBudgets();
-    final totalBudget = _sumBudgets(supplierBudgets);
 
-    final data = buildPdfDataFromOrder(
-      order,
-      branding: branding,
-      supplier: order.supplier,
-      internalOrder: _internalController.text,
-      budget: totalBudget,
-      supplierBudgets: supplierBudgets,
-      comprasComment: _commentController.text,
-      items: _itemDrafts,
-    );
 
-    final canSubmit = _allSuppliersAssigned() &&
-        _allBudgetsAssigned() &&
-        _allLinksAssigned() &&
-        _sharedQuoteIssue(order, sharedQuoteMap) == null;
-
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => _CotizacionPdfPreviewScreen(
-          order: order,
-          data: data,
-          canSubmit: canSubmit,
-          hint: canSubmit ? null : _submissionHint(order, sharedQuoteMap),
-          onSubmit: () => _handleSend(order, sharedQuoteMap),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _openLink(String raw) async {
-    final trimmed = raw.trim();
-    if (trimmed.isEmpty) return;
-
-    final link = _normalizeLink(trimmed);
-    final uri = Uri.tryParse(link);
-
-    if (uri == null ||
-        !uri.isAbsolute ||
-        (uri.scheme != 'http' && uri.scheme != 'https') ||
-        uri.host.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('El link no es válido.')),
-      );
-      return;
-    }
-
-    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!launched && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo abrir el link.')),
-      );
-    }
-  }
 
   // ---------------------------------------------------------------------------
   // Validaciones
@@ -1116,41 +937,92 @@ class _CotizacionOrderReviewScreenState extends ConsumerState<CotizacionOrderRev
     });
   }
 
-  String _submissionHint(PurchaseOrder order, Map<String, SharedQuote> sharedQuoteMap) {
-    if (!_allSuppliersAssigned()) return 'Completa los proveedores de todos los artículos.';
-    if (!_allBudgetsAssigned()) return 'Completa el presupuesto de cada proveedor.';
-    if (!_allLinksAssigned()) return 'Agrega el link de cotización por proveedor.';
-    return _sharedQuoteIssue(order, sharedQuoteMap) ?? '';
-  }
+
+
+
 
   // ---------------------------------------------------------------------------
   // Selección masiva / UI
   // ---------------------------------------------------------------------------
 
+  bool _isCompleted(OrderItemDraft item) {
+    final supplier = (item.supplier ?? '').trim();
+    final budget = item.budget ?? 0;
+    return supplier.isNotEmpty && budget > 0;
+  }
+
   void _toggleSelection(int index, bool selected) {
     setState(() {
       if (selected) {
-        _selectedItems.add(index);
+        _selected.add(index);
       } else {
-        _selectedItems.remove(index);
+        _selected.remove(index);
       }
     });
   }
 
-  void _toggleSelectAll(bool value) {
+  void _toggleSelectPending(bool value) {
     setState(() {
+      _selected.clear();
       if (value) {
-        _selectedItems
-          ..clear()
-          ..addAll(List<int>.generate(_itemDrafts.length, (i) => i));
-      } else {
-        _selectedItems.clear();
+        for (var i = 0; i < _itemDrafts.length; i++) {
+          if (!_isCompleted(_itemDrafts[i])) {
+            _selected.add(i);
+          }
+        }
       }
     });
   }
 
   void _clearSelection() {
-    setState(() => _selectedItems.clear());
+    setState(() => _selected.clear());
+  }
+
+  Future<void> _pickSupplier(List<String> supplierOptions) async {
+    final selected = await showSearchableSelect(
+      context: context,
+      title: 'Selecciona proveedor',
+      options: supplierOptions,
+      addLabel: 'Agregar proveedor',
+      onAdd: _addSupplierFromSearch,
+    );
+    if (selected == null) return;
+    setState(() => _supplierController.text = selected);
+  }
+
+  void _applySelection() {
+    final supplier = _supplierController.text.trim();
+    if (supplier.isEmpty) {
+      _showMessage('Selecciona un proveedor.');
+      return;
+    }
+    final budget = _parseBudget(_budgetController.text);
+    if (budget == null || budget <= 0) {
+      _showMessage('Ingresa un presupuesto válido.');
+      return;
+    }
+
+    setState(() {
+      for (final index in _selected) {
+        if (index < 0 || index >= _itemDrafts.length) continue;
+        _itemDrafts[index] =
+            _itemDrafts[index].copyWith(supplier: supplier, budget: budget);
+      }
+      _selected.clear();
+      _supplierController.clear();
+      _budgetController.clear();
+    });
+  }
+
+  void _revertItem(int index) {
+    setState(() {
+      _itemDrafts[index] =
+          _itemDrafts[index].copyWith(clearBudget: true, clearSupplier: true);
+    });
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
   // ---------------------------------------------------------------------------
@@ -1239,89 +1111,44 @@ class _CotizacionOrderReviewScreenState extends ConsumerState<CotizacionOrderRev
       ..clear()
       ..addAll(order.items.map(OrderItemDraft.fromModel));
 
-    for (final controller in _itemSupplierControllers) {
-      controller.dispose();
-    }
-
-    _itemSupplierControllers
-      ..clear()
-      ..addAll(_itemDrafts.map((item) => TextEditingController(text: item.supplier ?? '')));
-
     _itemsPrefilled = true;
   }
 
-  void _updateItem(int index, OrderItemDraft updated) {
-    setState(() => _itemDrafts[index] = updated);
-  }
+  _BudgetSummary _buildBudgetSummary() {
+    final totals = <String, num>{};
+    final missing = <String, int>{};
 
-  void _syncSupplierBudgets(PurchaseOrder order) {
-    final suppliers = _extractSuppliers();
-    final seedBudgets = order.supplierBudgets;
-
-    final nextKeys = suppliers.toList()..sort();
-    final existingKeys = _supplierBudgetControllers.keys.toSet();
-
-    for (final key in nextKeys) {
-      final existing = _supplierBudgetControllers[key];
-      if (existing == null) {
-        final seed = seedBudgets[key];
-        _supplierBudgetControllers[key] = TextEditingController(
-          text: seed == null ? '' : seed.toString(),
-        );
-      } else if (!_budgetsPrefilled && existing.text.trim().isEmpty) {
-        final seed = seedBudgets[key];
-        if (seed != null) existing.text = seed.toString();
-      }
-    }
-
-    for (final key in existingKeys) {
-      if (!nextKeys.contains(key)) {
-        _supplierBudgetControllers[key]?.dispose();
-        _supplierBudgetControllers.remove(key);
-      }
-    }
-
-    _supplierBudgetKeys
-      ..clear()
-      ..addAll(nextKeys);
-
-    _budgetsPrefilled = true;
-  }
-
-  Set<String> _extractSuppliers() {
-    final suppliers = <String>{};
     for (final item in _itemDrafts) {
       final supplier = (item.supplier ?? '').trim();
-      if (supplier.isNotEmpty) suppliers.add(supplier);
+      if (supplier.isEmpty) continue;
+
+      final budget = item.budget;
+      if (budget == null || budget <= 0) {
+        missing[supplier] = (missing[supplier] ?? 0) + 1;
+        continue;
+      }
+
+      totals[supplier] = (totals[supplier] ?? 0) + budget;
     }
-    return suppliers;
+
+    final total = totals.isEmpty ? null : _sumBudgets(totals);
+    return _BudgetSummary(
+      totals: totals,
+      missingBySupplier: missing,
+      total: total,
+    );
   }
 
-  Map<String, num> _currentSupplierBudgets() {
-    final budgets = <String, num>{};
-
-    for (final supplier in _supplierBudgetKeys) {
-      final controller = _supplierBudgetControllers[supplier];
-      final raw = controller?.text.trim() ?? '';
-      if (raw.isEmpty) continue;
-
-      final parsed = num.tryParse(raw);
-      if (parsed != null) budgets[supplier] = parsed;
-    }
-
-    return budgets;
+  Map<String, num> _supplierBudgetsFromItems() {
+    return _buildBudgetSummary().totals;
   }
 
-  bool _allBudgetsAssigned() {
-    if (_supplierBudgetKeys.isEmpty) return false;
-
-    for (final supplier in _supplierBudgetKeys) {
-      final controller = _supplierBudgetControllers[supplier];
-      final raw = controller?.text.trim() ?? '';
-      final parsed = num.tryParse(raw);
-      if (parsed == null || parsed <= 0) return false;
+  bool _allItemBudgetsAssigned() {
+    if (_itemDrafts.isEmpty) return false;
+    for (final item in _itemDrafts) {
+      final budget = item.budget;
+      if (budget == null || budget <= 0) return false;
     }
-
     return true;
   }
 
@@ -1339,402 +1166,97 @@ class _CotizacionOrderReviewScreenState extends ConsumerState<CotizacionOrderRev
 // Helpers globales
 // -----------------------------------------------------------------------------
 
-String _normalizeLink(String raw) {
-  final trimmed = raw.trim();
-  if (trimmed.isEmpty) return trimmed;
-  final uri = Uri.tryParse(trimmed);
-  if (uri != null && uri.hasScheme) return trimmed;
-  return 'https://$trimmed';
+num? _parseBudget(String raw) {
+  final cleaned = raw.replaceAll(',', '').trim();
+  if (cleaned.isEmpty) return null;
+  return num.tryParse(cleaned);
 }
 
-// -----------------------------------------------------------------------------
-// Preview screen
-// -----------------------------------------------------------------------------
+String _formatBudget(num value) {
+  final formatter = NumberFormat('#,##0.##');
+  return '\$${formatter.format(value)}';
+}
 
-class _CotizacionPdfPreviewScreen extends ConsumerStatefulWidget {
-  const _CotizacionPdfPreviewScreen({
-    required this.order,
-    required this.data,
-    required this.canSubmit,
-    required this.onSubmit,
-    this.hint,
+
+const int _maxCorrections = 3;
+
+class _BudgetSummary {
+  const _BudgetSummary({
+    required this.totals,
+    required this.missingBySupplier,
+    required this.total,
   });
 
-  final PurchaseOrder order;
-  final OrderPdfData data;
-  final bool canSubmit;
-  final String? hint;
-  final Future<void> Function() onSubmit;
-
-  @override
-  ConsumerState<_CotizacionPdfPreviewScreen> createState() => _CotizacionPdfPreviewScreenState();
+  final Map<String, num> totals;
+  final Map<String, int> missingBySupplier;
+  final num? total;
 }
 
-class _CotizacionPdfPreviewScreenState extends ConsumerState<_CotizacionPdfPreviewScreen> {
-  bool _isSubmitting = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final eventsAsync = ref.watch(orderEventsProvider(widget.order.id));
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Previsualizar PDF'),
-        actions: [
-          eventsAsync.when(
-            data: (events) => IconButton(
-              icon: const Icon(Icons.history),
-              tooltip: 'Historial de cambios',
-              onPressed: events.isEmpty ? null : () => _showHistory(context, widget.order, events),
-            ),
-            loading: () => IconButton(
-              icon: const Icon(Icons.history),
-              tooltip: 'Historial de cambios',
-              onPressed: null,
-            ),
-            error: (_, __) => IconButton(
-              icon: const Icon(Icons.history),
-              tooltip: 'Historial de cambios',
-              onPressed: null,
-            ),
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Expanded(child: OrderPdfInlineView(data: widget.data)),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: SizedBox(
-              width: double.infinity,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  FilledButton(
-                    onPressed: _isSubmitting || !widget.canSubmit
-                        ? null
-                        : () async {
-                            setState(() => _isSubmitting = true);
-                            await widget.onSubmit();
-                            if (mounted) {
-                              Navigator.of(context).pop();
-                            }
-                          },
-                    child: _isSubmitting
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Text('Enviar a Dirección General'),
-                  ),
-                  if (!widget.canSubmit && widget.hint != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      widget.hint!,
-                      style: Theme.of(context).textTheme.bodySmall,
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showHistory(BuildContext context, PurchaseOrder order, List<PurchaseOrderEvent> events) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (sheetContext) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: OrderRejectionHistory(
-            order: order,
-            events: events,
-            showOriginalWithReturns: true,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// -----------------------------------------------------------------------------
-// UI components
-// -----------------------------------------------------------------------------
-
-class _SharedQuoteDraftResult {
-  const _SharedQuoteDraftResult({
-    required this.orderIds,
-    required this.link,
+class _SelectionToolbar extends StatelessWidget {
+  const _SelectionToolbar({
+    required this.total,
+    required this.selected,
+    required this.pending,
+    required this.onSelectPending,
+    required this.onClear,
   });
 
-  final List<String> orderIds;
-  final String link;
-}
-
-class _SharedQuotesSection extends StatelessWidget {
-  const _SharedQuotesSection({
-    required this.suppliers,
-    required this.sharedRefs,
-    required this.sharedQuoteMap,
-    required this.onCreate,
-    required this.onLink,
-    required this.onUpdate,
-    required this.onUnlink,
-  });
-
-  final List<String> suppliers;
-  final Map<String, SharedQuoteRef> sharedRefs;
-  final Map<String, SharedQuote> sharedQuoteMap;
-  final Future<void> Function(String supplier) onCreate;
-  final Future<void> Function(String supplier) onLink;
-  final Future<void> Function(SharedQuote quote) onUpdate;
-  final Future<void> Function(SharedQuote quote) onUnlink;
+  final int total;
+  final int selected;
+  final int pending;
+  final ValueChanged<bool> onSelectPending;
+  final VoidCallback onClear;
 
   @override
   Widget build(BuildContext context) {
-    if (suppliers.isEmpty) {
-      return const Text('Asigna proveedores para gestionar cotizaciones compartidas.');
-    }
-    return ExpansionTile(
-      tilePadding: EdgeInsets.zero,
-      title: const Text('Cotizaciones compartidas'),
+    final allPendingSelected = pending > 0 && selected == pending;
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        const SizedBox(height: 8),
-        for (final supplier in suppliers) ...[
-          _SharedQuoteSupplierCard(
-            supplier: supplier,
-            sharedRef: _findSharedRef(sharedRefs, supplier),
-            sharedQuoteMap: sharedQuoteMap,
-            onCreate: onCreate,
-            onLink: onLink,
-            onUpdate: onUpdate,
-            onUnlink: onUnlink,
-          ),
-          const SizedBox(height: 8),
-        ],
-      ],
-    );
-  }
-
-  SharedQuoteRef? _findSharedRef(Map<String, SharedQuoteRef> refs, String supplier) {
-    final key = supplier.trim().toLowerCase();
-    if (key.isEmpty) return null;
-    return refs[key];
-  }
-}
-
-class _SharedQuoteSupplierCard extends StatelessWidget {
-  const _SharedQuoteSupplierCard({
-    required this.supplier,
-    required this.sharedRef,
-    required this.sharedQuoteMap,
-    required this.onCreate,
-    required this.onLink,
-    required this.onUpdate,
-    required this.onUnlink,
-  });
-
-  final String supplier;
-  final SharedQuoteRef? sharedRef;
-  final Map<String, SharedQuote> sharedQuoteMap;
-  final Future<void> Function(String supplier) onCreate;
-  final Future<void> Function(String supplier) onLink;
-  final Future<void> Function(SharedQuote quote) onUpdate;
-  final Future<void> Function(SharedQuote quote) onUnlink;
-
-  @override
-  Widget build(BuildContext context) {
-    final quote = sharedRef == null ? null : sharedQuoteMap[sharedRef!.quoteId];
-    final fallbackQuote = sharedRef == null
-        ? null
-        : SharedQuote(
-            id: sharedRef!.quoteId,
-            supplier: sharedRef!.supplier,
-            orderIds: const [],
-            pdfUrl: '',
-          );
-
-    final hasShared = sharedRef != null;
-    final hasLink = (quote?.pdfUrl ?? '').trim().isNotEmpty;
-    final needsUpdate = quote?.needsUpdate ?? false;
-
-    final statusText = hasShared
-        ? (quote == null
-            ? 'Cotización compartida no encontrada'
-            : needsUpdate
-                ? 'Requiere actualización'
-                : hasLink
-                    ? 'Link cargado'
-                    : 'Sin link')
-        : 'No compartida';
-
-    final statusColor = needsUpdate
-        ? Colors.red.shade200
-        : hasShared
-            ? Colors.blue.shade100
-            : Colors.grey.shade200;
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Text(supplier, style: Theme.of(context).textTheme.titleSmall),
-            const SizedBox(height: 4),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: statusColor,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(statusText, style: Theme.of(context).textTheme.bodySmall),
+            Checkbox(
+              value: allPendingSelected,
+              onChanged: pending == 0 ? null : (value) => onSelectPending(value ?? false),
             ),
-            if ((quote?.pdfUrl ?? '').trim().isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Text(
-                quote!.pdfUrl,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              children: [
-                if (!hasShared)
-                  OutlinedButton.icon(
-                    onPressed: () => onCreate(supplier),
-                    icon: const Icon(Icons.add),
-                    label: const Text('Crear'),
-                  ),
-                if (!hasShared)
-                  TextButton(
-                    onPressed: () => onLink(supplier),
-                    child: const Text('Vincular existente'),
-                  ),
-                if (hasShared)
-                  OutlinedButton.icon(
-                    onPressed: quote == null ? null : () => onUpdate(quote),
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('Actualizar link'),
-                  ),
-                if (hasShared)
-                  TextButton(
-                    onPressed: () {
-                      final target = quote ?? fallbackQuote;
-                      if (target != null) onUnlink(target);
-                    },
-                    child: const Text('Desvincular'),
-                  ),
-              ],
-            ),
+            const Text('Seleccionar pendientes'),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _SupplierLinksSection extends StatelessWidget {
-  const _SupplierLinksSection({
-    required this.suppliers,
-    required this.controllers,
-    required this.onOpen,
-    required this.onChanged,
-  });
-
-  final List<String> suppliers;
-  final Map<String, TextEditingController> controllers;
-  final Future<void> Function(String link) onOpen;
-  final VoidCallback onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    if (suppliers.isEmpty) {
-      return const Text('Los proveedores compartidos no requieren link individual.');
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text('Links de cotización por proveedor'),
-        const SizedBox(height: 8),
-        for (final supplier in suppliers) ...[
-          TextFormField(
-            controller: controllers[supplier],
-            decoration: InputDecoration(
-              labelText: supplier,
-              prefixIcon: const Icon(Icons.link),
-              suffixIcon: IconButton(
-                tooltip: 'Abrir link',
-                icon: const Icon(Icons.open_in_new),
-                onPressed: () {
-                  final raw = controllers[supplier]?.text.trim() ?? '';
-                  if (raw.isNotEmpty) onOpen(raw);
-                },
-              ),
-            ),
-            keyboardType: TextInputType.url,
-            onChanged: (_) => onChanged(),
-          ),
-          const SizedBox(height: 8),
-        ],
-        Text(
-          'Si el proveedor usa cotización compartida, el link se gestiona arriba.',
-          style: Theme.of(context).textTheme.bodySmall,
+        TextButton(
+          onPressed: selected == 0 ? null : onClear,
+          child: const Text('Limpiar selección'),
         ),
       ],
     );
   }
 }
 
-class _ItemSupplierField extends StatelessWidget {
-  const _ItemSupplierField({
+class _AssignmentItemCard extends StatelessWidget {
+  const _AssignmentItemCard({
     required this.item,
-    required this.controller,
-    required this.options,
     required this.selected,
-    required this.onSelected,
-    required this.onChanged,
-    this.onAdd,
+    required this.enabled,
+    required this.onToggle,
+    required this.onRevert,
   });
 
   final OrderItemDraft item;
-  final TextEditingController controller;
-  final List<String> options;
   final bool selected;
-  final ValueChanged<bool?> onSelected;
-  final ValueChanged<OrderItemDraft> onChanged;
-  final Future<String?> Function(String query)? onAdd;
+  final bool enabled;
+  final ValueChanged<bool?> onToggle;
+  final VoidCallback onRevert;
 
   @override
   Widget build(BuildContext context) {
-    final hasOptions = options.isNotEmpty;
-    final canSearch = hasOptions || onAdd != null;
-
-    Future<void> pickSupplier() async {
-      final selectedSupplier = await showSearchableSelect(
-        context: context,
-        title: 'Selecciona proveedor',
-        options: options,
-        addLabel: 'Agregar proveedor',
-        onAdd: onAdd,
-      );
-      if (selectedSupplier == null) return;
-
-      controller.text = selectedSupplier;
-      onChanged(item.copyWith(supplier: selectedSupplier));
-    }
+    final supplier = (item.supplier ?? '').trim();
+    final budget = item.budget ?? 0;
+    final details = <String>[
+      if (item.partNumber.trim().isNotEmpty) 'No. parte: ${item.partNumber}',
+      'Cantidad: ${item.pieces} ${item.unit}',
+    ];
 
     return Card(
       child: Padding(
@@ -1744,26 +1266,51 @@ class _ItemSupplierField extends StatelessWidget {
           children: [
             Row(
               children: [
-                Checkbox(value: selected, onChanged: onSelected),
+                Checkbox(value: selected, onChanged: enabled ? onToggle : null),
                 Expanded(child: Text('Item ${item.line}: ${item.description}')),
+                if (!enabled)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.green.shade100,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      'Completo',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
               ],
             ),
-            const SizedBox(height: 8),
-            TextFormField(
-              controller: controller,
-              readOnly: true,
-              decoration: InputDecoration(
-                labelText: 'Proveedor',
-                suffixIcon: canSearch
-                    ? IconButton(
-                        tooltip: 'Buscar',
-                        icon: const Icon(Icons.search),
-                        onPressed: pickSupplier,
-                      )
-                    : null,
+            if (details.isNotEmpty) ...[
+              Padding(
+                padding: const EdgeInsets.only(left: 40, bottom: 8),
+                child: Text(
+                  details.join(' · '),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
               ),
-              onTap: canSearch ? pickSupplier : null,
-            ),
+            ],
+            if (supplier.isNotEmpty || budget > 0) ...[
+              Text(
+                supplier.isEmpty ? 'Proveedor: pendiente' : 'Proveedor: $supplier',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              Text(
+                budget <= 0 ? 'Presupuesto: pendiente' : 'Presupuesto: ${_formatBudget(budget)}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+            if (!enabled) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  onPressed: onRevert,
+                  child: const Text('Revertir'),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -1771,79 +1318,4 @@ class _ItemSupplierField extends StatelessWidget {
   }
 }
 
-class _BulkSupplierActions extends StatelessWidget {
-  const _BulkSupplierActions({
-    required this.total,
-    required this.selected,
-    required this.onSelectAll,
-    required this.onClear,
-  });
 
-  final int total;
-  final int selected;
-  final ValueChanged<bool> onSelectAll;
-  final VoidCallback onClear;
-
-  @override
-  Widget build(BuildContext context) {
-    final allSelected = total > 0 && selected == total;
-
-    return Row(
-      children: [
-        Checkbox(
-          value: allSelected,
-          onChanged: total == 0 ? null : (value) => onSelectAll(value ?? false),
-        ),
-        const Text('Seleccionar todo'),
-        const Spacer(),
-        TextButton(
-          onPressed: selected == 0 ? null : onClear,
-          child: const Text('Limpiar'),
-        ),
-      ],
-    );
-  }
-}
-
-class _SupplierBudgetSection extends StatelessWidget {
-  const _SupplierBudgetSection({
-    required this.suppliers,
-    required this.controllers,
-    required this.total,
-    required this.onChanged,
-  });
-
-  final List<String> suppliers;
-  final Map<String, TextEditingController> controllers;
-  final num? total;
-  final VoidCallback onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    if (suppliers.isEmpty) {
-      return const Text('Asigna proveedores para capturar presupuestos.');
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text('Presupuesto por proveedor'),
-        const SizedBox(height: 8),
-        for (final supplier in suppliers) ...[
-          TextFormField(
-            controller: controllers[supplier],
-            decoration: InputDecoration(labelText: supplier),
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
-            ],
-            onChanged: (_) => onChanged(),
-          ),
-          const SizedBox(height: 8),
-        ],
-        if (total != null)
-          Text('Total: $total', style: Theme.of(context).textTheme.bodySmall),
-      ],
-    );
-  }
-}

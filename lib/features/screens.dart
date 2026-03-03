@@ -9,13 +9,13 @@ export 'package:sistema_compras/features/orders/presentation/history/order_histo
 export 'package:sistema_compras/features/orders/presentation/compras/pending_orders_screen.dart';
 export 'package:sistema_compras/features/orders/presentation/compras/pending_order_review_screen.dart';
 export 'package:sistema_compras/features/orders/presentation/compras/cotizaciones_orders_screen.dart';
+export 'package:sistema_compras/features/orders/presentation/compras/cotizaciones_dashboard_screen.dart';
 export 'package:sistema_compras/features/orders/presentation/compras/pending_eta_orders_screen.dart';
 export 'package:sistema_compras/features/orders/presentation/rejected/rejected_orders_screen.dart';
 export 'package:sistema_compras/features/orders/presentation/shared/order_detail_screen.dart';
 export 'package:sistema_compras/features/orders/presentation/contabilidad/contabilidad_orders_screen.dart';
 export 'package:sistema_compras/features/orders/presentation/direccion_general/direccion_orders_screen.dart';
 export 'package:sistema_compras/features/orders/presentation/direccion_general/direccion_order_review_screen.dart';
-export 'package:sistema_compras/features/orders/presentation/almacen/almacen_orders_screen.dart';
 export 'package:sistema_compras/features/partners/presentation/partner_management_screen.dart';
 export 'package:sistema_compras/features/reports/presentation/reports_screen.dart';
 export 'package:sistema_compras/features/splash/presentation/splash_screen.dart';

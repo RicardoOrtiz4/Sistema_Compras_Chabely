@@ -1,18 +1,22 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
+import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_search.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_status_duration.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
+import 'package:sistema_compras/core/navigation_guard.dart';
 
 class PendingEtaOrdersScreen extends ConsumerStatefulWidget {
   const PendingEtaOrdersScreen({super.key});
@@ -24,7 +28,10 @@ class PendingEtaOrdersScreen extends ConsumerStatefulWidget {
 
 class _PendingEtaOrdersScreenState extends ConsumerState<PendingEtaOrdersScreen> {
   late final TextEditingController _searchController;
+  final OrderSearchCache _searchCache = OrderSearchCache();
+  Timer? _searchDebounce;
   String _searchQuery = '';
+  int _limit = defaultOrderPageSize;
   final Set<String> _busyOrders = <String>{};
 
   @override
@@ -36,24 +43,57 @@ class _PendingEtaOrdersScreenState extends ConsumerState<PendingEtaOrdersScreen>
   @override
   void dispose() {
     _searchController.dispose();
+    _searchDebounce?.cancel();
     super.dispose();
+  }
+
+  void _updateSearch(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted) return;
+      setState(() => _searchQuery = value);
+    });
+  }
+
+  void _clearSearch() {
+    _searchDebounce?.cancel();
+    _searchController.clear();
+    setState(() => _searchQuery = '');
+  }
+
+  void _loadMore() {
+    setState(() => _limit += orderPageSizeStep);
   }
 
   @override
   Widget build(BuildContext context) {
-    final ordersAsync = ref.watch(pendingEtaOrdersProvider);
+    final ordersAsync = ref.watch(pendingEtaOrdersPagedProvider(_limit));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Pendientes de fecha estimada')),
+      appBar: AppBar(
+        title: const Text('Pendientes de fecha estimada'),
+        actions: [
+          infoAction(
+            context,
+            title: 'Pendientes de fecha estimada',
+            message:
+                'Asigna fecha estimada de entrega por orden.\n'
+                'Usa el buscador para localizar folios.\n'
+                'Guardar avanza la orden al siguiente paso.',
+          ),
+        ],
+      ),
       body: ordersAsync.when(
         data: (orders) {
           if (orders.isEmpty) {
             return const Center(child: Text('No hay órdenes pendientes.'));
           }
 
+          _searchCache.retainFor(orders);
           final filtered = orders
-              .where((order) => orderMatchesSearch(order, _searchQuery))
+              .where((order) => orderMatchesSearch(order, _searchQuery, cache: _searchCache))
               .toList();
+          final canLoadMore = orders.length >= _limit;
 
           final branding = ref.read(currentBrandingProvider);
           prefetchOrderPdfsForOrders(filtered, branding: branding);
@@ -72,30 +112,49 @@ class _PendingEtaOrdersScreenState extends ConsumerState<PendingEtaOrdersScreen>
                         ? null
                         : IconButton(
                             icon: const Icon(Icons.clear),
-                            onPressed: () {
-                              _searchController.clear();
-                              setState(() => _searchQuery = '');
-                            },
+                            onPressed: _clearSearch,
                           ),
                   ),
-                  onChanged: (value) => setState(() => _searchQuery = value),
+                  onChanged: _updateSearch,
                 ),
               ),
               const SizedBox(height: 12),
               Expanded(
                 child: filtered.isEmpty
-                    ? const Center(child: Text('No hay órdenes con ese filtro.'))
+                    ? Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Text('No hay órdenes con ese filtro.'),
+                          if (canLoadMore) ...[
+                            const SizedBox(height: 12),
+                            OutlinedButton.icon(
+                              onPressed: _loadMore,
+                              icon: const Icon(Icons.expand_more),
+                              label: const Text('Ver más'),
+                            ),
+                          ],
+                        ],
+                      )
                     : ListView.separated(
                         padding: const EdgeInsets.all(16),
-                        itemCount: filtered.length,
+                        itemCount: filtered.length + (canLoadMore ? 1 : 0),
                         separatorBuilder: (_, __) => const SizedBox(height: 12),
                         itemBuilder: (context, index) {
+                          if (index >= filtered.length) {
+                            return Center(
+                              child: OutlinedButton.icon(
+                                onPressed: _loadMore,
+                                icon: const Icon(Icons.expand_more),
+                                label: const Text('Ver más'),
+                              ),
+                            );
+                          }
                           final order = filtered[index];
                           final busy = _busyOrders.contains(order.id);
                           return _PendingEtaOrderCard(
                             order: order,
                             busy: busy,
-                            onViewPdf: () => context.push('/orders/${order.id}/pdf'),
+                            onViewPdf: () => guardedPush(context, '/orders/${order.id}/pdf'),
                             onSetEta: () => _handleSetEta(order),
                           );
                         },
@@ -209,6 +268,8 @@ class _PendingEtaOrderCard extends StatelessWidget {
 
             // ✅ Reemplazo del widget corrupto:
             _OrderSummary(order: order),
+            const SizedBox(height: 6),
+            OrderStatusDurationPill(order: order),
 
             if (requestedDate != null)
               Text('Fecha solicitada: ${requestedDate.toShortDate()}'),
@@ -234,7 +295,7 @@ class _PendingEtaOrderCard extends StatelessWidget {
                       ? const SizedBox(
                           width: 18,
                           height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
+                          child: AppSplash(compact: true, size: 18),
                         )
                       : const Text('Definir fecha estimada'),
                 );
@@ -298,3 +359,4 @@ class _OrderSummary extends StatelessWidget {
     );
   }
 }
+

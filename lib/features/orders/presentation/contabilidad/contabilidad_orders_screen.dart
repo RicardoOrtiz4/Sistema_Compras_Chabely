@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -8,12 +10,15 @@ import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
+import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_search.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_status_duration.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
+import 'package:sistema_compras/core/navigation_guard.dart';
 
 class ContabilidadOrdersScreen extends ConsumerStatefulWidget {
   const ContabilidadOrdersScreen({super.key});
@@ -26,7 +31,10 @@ class ContabilidadOrdersScreen extends ConsumerStatefulWidget {
 class _ContabilidadOrdersScreenState
     extends ConsumerState<ContabilidadOrdersScreen> {
   late final TextEditingController _searchController;
+  final OrderSearchCache _searchCache = OrderSearchCache();
+  Timer? _searchDebounce;
   String _searchQuery = '';
+  int _limit = defaultOrderPageSize;
 
   @override
   void initState() {
@@ -37,24 +45,57 @@ class _ContabilidadOrdersScreenState
   @override
   void dispose() {
     _searchController.dispose();
+    _searchDebounce?.cancel();
     super.dispose();
+  }
+
+  void _updateSearch(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted) return;
+      setState(() => _searchQuery = value);
+    });
+  }
+
+  void _clearSearch() {
+    _searchDebounce?.cancel();
+    _searchController.clear();
+    setState(() => _searchQuery = '');
+  }
+
+  void _loadMore() {
+    setState(() => _limit += orderPageSizeStep);
   }
 
   @override
   Widget build(BuildContext context) {
-    final ordersAsync = ref.watch(contabilidadOrdersProvider);
+    final ordersAsync = ref.watch(contabilidadOrdersPagedProvider(_limit));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Contabilidad')),
+      appBar: AppBar(
+        title: const Text('Contabilidad'),
+        actions: [
+          infoAction(
+            context,
+            title: 'Contabilidad',
+            message:
+                'Aqui ves ordenes autorizadas para facturar.\n'
+                'Usa el buscador por folio, solicitante o fecha.\n'
+                'Abre una orden para cargar la factura y avanzar.',
+          ),
+        ],
+      ),
       body: ordersAsync.when(
         data: (orders) {
           if (orders.isEmpty) {
             return const Center(child: Text('No hay órdenes pendientes.'));
           }
 
+          _searchCache.retainFor(orders);
           final filtered = orders
-              .where((order) => orderMatchesSearch(order, _searchQuery))
+              .where((order) => orderMatchesSearch(order, _searchQuery, cache: _searchCache))
               .toList();
+          final canLoadMore = orders.length >= _limit;
 
           final branding = ref.read(currentBrandingProvider);
           prefetchOrderPdfsForOrders(filtered, branding: branding);
@@ -73,25 +114,44 @@ class _ContabilidadOrdersScreenState
                         ? null
                         : IconButton(
                             icon: const Icon(Icons.clear),
-                            onPressed: () {
-                              _searchController.clear();
-                              setState(() => _searchQuery = '');
-                            },
+                            onPressed: _clearSearch,
                           ),
                   ),
-                  onChanged: (value) => setState(() => _searchQuery = value),
+                  onChanged: _updateSearch,
                 ),
               ),
               const SizedBox(height: 12),
               Expanded(
                 child: filtered.isEmpty
-                    ? const Center(child: Text('No hay órdenes con ese filtro.'))
+                    ? Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Text('No hay órdenes con ese filtro.'),
+                          if (canLoadMore) ...[
+                            const SizedBox(height: 12),
+                            OutlinedButton.icon(
+                              onPressed: _loadMore,
+                              icon: const Icon(Icons.expand_more),
+                              label: const Text('Ver más'),
+                            ),
+                          ],
+                        ],
+                      )
                     : ListView.separated(
                         padding: const EdgeInsets.all(16),
-                        itemCount: filtered.length,
+                        itemCount: filtered.length + (canLoadMore ? 1 : 0),
                         separatorBuilder: (_, __) =>
                             const SizedBox(height: 12),
                         itemBuilder: (context, index) {
+                          if (index >= filtered.length) {
+                            return Center(
+                              child: OutlinedButton.icon(
+                                onPressed: _loadMore,
+                                icon: const Icon(Icons.expand_more),
+                                label: const Text('Ver más'),
+                              ),
+                            );
+                          }
                           final order = filtered[index];
                           return _ContabilidadOrderCard(
                             order: order,
@@ -172,6 +232,8 @@ class _ContabilidadOrderCard extends StatelessWidget {
 
             // ✅ Reemplazo del widget corrupto:
             _OrderCardSummary(order: order),
+            const SizedBox(height: 6),
+            OrderStatusDurationPill(order: order),
 
             const SizedBox(height: 12),
             FilledButton(
@@ -213,7 +275,19 @@ class _ContabilidadOrderReviewScreenState
     final orderAsync = ref.watch(orderByIdStreamProvider(widget.orderId));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Factura de contabilidad')),
+      appBar: AppBar(
+        title: const Text('Factura de contabilidad'),
+        actions: [
+          infoAction(
+            context,
+            title: 'Factura de contabilidad',
+            message:
+                'Pega uno o varios links de factura.\n'
+                'Verifica que los links sean validos.\n'
+                'Guardar envia la orden al siguiente paso.',
+          ),
+        ],
+      ),
       body: orderAsync.when(
         data: (order) {
           if (order == null) {
@@ -235,7 +309,7 @@ class _ContabilidadOrderReviewScreenState
 
                     const SizedBox(height: 12),
                     OutlinedButton.icon(
-                      onPressed: () => context.push('/orders/${order.id}/pdf'),
+                      onPressed: () => guardedPush(context, '/orders/${order.id}/pdf'),
                       icon: const Icon(Icons.picture_as_pdf_outlined),
                       label: const Text('Ver PDF'),
                     ),
@@ -320,10 +394,7 @@ class _ContabilidadOrderReviewScreenState
                         ? const SizedBox(
                             width: 20,
                             height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
+                            child: AppSplash(compact: true, size: 20),
                           )
                         : const Text('Enviar a Almacén'),
                   ),
@@ -492,7 +563,7 @@ class _ContabilidadOrderReviewScreenState
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Factura enviada a almacén.')),
       );
-      context.go('/orders/contabilidad');
+      guardedGo(context, '/orders/contabilidad');
     } catch (error, stack) {
       if (!mounted) return;
       final message =
@@ -604,3 +675,4 @@ class _OrderHeaderSummary extends StatelessWidget {
     );
   }
 }
+

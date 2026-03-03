@@ -18,8 +18,12 @@ class PurchaseOrderRepository {
   DatabaseReference get _ordersRef => _database.ref('purchaseOrders');
   DatabaseReference get _sharedQuotesRef => _database.ref('sharedQuotes');
 
-  Stream<List<PurchaseOrder>> watchOrdersForUser(String uid) {
-    return _ordersRef.orderByChild('requesterId').equalTo(uid).onValue.map((event) {
+  Stream<List<PurchaseOrder>> watchOrdersForUser(String uid, {int? limit}) {
+    Query query = _ordersRef.orderByChild('requesterId').equalTo(uid);
+    if (limit != null && limit > 0) {
+      query = query.limitToLast(limit);
+    }
+    return query.onValue.map((event) {
       final value = event.snapshot.value;
       if (value is! Map) return <PurchaseOrder>[];
 
@@ -46,8 +50,12 @@ class PurchaseOrderRepository {
     });
   }
 
-  Stream<List<PurchaseOrder>> watchAllOrders() {
-    return _ordersRef.onValue.map((event) {
+  Stream<List<PurchaseOrder>> watchAllOrders({int? limit}) {
+    Query query = _ordersRef;
+    if (limit != null && limit > 0) {
+      query = _ordersRef.orderByChild('updatedAt').limitToLast(limit);
+    }
+    return query.onValue.map((event) {
       final value = event.snapshot.value;
       if (value is! Map) return <PurchaseOrder>[];
 
@@ -101,8 +109,15 @@ class PurchaseOrderRepository {
     });
   }
 
-  Stream<List<PurchaseOrder>> watchOrdersByStatus(PurchaseOrderStatus status) {
-    return _ordersRef.orderByChild('status').equalTo(status.name).onValue.map((event) {
+  Stream<List<PurchaseOrder>> watchOrdersByStatus(
+    PurchaseOrderStatus status, {
+    int? limit,
+  }) {
+    Query query = _ordersRef.orderByChild('status').equalTo(status.name);
+    if (limit != null && limit > 0) {
+      query = query.limitToLast(limit);
+    }
+    return query.onValue.map((event) {
       final value = event.snapshot.value;
       if (value is! Map) return <PurchaseOrder>[];
 
@@ -574,8 +589,8 @@ class PurchaseOrderRepository {
     required PurchaseOrder order,
     required SharedQuote quote,
   }) async {
-    final updatedRefs = _removeSharedQuoteRef(order.sharedQuoteRefs, quote.supplier);
-    final nextLinks = _removeSupplierLinks(order.cotizacionLinks, quote.supplier);
+    final updatedRefs = _removeSharedQuoteRef(order.sharedQuoteRefs, quote.id);
+    final nextLinks = _removeQuoteLink(order.cotizacionLinks, quote.id);
 
     await _ordersRef.child(order.id).update({
       'sharedQuoteRefs': updatedRefs.isEmpty ? null : updatedRefs.map((ref) => ref.toMap()).toList(),
@@ -647,10 +662,7 @@ class PurchaseOrderRepository {
     required SharedQuote quote,
   }) async {
     final nextRefs = _upsertSharedQuoteRef(order.sharedQuoteRefs, quote);
-
-    final nextLinks = quote.pdfUrl.trim().isEmpty
-        ? _removeSupplierLinks(order.cotizacionLinks, quote.supplier)
-        : _upsertSupplierLink(order.cotizacionLinks, quote.supplier, quote.pdfUrl);
+    final nextLinks = _upsertQuoteLink(order.cotizacionLinks, quote);
 
     await _ordersRef.child(order.id).update({
       'sharedQuoteRefs': nextRefs.isEmpty ? null : nextRefs.map((ref) => ref.toMap()).toList(),
@@ -665,16 +677,29 @@ class PurchaseOrderRepository {
     required PurchaseOrder order,
     required PurchaseOrderStatus targetStatus,
     required AppUser actor,
+    String? comprasReviewerName,
+    String? comprasReviewerArea,
   }) async {
     final orderRef = _ordersRef.child(order.id);
     final timingUpdate = _statusTimingUpdate(order);
+    final trimmedReviewer = comprasReviewerName?.trim();
+    final trimmedArea = comprasReviewerArea?.trim();
 
-    await orderRef.update({
+    final payload = <String, Object?>{
       'status': targetStatus.name,
       'isDraft': targetStatus == PurchaseOrderStatus.draft,
       'updatedAt': ServerValue.timestamp,
       ...timingUpdate,
-    });
+    };
+
+    if (trimmedReviewer != null && trimmedReviewer.isNotEmpty) {
+      payload['comprasReviewerName'] = trimmedReviewer;
+    }
+    if (trimmedArea != null && trimmedArea.isNotEmpty) {
+      payload['comprasReviewerArea'] = trimmedArea;
+    }
+
+    await orderRef.update(payload);
 
     await _appendEvent(
       orderRef,
@@ -695,6 +720,7 @@ class PurchaseOrderRepository {
         .map((link) => CotizacionLink(
               supplier: link.supplier.trim(),
               url: link.url.trim(),
+              quoteId: link.quoteId?.trim().isEmpty ?? true ? null : link.quoteId?.trim(),
             ))
         .where((link) => link.url.isNotEmpty)
         .toList();
@@ -857,75 +883,74 @@ List<SharedQuoteRef> _upsertSharedQuoteRef(
   List<SharedQuoteRef> existing,
   SharedQuote quote,
 ) {
-  final normalizedSupplier = quote.supplier.trim().toLowerCase();
   final next = <SharedQuoteRef>[];
-  var inserted = false;
-
+  final seen = <String>{};
   for (final ref in existing) {
-    final supplierKey = ref.supplier.trim().toLowerCase();
-    if (supplierKey == normalizedSupplier) {
-      next.add(SharedQuoteRef(supplier: ref.supplier.trim(), quoteId: quote.id));
-      inserted = true;
-    } else {
+    if (ref.quoteId.trim() == quote.id) continue;
+    if (ref.quoteId.trim().isEmpty) continue;
+    if (seen.add(ref.quoteId.trim())) {
       next.add(ref);
     }
   }
-
-  if (!inserted) {
-    next.add(SharedQuoteRef(supplier: quote.supplier.trim(), quoteId: quote.id));
-  }
-
+  next.add(SharedQuoteRef(supplier: quote.supplier.trim(), quoteId: quote.id));
   return next;
 }
 
 List<SharedQuoteRef> _removeSharedQuoteRef(
   List<SharedQuoteRef> existing,
-  String supplier,
+  String quoteId,
 ) {
-  final normalizedSupplier = supplier.trim().toLowerCase();
-  if (normalizedSupplier.isEmpty) return existing;
-  return existing.where((ref) => ref.supplier.trim().toLowerCase() != normalizedSupplier).toList();
+  final cleanedId = quoteId.trim();
+  if (cleanedId.isEmpty) return existing;
+  return existing.where((ref) => ref.quoteId.trim() != cleanedId).toList();
 }
 
-List<CotizacionLink> _upsertSupplierLink(
+List<CotizacionLink> _upsertQuoteLink(
   List<CotizacionLink> existing,
-  String supplier,
-  String url,
+  SharedQuote quote,
 ) {
-  final cleanedSupplier = supplier.trim();
-  final cleanedUrl = url.trim();
-  if (cleanedSupplier.isEmpty || cleanedUrl.isEmpty) return existing;
-
-  final normalizedSupplier = cleanedSupplier.toLowerCase();
+  final cleanedUrl = quote.pdfUrl.trim();
   final next = <CotizacionLink>[];
-  var inserted = false;
 
   for (final link in existing) {
-    final supplierKey = link.supplier.trim().toLowerCase();
-    if (supplierKey == normalizedSupplier) {
-      if (!inserted) {
-        next.add(CotizacionLink(supplier: cleanedSupplier, url: cleanedUrl));
-        inserted = true;
-      }
-    } else {
-      next.add(link);
+    if ((link.quoteId ?? '').trim() == quote.id) {
+      continue;
     }
+    if ((link.quoteId ?? '').trim().isEmpty &&
+        link.url.trim().isNotEmpty &&
+        link.url.trim() == cleanedUrl) {
+      continue;
+    }
+    next.add(link);
   }
 
-  if (!inserted) {
-    next.add(CotizacionLink(supplier: cleanedSupplier, url: cleanedUrl));
-  }
+  if (cleanedUrl.isEmpty) return next;
 
+  next.add(
+    CotizacionLink(
+      supplier: _quoteLabel(quote),
+      url: cleanedUrl,
+      quoteId: quote.id,
+    ),
+  );
   return next;
 }
 
-List<CotizacionLink> _removeSupplierLinks(
+List<CotizacionLink> _removeQuoteLink(
   List<CotizacionLink> existing,
-  String supplier,
+  String quoteId,
 ) {
-  final normalizedSupplier = supplier.trim().toLowerCase();
-  if (normalizedSupplier.isEmpty) return existing;
-  return existing.where((link) => link.supplier.trim().toLowerCase() != normalizedSupplier).toList();
+  final cleanedId = quoteId.trim();
+  if (cleanedId.isEmpty) return existing;
+  return existing.where((link) => (link.quoteId ?? '').trim() != cleanedId).toList();
+}
+
+String _quoteLabel(SharedQuote quote) {
+  final label = quote.supplier.trim();
+  if (label.isNotEmpty) return label;
+  final id = quote.id.trim();
+  if (id.length <= 6) return 'Cotización $id';
+  return 'Cotización ${id.substring(0, 6)}';
 }
 
 List<int> _mergeResubmissions(Object? snapshotValue) {

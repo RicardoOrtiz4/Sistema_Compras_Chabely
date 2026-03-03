@@ -11,6 +11,7 @@ class PurchaseOrderItem {
     required this.unit,
     this.customer,
     this.supplier,
+    this.budget,
     this.estimatedDate,
     this.reviewFlagged = false,
     this.reviewComment,
@@ -26,6 +27,7 @@ class PurchaseOrderItem {
   final String unit;
   final String? customer;
   final String? supplier;
+  final num? budget;
   final DateTime? estimatedDate;
   final bool reviewFlagged;
   final String? reviewComment;
@@ -41,6 +43,7 @@ class PurchaseOrderItem {
     String? unit,
     String? customer,
     String? supplier,
+    num? budget,
     DateTime? estimatedDate,
     bool? reviewFlagged,
     String? reviewComment,
@@ -57,6 +60,7 @@ class PurchaseOrderItem {
       unit: unit ?? this.unit,
       customer: customer ?? this.customer,
       supplier: supplier ?? this.supplier,
+      budget: budget ?? this.budget,
       estimatedDate: estimatedDate ?? this.estimatedDate,
       reviewFlagged: reviewFlagged ?? this.reviewFlagged,
       reviewComment: clearReviewComment ? null : (reviewComment ?? this.reviewComment),
@@ -75,6 +79,7 @@ class PurchaseOrderItem {
       'unit': unit,
       'customer': customer,
       'supplier': supplier,
+      'budget': budget,
       'estimatedDate': estimatedDate?.millisecondsSinceEpoch,
       'reviewFlagged': reviewFlagged,
       'reviewComment': reviewComment,
@@ -84,6 +89,13 @@ class PurchaseOrderItem {
   }
 
   factory PurchaseOrderItem.fromMap(Map<String, dynamic> data) {
+    num? budget;
+    final rawBudget = data['budget'];
+    if (rawBudget is num) {
+      budget = rawBudget;
+    } else if (rawBudget is String) {
+      budget = num.tryParse(rawBudget.trim());
+    }
     return PurchaseOrderItem(
       line: (data['line'] as num?)?.toInt() ?? 0,
       pieces: (data['pieces'] as num?)?.toInt() ?? 0,
@@ -93,6 +105,7 @@ class PurchaseOrderItem {
       unit: (data['unit'] as String?) ?? '',
       customer: data['customer'] as String?,
       supplier: data['supplier'] as String?,
+      budget: budget,
       estimatedDate: _parseDateTime(data['estimatedDate']),
       reviewFlagged: _parseBool(data['reviewFlagged']),
       reviewComment: data['reviewComment'] as String?,
@@ -106,15 +119,18 @@ class CotizacionLink {
   const CotizacionLink({
     required this.supplier,
     required this.url,
+    this.quoteId,
   });
 
   final String supplier;
   final String url;
+  final String? quoteId;
 
   Map<String, dynamic> toMap() {
     return {
       'supplier': supplier,
       'url': url,
+      'quoteId': quoteId,
     };
   }
 
@@ -122,6 +138,7 @@ class CotizacionLink {
     return CotizacionLink(
       supplier: (data['supplier'] as String?) ?? '',
       url: (data['url'] as String?) ?? '',
+      quoteId: data['quoteId'] as String?,
     );
   }
 }

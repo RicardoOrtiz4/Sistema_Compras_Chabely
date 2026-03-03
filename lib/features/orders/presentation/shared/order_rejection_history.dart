@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
+import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
@@ -45,7 +46,20 @@ class OrderRejectionHistory extends ConsumerWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const ListTile(title: Text('Historial de cambios')),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.blueGrey.shade50,
+              border: Border(
+                bottom: BorderSide(color: Colors.blueGrey.shade100),
+              ),
+            ),
+            child: const Text(
+              'Historial de cambios',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
           for (final entry in entries)
             ListTile(
               title: Text(entry.title),
@@ -124,7 +138,18 @@ class _OrderHistoryPdfScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(title)),
+      appBar: AppBar(
+        title: Text(title),
+        actions: [
+          infoAction(
+            context,
+            title: 'PDF historico',
+            message:
+                'Este PDF corresponde a una version anterior.\n'
+                'Usalo para comparar cambios entre envios.',
+          ),
+        ],
+      ),
       body: OrderPdfInlineView(data: data),
     );
   }
@@ -153,6 +178,8 @@ List<_HistoryEntry> _buildEntries(
   }
 
   if (showOnlyOriginal) {
+    final hasReturns = sorted.any(_isReturnEvent);
+    if (!hasReturns) return const [];
     if (originalEvent == null) return const [];
     final title = _titleForEvent(
       originalEvent,
@@ -177,6 +204,7 @@ List<_HistoryEntry> _buildEntries(
 
   final submissionEvents =
       sorted.where(_isSubmissionEvent).toList(growable: false);
+  final hasReturns = sorted.any(_isReturnEvent);
 
   final skipSubmissionId = hideLatestResubmission && submissionEvents.length > 1
       ? submissionEvents.last.id
@@ -185,13 +213,20 @@ List<_HistoryEntry> _buildEntries(
   var submissionCount = 0;
   var returnCount = 0;
   final entries = <_HistoryEntry>[];
+  String? lastIncludedItemsSignature;
+  final baseItemsSignature = _itemsSignature(order.items);
+  final originalItemsSignature = showOriginalWithReturns && originalEvent != null
+      ? (originalEvent.itemsSnapshot.isNotEmpty
+          ? _itemsSignature(originalEvent.itemsSnapshot)
+          : baseItemsSignature)
+      : null;
 
   for (final event in sorted) {
     final isSubmission = _isSubmissionEvent(event);
     final isReturn = _isReturnEvent(event);
 
     final includeEvent = showOriginalWithReturns
-        ? (event.id == originalEvent!.id || isReturn)
+        ? (isReturn || (!hasReturns && event.id == originalEvent!.id))
         : true;
 
     if (skipSubmissionId != null && event.id == skipSubmissionId) {
@@ -212,12 +247,25 @@ List<_HistoryEntry> _buildEntries(
       continue;
     }
 
-    final title = _titleForEvent(
+    if (showOriginalWithReturns && isReturn) {
+      final candidate = event.itemsSnapshot.isNotEmpty
+          ? _itemsSignature(event.itemsSnapshot)
+          : baseItemsSignature;
+      final compareWith = lastIncludedItemsSignature ?? originalItemsSignature;
+      if (compareWith != null && candidate == compareWith) {
+        continue;
+      }
+    }
+
+    var title = _titleForEvent(
       event,
       submissionCount: submissionCount,
       returnCount: returnCount,
     );
     if (title == null) continue;
+    if (showOriginalWithReturns && isReturn && returnCount == 0) {
+      title = 'Orden original';
+    }
 
     final resubmissionDates = _resubmissionDatesForEntry(
       order,
@@ -242,6 +290,10 @@ List<_HistoryEntry> _buildEntries(
         isOriginalSubmission: isOriginalSubmission,
       ),
     );
+
+    lastIncludedItemsSignature = event.itemsSnapshot.isNotEmpty
+        ? _itemsSignature(event.itemsSnapshot)
+        : baseItemsSignature;
   }
 
   return entries;
@@ -254,6 +306,40 @@ bool _isSubmissionEvent(PurchaseOrderEvent event) {
 }
 
 bool _isReturnEvent(PurchaseOrderEvent event) => event.type == 'return';
+
+String _itemsSignature(List<PurchaseOrderItem> items) {
+  if (items.isEmpty) return '';
+  final sorted = [...items]..sort((a, b) => a.line.compareTo(b.line));
+  final buffer = StringBuffer();
+  for (final item in sorted) {
+    buffer
+      ..write(item.line)
+      ..write('|')
+      ..write(item.pieces)
+      ..write('|')
+      ..write(item.partNumber)
+      ..write('|')
+      ..write(item.description)
+      ..write('|')
+      ..write(item.quantity)
+      ..write('|')
+      ..write(item.unit)
+      ..write('|')
+      ..write(item.customer ?? '')
+      ..write('|')
+      ..write(item.supplier ?? '')
+      ..write('|')
+      ..write(item.budget?.toString() ?? '')
+      ..write('|')
+      ..write(item.estimatedDate?.millisecondsSinceEpoch.toString() ?? '')
+      ..write('|')
+      ..write(item.reviewFlagged)
+      ..write('|')
+      ..write(item.reviewComment ?? '')
+      ..write(';');
+  }
+  return buffer.toString();
+}
 
 List<DateTime> _resubmissionDatesForEntry(
   PurchaseOrder order,

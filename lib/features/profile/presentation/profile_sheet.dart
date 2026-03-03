@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import 'package:sistema_compras/features/auth/data/auth_repository.dart';
 import 'package:sistema_compras/features/auth/domain/app_user.dart';
@@ -39,6 +40,7 @@ class _ProfileContent extends StatefulWidget {
 class _ProfileContentState extends State<_ProfileContent> {
   late final TextEditingController _contactEmailController;
   bool _isSaving = false;
+  bool _isSigningOut = false;
 
   @override
   void initState() {
@@ -87,18 +89,14 @@ class _ProfileContentState extends State<_ProfileContent> {
                   ? const SizedBox(
                       width: 18,
                       height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                      child: AppSplash(compact: true, size: 18),
                     )
                   : const Text('Guardar correo'),
             ),
           ),
           const SizedBox(height: 24),
           FilledButton.icon(
-            onPressed: () async {
-              final navigator = Navigator.of(context);
-              await widget.ref.read(authRepositoryProvider).signOut();
-              navigator.pop();
-            },
+            onPressed: _isSigningOut ? null : _signOut,
             icon: const Icon(Icons.logout),
             label: const Text('Cerrar sesion'),
           ),
@@ -133,6 +131,24 @@ class _ProfileContentState extends State<_ProfileContent> {
     } finally {
       if (mounted) {
         setState(() => _isSaving = false);
+      }
+    }
+  }
+
+  Future<void> _signOut() async {
+    setState(() => _isSigningOut = true);
+    try {
+      await widget.ref.read(authRepositoryProvider).signOut();
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      context.go('/login');
+    } catch (error, stack) {
+      if (!mounted) return;
+      final message = reportError(error, stack, context: 'ProfileSheet.signOut');
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    } finally {
+      if (mounted) {
+        setState(() => _isSigningOut = false);
       }
     }
   }

@@ -6,6 +6,7 @@ import 'package:sistema_compras/core/area_labels.dart';
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
+import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/domain/order_folio.dart';
@@ -60,7 +61,19 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
     final userAsync = ref.watch(currentUserProfileProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Previsualizar PDF')),
+      appBar: AppBar(
+        title: const Text('Previsualizar PDF'),
+        actions: [
+          infoAction(
+            context,
+            title: 'Previsualizar PDF',
+            message:
+                'Revisa el PDF antes de enviar la requisicion.\n'
+                'Si es reenvio, se mostraran los cambios.\n'
+                'Enviar manda la requisicion a Compras.',
+          ),
+        ],
+      ),
       body: userAsync.when(
         data: (user) {
           if (user == null) {
@@ -135,6 +148,11 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
                     onPressed: controller.isSubmitting || maxCorrectionsReached
                         ? null
                         : () async {
+                            if (controller.returnCount > 0) {
+                              prefetchOrderPdfs([pdfData], limit: 1);
+                              final confirmed = await _confirmResubmission(context);
+                              if (confirmed != true) return;
+                            }
                             await ref
                                 .read(createOrderControllerProvider.notifier)
                                 .submit();
@@ -143,10 +161,7 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
                         ? const SizedBox(
                             width: 20,
                             height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
+                            child: AppSplash(compact: true, size: 20),
                           )
                         : Text(
                             maxCorrectionsReached
@@ -220,3 +235,26 @@ DateTime? _requestedDeliveryDate(List<OrderItemDraft> items) {
 }
 
 const int _maxCorrections = 3;
+
+Future<bool?> _confirmResubmission(BuildContext context) {
+  return showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Confirmar reenvío'),
+      content: const Text(
+        'Esta orden regresará a órdenes por confirmar. ¿Deseas continuar?',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Reenviar'),
+        ),
+      ],
+    ),
+  );
+}
+

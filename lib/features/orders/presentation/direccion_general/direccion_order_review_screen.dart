@@ -1,15 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
+import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/item_review_dialog.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_rejection_history.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
+import 'package:sistema_compras/core/navigation_guard.dart';
 
 class DireccionOrderReviewScreen extends ConsumerStatefulWidget {
   const DireccionOrderReviewScreen({required this.orderId, super.key});
@@ -29,7 +30,19 @@ class _DireccionOrderReviewScreenState extends ConsumerState<DireccionOrderRevie
   Widget build(BuildContext context) {
     final orderAsync = ref.watch(orderByIdStreamProvider(widget.orderId));
     return Scaffold(
-      appBar: AppBar(title: const Text('Dirección General')),
+      appBar: AppBar(
+        title: const Text('Dirección General'),
+        actions: [
+          infoAction(
+            context,
+            title: 'Dirección General',
+            message:
+                'Consulta los links de cotizacion.\n'
+                'Revisa el PDF y el historial.\n'
+                'Autoriza o rechaza la orden.',
+          ),
+        ],
+      ),
       body: orderAsync.when(
         data: (order) {
           if (order == null) {
@@ -106,7 +119,7 @@ class _DireccionOrderReviewScreenState extends ConsumerState<DireccionOrderRevie
                     const SizedBox(height: 8),
                     OutlinedButton.icon(
                       onPressed: () async {
-                        await context.push('/orders/${order.id}/pdf');
+                        await guardedPush(context, '/orders/${order.id}/pdf');
                         if (mounted) {
                           setState(() => _hasPreviewedPdf = true);
                         }
@@ -136,8 +149,7 @@ class _DireccionOrderReviewScreenState extends ConsumerState<DireccionOrderRevie
                             ? const SizedBox(
                                 width: 20,
                                 height: 20,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                child: AppSplash(compact: true, size: 20),
                               )
                             : const Text('Autorizar'),
                       );
@@ -312,3 +324,5 @@ List<CotizacionLink> _cotizacionLinks(PurchaseOrder order) {
   }
   return links;
 }
+
+

@@ -1,15 +1,20 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import 'package:sistema_compras/core/area_labels.dart';
 import 'package:sistema_compras/core/company_branding.dart';
+import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
+import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_search.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_status_duration.dart';
+import 'package:sistema_compras/core/navigation_guard.dart';
 
 class RejectedOrdersScreen extends ConsumerStatefulWidget {
   const RejectedOrdersScreen({super.key});
@@ -21,7 +26,10 @@ class RejectedOrdersScreen extends ConsumerStatefulWidget {
 
 class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
   late final TextEditingController _searchController;
+  final OrderSearchCache _searchCache = OrderSearchCache();
+  Timer? _searchDebounce;
   String _searchQuery = '';
+  int _limit = defaultOrderPageSize;
 
   @override
   void initState() {
@@ -32,24 +40,57 @@ class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
   @override
   void dispose() {
     _searchController.dispose();
+    _searchDebounce?.cancel();
     super.dispose();
+  }
+
+  void _updateSearch(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted) return;
+      setState(() => _searchQuery = value);
+    });
+  }
+
+  void _clearSearch() {
+    _searchDebounce?.cancel();
+    _searchController.clear();
+    setState(() => _searchQuery = '');
+  }
+
+  void _loadMore() {
+    setState(() => _limit += orderPageSizeStep);
   }
 
   @override
   Widget build(BuildContext context) {
-    final ordersAsync = ref.watch(rejectedOrdersProvider);
+    final ordersAsync = ref.watch(rejectedOrdersPagedProvider(_limit));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Órdenes rechazadas')),
+      appBar: AppBar(
+        title: const Text('Ordenes rechazadas'),
+        actions: [
+          infoAction(
+            context,
+            title: 'Ordenes rechazadas',
+            message:
+                'Consulta las ordenes devueltas.\n'
+                'Abre el PDF para revisar el historial.\n'
+                'Usa el buscador para localizar folios.',
+          ),
+        ],
+      ),
       body: ordersAsync.when(
         data: (orders) {
           if (orders.isEmpty) {
             return const Center(child: Text('No hay órdenes rechazadas.'));
           }
 
+          _searchCache.retainFor(orders);
           final filtered = orders
-              .where((order) => orderMatchesSearch(order, _searchQuery))
+              .where((order) => orderMatchesSearch(order, _searchQuery, cache: _searchCache))
               .toList();
+          final canLoadMore = orders.length >= _limit;
 
           final branding = ref.read(currentBrandingProvider);
           // Prefetch para que los thumbnails / PDFs carguen más rápido.
@@ -69,13 +110,10 @@ class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
                         ? null
                         : IconButton(
                             icon: const Icon(Icons.clear),
-                            onPressed: () {
-                              _searchController.clear();
-                              setState(() => _searchQuery = '');
-                            },
+                            onPressed: _clearSearch,
                           ),
                   ),
-                  onChanged: (value) => setState(() => _searchQuery = value),
+                  onChanged: _updateSearch,
                 ),
               ),
               const Padding(
@@ -88,12 +126,34 @@ class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
               const SizedBox(height: 12),
               Expanded(
                 child: filtered.isEmpty
-                    ? const Center(child: Text('No hay órdenes con ese filtro.'))
+                    ? Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Text('No hay órdenes con ese filtro.'),
+                          if (canLoadMore) ...[
+                            const SizedBox(height: 12),
+                            OutlinedButton.icon(
+                              onPressed: _loadMore,
+                              icon: const Icon(Icons.expand_more),
+                              label: const Text('Ver más'),
+                            ),
+                          ],
+                        ],
+                      )
                     : ListView.separated(
                         padding: const EdgeInsets.all(16),
-                        itemCount: filtered.length,
+                        itemCount: filtered.length + (canLoadMore ? 1 : 0),
                         separatorBuilder: (_, __) => const SizedBox(height: 12),
                         itemBuilder: (context, index) {
+                          if (index >= filtered.length) {
+                            return Center(
+                              child: OutlinedButton.icon(
+                                onPressed: _loadMore,
+                                icon: const Icon(Icons.expand_more),
+                                label: const Text('Ver más'),
+                              ),
+                            );
+                          }
                           final order = filtered[index];
                           return _RejectedOrderCard(order: order);
                         },
@@ -143,7 +203,7 @@ class _RejectedOrderCard extends ConsumerWidget {
 
     return Card(
       child: InkWell(
-        onTap: () => context.push(pdfRoute),
+        onTap: () => guardedPush(context, pdfRoute),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
@@ -156,6 +216,8 @@ class _RejectedOrderCard extends ConsumerWidget {
               ),
               const SizedBox(height: 8),
               Text('Motivo: ${reason.isEmpty ? 'Sin comentario' : reason}'),
+              const SizedBox(height: 6),
+              OrderStatusDurationPill(order: order),
               const SizedBox(height: 12),
               Align(
                 alignment: Alignment.centerLeft,
@@ -164,7 +226,7 @@ class _RejectedOrderCard extends ConsumerWidget {
                   children: [
                     if (maxCorrectionsReached)
                       OutlinedButton.icon(
-                        onPressed: () => context.push(copyRoute),
+                        onPressed: () => guardedPush(context, copyRoute),
                         icon: const Icon(Icons.content_copy_outlined),
                         label: const Text('Volver a generar'),
                       ),

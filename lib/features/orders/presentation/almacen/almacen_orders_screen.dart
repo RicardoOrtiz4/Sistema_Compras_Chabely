@@ -1,6 +1,7 @@
-ï»¿import 'package:flutter/material.dart';
+import 'dart:async';
+
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -8,12 +9,15 @@ import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
+import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_search.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_status_duration.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
+import 'package:sistema_compras/core/navigation_guard.dart';
 
 class AlmacenOrdersScreen extends ConsumerStatefulWidget {
   const AlmacenOrdersScreen({super.key});
@@ -24,7 +28,10 @@ class AlmacenOrdersScreen extends ConsumerStatefulWidget {
 
 class _AlmacenOrdersScreenState extends ConsumerState<AlmacenOrdersScreen> {
   late final TextEditingController _searchController;
+  final OrderSearchCache _searchCache = OrderSearchCache();
+  Timer? _searchDebounce;
   String _searchQuery = '';
+  int _limit = defaultOrderPageSize;
 
   @override
   void initState() {
@@ -35,24 +42,57 @@ class _AlmacenOrdersScreenState extends ConsumerState<AlmacenOrdersScreen> {
   @override
   void dispose() {
     _searchController.dispose();
+    _searchDebounce?.cancel();
     super.dispose();
+  }
+
+  void _updateSearch(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted) return;
+      setState(() => _searchQuery = value);
+    });
+  }
+
+  void _clearSearch() {
+    _searchDebounce?.cancel();
+    _searchController.clear();
+    setState(() => _searchQuery = '');
+  }
+
+  void _loadMore() {
+    setState(() => _limit += orderPageSizeStep);
   }
 
   @override
   Widget build(BuildContext context) {
-    final ordersAsync = ref.watch(almacenOrdersProvider);
+    final ordersAsync = ref.watch(almacenOrdersPagedProvider(_limit));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Almacen')),
+      appBar: AppBar(
+        title: const Text('Almacen'),
+        actions: [
+          infoAction(
+            context,
+            title: 'Almacen',
+            message:
+                'Lista de ordenes listas para recepcion.\n'
+                'Usa el buscador para filtrar.\n'
+                'Abre una orden para registrar recepcion.',
+          ),
+        ],
+      ),
       body: ordersAsync.when(
         data: (orders) {
           if (orders.isEmpty) {
             return const Center(child: Text('No hay ordenes pendientes.'));
           }
 
+          _searchCache.retainFor(orders);
           final filtered = orders
-              .where((order) => orderMatchesSearch(order, _searchQuery))
+              .where((order) => orderMatchesSearch(order, _searchQuery, cache: _searchCache))
               .toList();
+          final canLoadMore = orders.length >= _limit;
 
           final branding = ref.read(currentBrandingProvider);
           prefetchOrderPdfsForOrders(filtered, branding: branding);
@@ -71,29 +111,48 @@ class _AlmacenOrdersScreenState extends ConsumerState<AlmacenOrdersScreen> {
                         ? null
                         : IconButton(
                             icon: const Icon(Icons.clear),
-                            onPressed: () {
-                              _searchController.clear();
-                              setState(() => _searchQuery = '');
-                            },
+                            onPressed: _clearSearch,
                           ),
                   ),
-                  onChanged: (value) => setState(() => _searchQuery = value),
+                  onChanged: _updateSearch,
                 ),
               ),
               const SizedBox(height: 12),
               Expanded(
                 child: filtered.isEmpty
-                    ? const Center(child: Text('No hay ordenes con ese filtro.'))
+                    ? Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Text('No hay ordenes con ese filtro.'),
+                          if (canLoadMore) ...[
+                            const SizedBox(height: 12),
+                            OutlinedButton.icon(
+                              onPressed: _loadMore,
+                              icon: const Icon(Icons.expand_more),
+                              label: const Text('Ver más'),
+                            ),
+                          ],
+                        ],
+                      )
                     : ListView.separated(
                         padding: const EdgeInsets.all(16),
-                        itemCount: filtered.length,
+                        itemCount: filtered.length + (canLoadMore ? 1 : 0),
                         separatorBuilder: (_, __) => const SizedBox(height: 12),
                         itemBuilder: (context, index) {
+                          if (index >= filtered.length) {
+                            return Center(
+                              child: OutlinedButton.icon(
+                                onPressed: _loadMore,
+                                icon: const Icon(Icons.expand_more),
+                                label: const Text('Ver más'),
+                              ),
+                            );
+                          }
                           final order = filtered[index];
                           return _AlmacenOrderCard(
                             order: order,
                             onReview: () =>
-                                context.push('/orders/almacen/${order.id}'),
+                                guardedPush(context, '/orders/almacen/${order.id}'),
                           );
                         },
                       ),
@@ -184,6 +243,8 @@ class _AlmacenOrderCard extends StatelessWidget {
             Text('Creada: $createdLabel'),
             const SizedBox(height: 8),
             _OrderCardSummary(order: order),
+            const SizedBox(height: 6),
+            OrderStatusDurationPill(order: order),
             const SizedBox(height: 12),
             FilledButton(
               onPressed: onReview,
@@ -250,7 +311,18 @@ class _AlmacenOrderReviewScreenState
     final orderAsync = ref.watch(orderByIdStreamProvider(widget.orderId));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Recepcion en almacen')),
+      appBar: AppBar(
+        title: const Text('Recepcion en almacen'),
+        actions: [
+          infoAction(
+            context,
+            title: 'Recepcion en almacen',
+            message:
+                'Registra cantidades recibidas y comentarios.\n'
+                'Finalizar avanza la orden al siguiente paso.',
+          ),
+        ],
+      ),
       body: orderAsync.when(
         data: (order) {
           if (order == null) {
@@ -268,7 +340,7 @@ class _AlmacenOrderReviewScreenState
                     _OrderHeaderSummary(order: order),
                     const SizedBox(height: 12),
                     OutlinedButton.icon(
-                      onPressed: () => context.push('/orders/${order.id}/pdf'),
+                      onPressed: () => guardedPush(context, '/orders/${order.id}/pdf'),
                       icon: const Icon(Icons.picture_as_pdf_outlined),
                       label: const Text('Ver PDF'),
                     ),
@@ -315,10 +387,7 @@ class _AlmacenOrderReviewScreenState
                         ? const SizedBox(
                             width: 20,
                             height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
+                            child: AppSplash(compact: true, size: 20),
                           )
                         : const Text('Finalizar recepcion'),
                   ),
@@ -415,7 +484,7 @@ class _AlmacenOrderReviewScreenState
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Recepcion guardada.')),
       );
-      context.go('/orders/almacen');
+      guardedGo(context, '/orders/almacen');
     } catch (error, stack) {
       if (!mounted) return;
       final message =
@@ -634,3 +703,5 @@ String _formatNum(num value) {
   if (value == asInt) return asInt.toString();
   return value.toString();
 }
+
+

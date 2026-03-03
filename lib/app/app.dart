@@ -30,7 +30,6 @@ class SistemaComprasApp extends ConsumerWidget {
     });
     final router = ref.watch(appRouterProvider);
     final branding = ref.watch(currentBrandingProvider);
-
     return Shortcuts(
       shortcuts: <LogicalKeySet, Intent>{
         LogicalKeySet(
@@ -72,6 +71,8 @@ class SistemaComprasApp extends ConsumerWidget {
             theme: AppTheme.lightFor(branding),
             darkTheme: AppTheme.darkFor(branding),
             routerConfig: router,
+            builder: (context, child) =>
+                child ?? const SizedBox.shrink(),
           ),
         ),
       ),

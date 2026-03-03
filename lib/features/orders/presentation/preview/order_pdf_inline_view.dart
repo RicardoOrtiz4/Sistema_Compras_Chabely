@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:pdfx/pdfx.dart';
 
 import 'package:sistema_compras/core/error_reporter.dart';
+import 'package:sistema_compras/core/navigation_guard.dart';
+import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 
 const double _webRenderScale = 1.6;
@@ -23,17 +25,32 @@ class OrderPdfInlineView extends StatefulWidget {
   State<OrderPdfInlineView> createState() => _OrderPdfInlineViewState();
 }
 
-class _OrderPdfInlineViewState extends State<OrderPdfInlineView> {
+class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
+    with RouteAware {
   late Future<Uint8List> _bytesFuture;
   PdfControllerPinch? _controller;
   PdfController? _webController;
   PhotoViewController? _photoController;
   String? _signature;
+  bool _isRouteSubscribed = false;
 
   @override
   void initState() {
     super.initState();
     _queueBuild();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) {
+      if (_isRouteSubscribed) {
+        routeObserver.unsubscribe(this);
+      }
+      routeObserver.subscribe(this, route);
+      _isRouteSubscribed = true;
+    }
   }
 
   @override
@@ -48,16 +65,36 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView> {
 
   @override
   void dispose() {
+    if (_isRouteSubscribed) {
+      routeObserver.unsubscribe(this);
+    }
     _disposeController();
     super.dispose();
   }
 
+  @override
+  void didPopNext() {
+    if (!mounted) return;
+    setState(() {
+      _disposeController();
+      _queueBuild();
+    });
+  }
+
   void _queueBuild() {
     _signature = _signatureFor(widget.data);
-    _bytesFuture = buildOrderPdf(
-      widget.data,
-      useIsolate: !kIsWeb,
-    );
+    final cached = getCachedOrderPdf(widget.data);
+    if (cached != null) {
+      _bytesFuture = Future.value(cached);
+      return;
+    }
+    _bytesFuture = Future(() async {
+      await WidgetsBinding.instance.endOfFrame;
+      return buildOrderPdf(
+        widget.data,
+        useIsolate: !kIsWeb,
+      );
+    });
   }
 
   void _disposeController() {
@@ -198,8 +235,8 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView> {
   void _applyWebZoom(double factor) {
     final controller = _photoController;
     if (controller == null) return;
-    final currentScale = controller.scale;   1.0;
-    final nextScale = (currentScale! * factor).clamp(0.5, 6.0);
+    final currentScale = controller.scale ?? 1.0;
+    final nextScale = (currentScale * factor).clamp(0.5, 6.0);
     controller.scale = nextScale;
   }
 
@@ -277,7 +314,7 @@ class _PdfLoading extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const CircularProgressIndicator(),
+            const AppSplash(compact: true, size: 140),
             const SizedBox(height: 12),
             Text(label),
           ],
@@ -364,7 +401,7 @@ class _ZoomButton extends StatelessWidget {
 String _signatureFor(OrderPdfData data) {
   var hash = 17;
   void addHash(Object? value) {
-    hash = 37 * hash + (value!.hashCode ^ 0);
+    hash = 37 * hash + (value?.hashCode ?? 0);
   }
 
   addHash(data.branding.id);
@@ -406,6 +443,7 @@ String _signatureFor(OrderPdfData data) {
     addHash(item.unit);
     addHash(item.customer);
     addHash(item.supplier);
+    addHash(item.budget);
     addHash(item.estimatedDate?.millisecondsSinceEpoch);
     addHash(item.reviewFlagged);
     addHash(item.reviewComment);

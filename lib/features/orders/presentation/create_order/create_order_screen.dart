@@ -4,7 +4,6 @@ import 'package:csv/csv.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import 'package:sistema_compras/core/area_labels.dart';
 import 'package:sistema_compras/core/constants.dart';
@@ -12,12 +11,14 @@ import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/core/widgets/searchable_select.dart';
+import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/domain/order_folio.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/partners/data/partner_repository.dart';
+import 'package:sistema_compras/core/navigation_guard.dart';
 
 const _unitOptions = <String>[
   'PZA',
@@ -171,6 +172,17 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Requisición de compra'),
+        actions: [
+          infoAction(
+            context,
+            title: 'Requisicion de compra',
+            message:
+                'Captura los datos generales de la requisicion.\n'
+                'Agrega articulos y cantidades.\n'
+                'Puedes importar CSV.\n'
+                'Al final envia a revision.',
+          ),
+        ],
       ),
       body: userAsync.when(
         data: (user) {
@@ -370,16 +382,13 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                                   );
                                   return;
                                 }
-                                context.push('/orders/preview');
+                                guardedPush(context, '/orders/preview');
                               },
                     child: controller.isSubmitting
                         ? const SizedBox(
                             width: 20,
                             height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
+                            child: AppSplash(compact: true, size: 20),
                           )
                         : Text(
                             controller.returnCount >= _maxCorrections
@@ -1048,3 +1057,4 @@ String _normalizeHeader(String raw) {
   // Solo letras y números
   return s.replaceAll(RegExp(r'[^a-z0-9]'), '');
 }
+

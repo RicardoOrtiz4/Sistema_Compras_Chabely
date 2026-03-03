@@ -21,7 +21,7 @@ To fix this problem, you have one of two solutions:
 
 (preferred) Move the logic for modifying your provider outside of a widget life-cycle. For example, maybe you could update your provider inside a button's onPressed instead.
 
-Delay your modification, such as by encapsulating the modification in a Future(() {...});
+Delay your modification, such as by encapsulating the modification in a Future((){}).
 This will perform your update after the widget tree is done building.
 dart-sdk/lib/internal/js_dev_runtime/private/ddc_runtime/errors.dart 274:3 throw
 package:flutter_riverpod/src/core/provider_scope.dart 333:7 [_debugCanModifyProviders]
@@ -34,8 +34,3 @@ package:riverpod/src/core/element.dart 138:5 onData
 dart-sdk/lib/_internal/js_dev_runtime/private/ddc_runtime/operations.dart 118:77 tear
 package:riverpod/src/core/async_value.dart 158:20 AsyncValueExtensions.map
 package:riverpod/src/core/element.dart 75:14 set value
-package:riverpod/src/providers/legacy/state_provider.dart 120:7 <fn>
-package:state_notifier/state_notifier.dart 227:23 set state
-package:riverpod/src/providers/legacy/state_controller.dart 20:36 set state
-package:sistema_compras/features/home/presentation/home_screen.dart 353:42 _maybeShowReminder
-package:sistema_compras/features/home/presentation/home_screen.dart 138:11 <fn>

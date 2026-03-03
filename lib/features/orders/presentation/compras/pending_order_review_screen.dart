@@ -5,8 +5,8 @@ import 'package:go_router/go_router.dart';
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
-import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
+import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
@@ -15,6 +15,7 @@ import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_i
 import 'package:sistema_compras/features/orders/presentation/shared/item_review_dialog.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_rejection_history.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
+import 'package:sistema_compras/core/navigation_guard.dart';
 
 class PendingOrderReviewScreen extends ConsumerStatefulWidget {
   const PendingOrderReviewScreen({required this.orderId, super.key});
@@ -29,6 +30,7 @@ class PendingOrderReviewScreen extends ConsumerStatefulWidget {
 class _PendingOrderReviewScreenState
     extends ConsumerState<PendingOrderReviewScreen> {
   bool _isBusy = false;
+  int _pdfRefreshToken = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -38,14 +40,19 @@ class _PendingOrderReviewScreenState
       data: (order) {
         if (order == null) return const <Widget>[];
         final eventsAsync = ref.watch(orderEventsProvider(order.id));
+        final hasReturns = order.returnCount > 0;
         return [
           eventsAsync.when(
-            data: (events) => IconButton(
-              icon: const Icon(Icons.history),
-              tooltip: 'Historial de cambios',
-              onPressed:
-                  events.isEmpty ? null : () => _showHistory(context, order, events),
-            ),
+            data: (events) {
+              final canShow =
+                  hasReturns && events.any((event) => event.type == 'return');
+              return IconButton(
+                icon: const Icon(Icons.history),
+                tooltip: 'Historial de cambios',
+                onPressed:
+                    canShow ? () => _showHistory(context, order, events) : null,
+              );
+            },
             loading: () => IconButton(
               icon: const Icon(Icons.history),
               tooltip: 'Historial de cambios',
@@ -65,7 +72,17 @@ class _PendingOrderReviewScreenState
     return Scaffold(
       appBar: AppBar(
         title: const Text('Revisar PDF'),
-        actions: actions,
+        actions: [
+          ...actions,
+          infoAction(
+            context,
+            title: 'Revisar PDF',
+            message:
+                'Revisa el PDF de la orden.\n'
+                'Autorizar abre la confirmacion.\n'
+                'Rechazar solicita motivos por articulo.',
+          ),
+        ],
       ),
       body: orderAsync.when(
         data: (order) {
@@ -79,19 +96,12 @@ class _PendingOrderReviewScreenState
 
           return Column(
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: _OrderHeaderSummary(order: order, compact: false),
-              ),
-              if (maxCorrectionsReached)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                  child: Text(
-                    'Máximo de correcciones alcanzado. Solicita una nueva requisición.',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
+              Expanded(
+                child: OrderPdfInlineView(
+                  key: ValueKey('review-pdf-$_pdfRefreshToken'),
+                  data: pdfData,
                 ),
-              Expanded(child: OrderPdfInlineView(data: pdfData)),
+              ),
               Padding(
                 padding: const EdgeInsets.all(16),
                 child: LayoutBuilder(
@@ -106,7 +116,7 @@ class _PendingOrderReviewScreenState
                           ? const SizedBox(
                               width: 18,
                               height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
+                              child: AppSplash(compact: true, size: 18),
                             )
                           : const Text('Rechazar'),
                     );
@@ -114,7 +124,15 @@ class _PendingOrderReviewScreenState
                     final approveButton = FilledButton(
                       onPressed: _isBusy
                           ? null
-                          : () => context.push('/orders/review/${order.id}/approve'),
+                          : () async {
+                              await guardedPush(
+                                context,
+                                '/orders/review/${order.id}/approve',
+                              );
+                              if (mounted) {
+                                setState(() => _pdfRefreshToken += 1);
+                              }
+                            },
                       child: const Text('Autorizar'),
                     );
 
@@ -243,13 +261,26 @@ class PendingOrderApprovalScreen extends ConsumerStatefulWidget {
 class _PendingOrderApprovalScreenState
     extends ConsumerState<PendingOrderApprovalScreen> {
   bool _isSubmitting = false;
+  int _pdfRefreshToken = 0;
 
   @override
   Widget build(BuildContext context) {
     final orderAsync = ref.watch(orderByIdStreamProvider(widget.orderId));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Autorizar orden')),
+      appBar: AppBar(
+        title: const Text('Autorizar orden'),
+        actions: [
+          infoAction(
+            context,
+            title: 'Autorizar orden',
+            message:
+                'Confirma el envio a Cotizaciones.\n'
+                'El PDF mostrara quien recibio.\n'
+                'Cancelar no cambia la orden.',
+          ),
+        ],
+      ),
       body: orderAsync.when(
         data: (order) {
           if (order == null) {
@@ -257,11 +288,28 @@ class _PendingOrderApprovalScreenState
           }
 
           final branding = ref.watch(currentBrandingProvider);
-          final pdfData = buildPdfDataFromOrder(order, branding: branding);
+          final actor = ref.watch(currentUserProfileProvider).value;
+          final reviewerName = (order.comprasReviewerName ?? '').trim().isEmpty
+              ? actor?.name
+              : order.comprasReviewerName;
+          final reviewerArea = (order.comprasReviewerArea ?? '').trim().isEmpty
+              ? actor?.areaDisplay
+              : order.comprasReviewerArea;
+          final pdfData = buildPdfDataFromOrder(
+            order,
+            branding: branding,
+            comprasReviewerName: reviewerName,
+            comprasReviewerArea: reviewerArea,
+          );
 
           return Column(
             children: [
-              Expanded(child: OrderPdfInlineView(data: pdfData)),
+              Expanded(
+                child: OrderPdfInlineView(
+                  key: ValueKey('approve-pdf-$_pdfRefreshToken'),
+                  data: pdfData,
+                ),
+              ),
               Padding(
                 padding: const EdgeInsets.all(16),
                 child: SizedBox(
@@ -272,10 +320,7 @@ class _PendingOrderApprovalScreenState
                         ? const SizedBox(
                             width: 20,
                             height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
+                            child: AppSplash(compact: true, size: 20),
                           )
                         : const Text('Enviar a Cotizaciones'),
                   ),
@@ -305,14 +350,28 @@ class _PendingOrderApprovalScreenState
       final confirmed =
           await _confirmSendToCotizaciones(actor.name, actor.areaDisplay);
       if (!confirmed) {
-        if (mounted) setState(() => _isSubmitting = false);
+        if (mounted) {
+          setState(() {
+            _isSubmitting = false;
+            _pdfRefreshToken += 1;
+          });
+        }
         return;
       }
+
+      final reviewerName = (order.comprasReviewerName ?? '').trim().isEmpty
+          ? actor.name
+          : order.comprasReviewerName;
+      final reviewerArea = (order.comprasReviewerArea ?? '').trim().isEmpty
+          ? actor.areaDisplay
+          : order.comprasReviewerArea;
 
       await ref.read(purchaseOrderRepositoryProvider).transitionStatus(
         order: order,
         targetStatus: PurchaseOrderStatus.cotizaciones,
         actor: actor,
+        comprasReviewerName: reviewerName,
+        comprasReviewerArea: reviewerArea,
       );
 
       if (!mounted) return;
@@ -320,7 +379,7 @@ class _PendingOrderApprovalScreenState
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Orden enviada a Cotizaciones.')),
       );
-      context.go('/orders/pending');
+      guardedGo(context, '/orders/pending');
     } catch (error, stack) {
       if (!mounted) return;
       final message =
@@ -361,50 +420,3 @@ class _PendingOrderApprovalScreenState
   }
 }
 
-/// Reemplazo del widget corrupto (compact true/false).
-class _OrderHeaderSummary extends StatelessWidget {
-  const _OrderHeaderSummary({required this.order, required this.compact});
-
-  final PurchaseOrder order;
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    final created = order.createdAt?.toFullDateTime() ?? 'Pendiente';
-    final updated = order.updatedAt?.toFullDateTime();
-
-    final children = <Widget>[
-      Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: [
-          Chip(label: Text(order.urgency.label)),
-          Chip(label: Text(order.status.label)),
-        ],
-      ),
-      const SizedBox(height: 12),
-      Text('Folio: ${order.id}'),
-      Text('Solicitante: ${order.requesterName}'),
-      Text('Área: ${order.areaName}'),
-      const SizedBox(height: 8),
-      Text('Creada: $created'),
-      if (updated != null) Text('Actualizada: $updated'),
-    ];
-
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: compact
-            ? Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: children,
-              )
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: children,
-              ),
-      ),
-    );
-  }
-}

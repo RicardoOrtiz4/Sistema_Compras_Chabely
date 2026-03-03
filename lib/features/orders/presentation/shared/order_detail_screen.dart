@@ -1,17 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
+import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_pdf_thumbnail.dart';
 
 import 'order_timeline.dart';
+import 'package:sistema_compras/core/navigation_guard.dart';
 
 class OrderDetailScreen extends ConsumerWidget {
   const OrderDetailScreen({required this.orderId, super.key});
@@ -30,6 +31,16 @@ class OrderDetailScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Detalle de orden'),
+        actions: [
+          infoAction(
+            context,
+            title: 'Detalle de orden',
+            message:
+                'Consulta el resumen y el timeline de eventos.\n'
+                'Revisa PDFs, cotizaciones, facturas y almacen.\n'
+                'Usa las secciones para abrir documentos.',
+          ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
@@ -155,13 +166,13 @@ class _OrderPdfSection extends StatelessWidget {
             const SizedBox(height: 12),
             OrderPdfThumbnail(
               order: order,
-              onTap: () => context.push(pdfRoute),
+              onTap: () => guardedPush(context, pdfRoute),
             ),
             const SizedBox(height: 12),
             Align(
               alignment: Alignment.centerRight,
               child: OutlinedButton.icon(
-                onPressed: () => context.push(pdfRoute),
+                onPressed: () => guardedPush(context, pdfRoute),
                 icon: const Icon(Icons.picture_as_pdf),
                 label: const Text('Ver PDF'),
               ),

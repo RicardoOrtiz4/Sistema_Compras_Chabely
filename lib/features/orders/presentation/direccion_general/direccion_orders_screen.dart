@@ -1,15 +1,19 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
+import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_search.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_status_duration.dart';
+import 'package:sistema_compras/core/navigation_guard.dart';
 
 class DireccionOrdersScreen extends ConsumerStatefulWidget {
   const DireccionOrdersScreen({super.key});
@@ -21,7 +25,10 @@ class DireccionOrdersScreen extends ConsumerStatefulWidget {
 
 class _DireccionOrdersScreenState extends ConsumerState<DireccionOrdersScreen> {
   late final TextEditingController _searchController;
+  final OrderSearchCache _searchCache = OrderSearchCache();
+  Timer? _searchDebounce;
   String _searchQuery = '';
+  int _limit = defaultOrderPageSize;
   final Set<String> _busyOrders = <String>{};
 
   @override
@@ -33,24 +40,57 @@ class _DireccionOrdersScreenState extends ConsumerState<DireccionOrdersScreen> {
   @override
   void dispose() {
     _searchController.dispose();
+    _searchDebounce?.cancel();
     super.dispose();
+  }
+
+  void _updateSearch(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted) return;
+      setState(() => _searchQuery = value);
+    });
+  }
+
+  void _clearSearch() {
+    _searchDebounce?.cancel();
+    _searchController.clear();
+    setState(() => _searchQuery = '');
+  }
+
+  void _loadMore() {
+    setState(() => _limit += orderPageSizeStep);
   }
 
   @override
   Widget build(BuildContext context) {
-    final ordersAsync = ref.watch(pendingDireccionOrdersProvider);
+    final ordersAsync = ref.watch(pendingDireccionOrdersPagedProvider(_limit));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Dirección General')),
+      appBar: AppBar(
+        title: const Text('Dirección General'),
+        actions: [
+          infoAction(
+            context,
+            title: 'Dirección General',
+            message:
+                'Revisa ordenes con cotizacion asignada.\n'
+                'Abre una orden para decidir.\n'
+                'El dashboard muestra links agrupados.',
+          ),
+        ],
+      ),
       body: ordersAsync.when(
         data: (orders) {
           if (orders.isEmpty) {
             return const Center(child: Text('No hay órdenes pendientes.'));
           }
 
+          _searchCache.retainFor(orders);
           final filtered = orders
-              .where((order) => orderMatchesSearch(order, _searchQuery))
+              .where((order) => orderMatchesSearch(order, _searchQuery, cache: _searchCache))
               .toList();
+          final canLoadMore = orders.length >= _limit;
 
           final branding = ref.read(currentBrandingProvider);
           prefetchOrderPdfsForOrders(filtered, branding: branding);
@@ -69,31 +109,50 @@ class _DireccionOrdersScreenState extends ConsumerState<DireccionOrdersScreen> {
                         ? null
                         : IconButton(
                             icon: const Icon(Icons.clear),
-                            onPressed: () {
-                              _searchController.clear();
-                              setState(() => _searchQuery = '');
-                            },
+                            onPressed: _clearSearch,
                           ),
                   ),
-                  onChanged: (value) => setState(() => _searchQuery = value),
+                  onChanged: _updateSearch,
                 ),
               ),
               const SizedBox(height: 12),
               Expanded(
                 child: filtered.isEmpty
-                    ? const Center(child: Text('No hay órdenes con ese filtro.'))
+                    ? Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Text('No hay órdenes con ese filtro.'),
+                          if (canLoadMore) ...[
+                            const SizedBox(height: 12),
+                            OutlinedButton.icon(
+                              onPressed: _loadMore,
+                              icon: const Icon(Icons.expand_more),
+                              label: const Text('Ver más'),
+                            ),
+                          ],
+                        ],
+                      )
                     : ListView.separated(
                         padding: const EdgeInsets.all(16),
-                        itemCount: filtered.length,
+                        itemCount: filtered.length + (canLoadMore ? 1 : 0),
                         separatorBuilder: (_, __) => const SizedBox(height: 12),
                         itemBuilder: (context, index) {
+                          if (index >= filtered.length) {
+                            return Center(
+                              child: OutlinedButton.icon(
+                                onPressed: _loadMore,
+                                icon: const Icon(Icons.expand_more),
+                                label: const Text('Ver más'),
+                              ),
+                            );
+                          }
                           final order = filtered[index];
                           final busy = _busyOrders.contains(order.id);
                           return _DireccionOrderCard(
                             order: order,
                             busy: busy,
                             onReview: () =>
-                                context.push('/orders/direccion/${order.id}'),
+                                guardedPush(context, '/orders/direccion/${order.id}'),
                           );
                         },
                       ),
@@ -112,7 +171,7 @@ class _DireccionOrdersScreenState extends ConsumerState<DireccionOrdersScreen> {
   }
 }
 
-class _DireccionOrderCard extends StatelessWidget {
+class _DireccionOrderCard extends ConsumerWidget {
   const _DireccionOrderCard({
     required this.order,
     required this.busy,
@@ -124,9 +183,10 @@ class _DireccionOrderCard extends StatelessWidget {
   final VoidCallback onReview;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final authorizedBy = order.comprasReviewerName?.trim() ?? '';
     final resubmissionCount = order.direccionReturnCount;
+    final eventsAsync = ref.watch(orderEventsProvider(order.id));
 
     final baseSmall = Theme.of(context).textTheme.bodySmall;
     final smallBlue = (baseSmall?.copyWith(color: Colors.blue.shade900)) ??
@@ -188,6 +248,19 @@ class _DireccionOrderCard extends StatelessWidget {
                 ),
               ),
             ),
+            const SizedBox(height: 6),
+            eventsAsync.when(
+              data: (events) {
+                final prev = _previousStatusDuration(order, events);
+                if (prev == null) return const SizedBox.shrink();
+                return StatusDurationPill(
+                  text:
+                      'Tiempo en ${prev.status.label}: ${formatDurationLabel(prev.duration)}',
+                );
+              },
+              loading: () => const SizedBox.shrink(),
+              error: (_, __) => const SizedBox.shrink(),
+            ),
             if (authorizedBy.isNotEmpty) ...[
               const SizedBox(height: 8),
               Text('Autorizó: $authorizedBy'),
@@ -203,7 +276,7 @@ class _DireccionOrderCard extends StatelessWidget {
                       ? const SizedBox(
                           width: 18,
                           height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
+                          child: AppSplash(compact: true, size: 18),
                         )
                       : const Text('Ver orden'),
                 );
@@ -260,3 +333,49 @@ class _OrderCardSummary extends StatelessWidget {
     );
   }
 }
+
+class _PreviousStatusDuration {
+  const _PreviousStatusDuration(this.status, this.duration);
+
+  final PurchaseOrderStatus status;
+  final Duration duration;
+}
+
+_PreviousStatusDuration? _previousStatusDuration(
+  PurchaseOrder order,
+  List<PurchaseOrderEvent> events,
+) {
+  if (events.isEmpty) return null;
+
+  PurchaseOrderEvent? enterCurrent;
+  for (final event in events.reversed) {
+    if (event.toStatus == order.status && event.timestamp != null) {
+      enterCurrent = event;
+      break;
+    }
+  }
+  if (enterCurrent == null) return null;
+
+  final prevStatus = enterCurrent.fromStatus;
+  final currentTimestamp = enterCurrent.timestamp;
+  if (prevStatus == null || currentTimestamp == null) return null;
+
+  PurchaseOrderEvent? enterPrev;
+  for (final event in events.reversed) {
+    if (event.toStatus == prevStatus &&
+        event.timestamp != null &&
+        !event.timestamp!.isAfter(currentTimestamp)) {
+      enterPrev = event;
+      break;
+    }
+  }
+  if (enterPrev == null) return null;
+
+  final duration = currentTimestamp.difference(enterPrev.timestamp!);
+  if (duration.isNegative) return null;
+
+  return _PreviousStatusDuration(prevStatus, duration);
+}
+
+
+
