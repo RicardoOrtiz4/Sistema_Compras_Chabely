@@ -12,6 +12,7 @@ import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/providers.dart';
+import 'package:sistema_compras/core/session_drafts.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/core/widgets/searchable_select.dart';
 import 'package:sistema_compras/core/widgets/info_action.dart';
@@ -23,7 +24,6 @@ import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_inline_view.dart';
 import 'package:sistema_compras/features/orders/presentation/compras/cotizaciones_dashboard_screen.dart';
-import 'package:sistema_compras/features/orders/presentation/shared/item_review_dialog.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_rejection_history.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_search.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_status_duration.dart';
@@ -113,7 +113,18 @@ class _CotizacionesOrdersScreenState extends ConsumerState<CotizacionesOrdersScr
 
   @override
   Widget build(BuildContext context) {
-    final ordersAsync = ref.watch(cotizacionesOrdersPagedProvider(_limit));
+    final ordersAsync = ref.watch(cotizacionesOrdersProvider);
+    final scheme = Theme.of(context).colorScheme;
+    final pendingCount = ordersAsync.maybeWhen(
+      data: (orders) =>
+          orders.where((order) => order.cotizacionReady != true).length,
+      orElse: () => 0,
+    );
+    final dashboardCount = ordersAsync.maybeWhen(
+      data: (orders) =>
+          orders.where((order) => order.cotizacionReady == true).length,
+      orElse: () => 0,
+    );
     final initialTab = widget.initialTab < 0
         ? 0
         : (widget.initialTab > 1 ? 1 : widget.initialTab);
@@ -134,10 +145,22 @@ class _CotizacionesOrdersScreenState extends ConsumerState<CotizacionesOrdersScr
               }
             },
           ),
-          bottom: const TabBar(
+          bottom: TabBar(
             tabs: [
-              Tab(text: 'Pendientes'),
-              Tab(text: 'Dashboard'),
+              Tab(
+                child: _TabWithBadge(
+                  label: 'Pendientes',
+                  count: pendingCount,
+                  color: scheme.error,
+                ),
+              ),
+              Tab(
+                child: _TabWithBadge(
+                  label: 'Dashboard',
+                  count: dashboardCount,
+                  color: scheme.primary,
+                ),
+              ),
             ],
           ),
           actions: [
@@ -172,18 +195,22 @@ class _CotizacionesOrdersScreenState extends ConsumerState<CotizacionesOrdersScr
 
         _searchCache.retainFor(orders);
         final trimmedQuery = _searchQuery.trim();
+        final pendingOnly = orders.where((order) => order.cotizacionReady != true);
         final filtered = trimmedQuery.isEmpty
-            ? orders
-            : orders
+            ? pendingOnly.toList()
+            : pendingOnly
                 .where(
                   (order) => orderMatchesSearch(order, trimmedQuery, cache: _searchCache),
                 )
                 .toList();
-        final pendingOnly = filtered.where((order) => !_orderReady(order)).toList();
-        final canLoadMore = orders.length >= _limit;
+        final visibleOrders = trimmedQuery.isEmpty
+            ? filtered.take(_limit).toList(growable: false)
+            : filtered;
+        final showLoadMore =
+            trimmedQuery.isEmpty && filtered.length > visibleOrders.length;
 
         final branding = ref.read(currentBrandingProvider);
-        _schedulePrefetch(pendingOnly, branding);
+        _schedulePrefetch(visibleOrders, branding);
 
         return Column(
           children: [
@@ -207,12 +234,12 @@ class _CotizacionesOrdersScreenState extends ConsumerState<CotizacionesOrdersScr
             ),
             const SizedBox(height: 12),
             Expanded(
-              child: pendingOnly.isEmpty
+              child: visibleOrders.isEmpty
                   ? Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         const Text('No hay ordenes con ese filtro.'),
-                        if (canLoadMore) ...[
+                        if (showLoadMore) ...[
                           const SizedBox(height: 12),
                           OutlinedButton.icon(
                             onPressed: _loadMore,
@@ -224,10 +251,10 @@ class _CotizacionesOrdersScreenState extends ConsumerState<CotizacionesOrdersScr
                     )
                   : ListView.separated(
                       padding: const EdgeInsets.all(16),
-                      itemCount: pendingOnly.length + (canLoadMore ? 1 : 0),
+                      itemCount: visibleOrders.length + (showLoadMore ? 1 : 0),
                       separatorBuilder: (_, __) => const SizedBox(height: 12),
                       itemBuilder: (context, index) {
-                        if (index >= pendingOnly.length) {
+                        if (index >= visibleOrders.length) {
                           return Center(
                             child: OutlinedButton.icon(
                               onPressed: _loadMore,
@@ -236,7 +263,7 @@ class _CotizacionesOrdersScreenState extends ConsumerState<CotizacionesOrdersScr
                             ),
                           );
                         }
-                        final order = pendingOnly[index];
+                        final order = visibleOrders[index];
                         return _CotizacionOrderCard(
                           order: order,
                           onPreview: () => _openOrderPreview(order.id),
@@ -257,7 +284,7 @@ class _CotizacionesOrdersScreenState extends ConsumerState<CotizacionesOrdersScr
   }
 }
 
-class _CotizacionOrderCard extends StatelessWidget {
+class _CotizacionOrderCard extends ConsumerWidget {
   const _CotizacionOrderCard({
     required this.order,
     required this.onPreview,
@@ -267,18 +294,16 @@ class _CotizacionOrderCard extends StatelessWidget {
   final VoidCallback onPreview;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final createdLabel = order.createdAt?.toFullDateTime() ?? 'Pendiente';
-
-    final hasLink = order.cotizacionPdfUrls.isNotEmpty ||
-        ((order.cotizacionPdfUrl ?? '').trim().isNotEmpty);
-
-    final totalItems = order.items.length;
-    final completedItems = order.items.where(_itemReady).length;
 
     final returnCount = order.returnCount;
     final wasReturned = returnCount > 0 ||
         ((order.lastReturnReason ?? '').trim().isNotEmpty);
+
+    final resubmissions = order.resubmissionDates;
+
+    final eventsAsync = ref.watch(orderEventsProvider(order.id));
 
     return Card(
       child: Padding(
@@ -291,6 +316,7 @@ class _CotizacionOrderCard extends StatelessWidget {
               runSpacing: 4,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
+                _FolioPill(folio: order.id),
                 _UrgencyPill(urgency: order.urgency),
                 if (wasReturned)
                   Container(
@@ -309,50 +335,6 @@ class _CotizacionOrderCard extends StatelessWidget {
                       ),
                     ),
                   ),
-                if (hasLink)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.green.shade100,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.green.shade400),
-                    ),
-                    child: Text(
-                      'Link cargado',
-                      style: TextStyle(
-                        color: Colors.green.shade800,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                if (completedItems > 0)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: completedItems == totalItems
-                          ? Colors.green.shade100
-                          : Colors.orange.shade100,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: completedItems == totalItems
-                            ? Colors.green.shade400
-                            : Colors.orange.shade400,
-                      ),
-                    ),
-                    child: Text(
-                      completedItems == totalItems
-                          ? 'Datos completos'
-                          : 'En progreso $completedItems/$totalItems',
-                      style: TextStyle(
-                        color: completedItems == totalItems
-                            ? Colors.green.shade800
-                            : Colors.orange.shade800,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
               ],
             ),
             const SizedBox(height: 8),
@@ -360,14 +342,29 @@ class _CotizacionOrderCard extends StatelessWidget {
             Text('Área: ${order.areaName}'),
             Text('Creada: $createdLabel'),
             const SizedBox(height: 8),
-            _OrderCardSummary(order: order),
+            if (resubmissions.isNotEmpty)
+              Text(
+                'Reenvío: ${_formatResubmissionStamp(resubmissions.last, order.createdAt)}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
             const SizedBox(height: 6),
-            OrderStatusDurationPill(order: order),
+            eventsAsync.when(
+              data: (events) {
+                final duration = _timeInPendingCompras(events);
+                if (duration == null) return const SizedBox.shrink();
+                return StatusDurationPill(
+                  text:
+                      'Tiempo en ordenes por confirmar: ${formatDurationLabel(duration)}',
+                );
+              },
+              loading: () => const SizedBox.shrink(),
+              error: (_, __) => const SizedBox.shrink(),
+            ),
             const SizedBox(height: 12),
             OutlinedButton.icon(
               onPressed: onPreview,
               icon: const Icon(Icons.picture_as_pdf_outlined),
-              label: const Text('Previsualizar PDF'),
+              label: const Text('Revisar PDF'),
             ),
           ],
         ),
@@ -376,23 +373,32 @@ class _CotizacionOrderCard extends StatelessWidget {
   }
 }
 
-class _OrderCardSummary extends StatelessWidget {
-  const _OrderCardSummary({required this.order});
 
-  final PurchaseOrder order;
+class _FolioPill extends StatelessWidget {
+  const _FolioPill({required this.folio});
+
+  final String folio;
 
   @override
   Widget build(BuildContext context) {
-    final supplier = (order.supplier ?? '').trim();
-    final internalOrder = (order.internalOrder ?? '').trim();
+    final scheme = Theme.of(context).colorScheme;
+    final color = scheme.surfaceContainerHighest;
+    final textColor = scheme.onSurfaceVariant;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (supplier.isNotEmpty) Text('Proveedor: $supplier'),
-        if (internalOrder.isNotEmpty) Text('OC interna: $internalOrder'),
-        if (order.budget != null) Text('Presupuesto: ${order.budget}'),
-      ],
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        folio,
+        style: TextStyle(
+          color: textColor,
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
     );
   }
 }
@@ -427,15 +433,48 @@ class _UrgencyPill extends StatelessWidget {
   }
 }
 
-bool _itemReady(PurchaseOrderItem item) {
-  final supplier = (item.supplier ?? '').trim();
-  final budget = item.budget ?? 0;
-  return supplier.isNotEmpty && budget > 0;
+Duration? _timeInPendingCompras(List<PurchaseOrderEvent> events) {
+  if (events.isEmpty) return null;
+
+  PurchaseOrderEvent? enterCotizaciones;
+  for (final event in events.reversed) {
+    if (event.toStatus == PurchaseOrderStatus.cotizaciones &&
+        event.timestamp != null) {
+      enterCotizaciones = event;
+      break;
+    }
+  }
+  if (enterCotizaciones == null) return null;
+
+  final enterTimestamp = enterCotizaciones.timestamp!;
+  PurchaseOrderEvent? enterPendiente;
+  for (final event in events.reversed) {
+    if (event.toStatus == PurchaseOrderStatus.pendingCompras &&
+        event.timestamp != null &&
+        !event.timestamp!.isAfter(enterTimestamp)) {
+      enterPendiente = event;
+      break;
+    }
+  }
+  if (enterPendiente == null) return null;
+
+  final duration = enterTimestamp.difference(enterPendiente.timestamp!);
+  if (duration.isNegative) return null;
+  return duration;
 }
 
-bool _orderReady(PurchaseOrder order) {
-  if (order.items.isEmpty) return false;
-  return order.items.every(_itemReady);
+final DateFormat _resubmissionTimeFormat = DateFormat('HH:mm');
+final DateFormat _resubmissionDateTimeFormat = DateFormat('dd MMM yyyy â€¢ HH:mm');
+
+String _formatResubmissionStamp(DateTime stamp, DateTime? createdAt) {
+  if (createdAt != null && _isSameDate(createdAt, stamp)) {
+    return _resubmissionTimeFormat.format(stamp);
+  }
+  return _resubmissionDateTimeFormat.format(stamp);
+}
+
+bool _isSameDate(DateTime a, DateTime b) {
+  return a.year == b.year && a.month == b.month && a.day == b.day;
 }
 
 class _CotizacionOrderPreviewScreen extends ConsumerStatefulWidget {
@@ -450,8 +489,20 @@ class _CotizacionOrderPreviewScreen extends ConsumerStatefulWidget {
 
 class _CotizacionOrderPreviewScreenState
     extends ConsumerState<_CotizacionOrderPreviewScreen> {
-  bool _isBusy = false;
   int _pdfRefreshTick = 0;
+  PurchaseOrder? _overrideOrder;
+  OrderPdfData? _overridePdfData;
+  bool _isReturning = false;
+
+  int _orderStamp(PurchaseOrder order) {
+    return (order.updatedAt ?? order.createdAt)?.millisecondsSinceEpoch ?? 0;
+  }
+
+  PurchaseOrder _resolveOrder(PurchaseOrder base) {
+    final override = _overrideOrder;
+    if (override == null) return base;
+    return _orderStamp(override) >= _orderStamp(base) ? override : base;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -491,16 +542,16 @@ class _CotizacionOrderPreviewScreenState
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Previsualizar PDF'),
+        title: const Text('Revisar PDF'),
         actions: [
           ...actions,
           infoAction(
             context,
-            title: 'Previsualizar PDF',
+            title: 'Revisar PDF',
             message:
                 'Revisa el PDF de la orden.\n'
                 'Completar datos abre el formulario de cotizacion.\n'
-                'Rechazar solicita motivos por articulo.',
+                'Guarda para continuar en el dashboard.',
           ),
         ],
       ),
@@ -509,28 +560,19 @@ class _CotizacionOrderPreviewScreenState
           if (order == null) return const AppSplash();
 
           final branding = ref.watch(currentBrandingProvider);
-          final actor = ref.watch(currentUserProfileProvider).value;
-          final reviewerName = (order.comprasReviewerName ?? '').trim().isNotEmpty
-              ? order.comprasReviewerName
-              : actor?.name;
-          final reviewerArea = (order.comprasReviewerArea ?? '').trim().isNotEmpty
-              ? order.comprasReviewerArea
-              : actor?.areaDisplay;
-          final pdfData = buildPdfDataFromOrder(
-            order,
-            branding: branding,
-            comprasReviewerName: reviewerName,
-            comprasReviewerArea: reviewerArea,
-          );
+          final resolvedOrder = _resolveOrder(order);
+          final pdfData = _overridePdfData ??
+              buildPdfDataFromOrder(resolvedOrder, branding: branding);
 
-          final maxCorrectionsReached = order.returnCount >= _maxCorrections;
+          final maxCorrectionsReached =
+              resolvedOrder.returnCount >= _maxCorrections;
 
           return Column(
             children: [
               Expanded(
                 child: OrderPdfInlineView(
                   key: ValueKey(
-                    '${order.id}-${order.updatedAt?.millisecondsSinceEpoch ?? 0}-$_pdfRefreshTick',
+                    '${resolvedOrder.id}-${resolvedOrder.updatedAt?.millisecondsSinceEpoch ?? 0}-$_pdfRefreshTick',
                   ),
                   data: pdfData,
                 ),
@@ -547,49 +589,91 @@ class _CotizacionOrderPreviewScreenState
                 padding: const EdgeInsets.all(16),
                 child: LayoutBuilder(
                   builder: (context, constraints) {
-                    final isNarrow = constraints.maxWidth < 360;
-
-                    final rejectButton = OutlinedButton(
-                      onPressed: _isBusy || maxCorrectionsReached
-                          ? null
-                          : () => _handleReject(order),
-                      child: _isBusy
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: AppSplash(compact: true, size: 18),
-                            )
-                          : const Text('Rechazar orden'),
-                    );
-
                     final completeButton = FilledButton(
                       onPressed: () async {
-                        await guardedPush(
+                      final result = await guardedPush<_CotizacionSaveResult>(
                           context,
-                          '/orders/cotizaciones/${order.id}',
+                          '/orders/cotizaciones/${resolvedOrder.id}',
                         );
                         if (!mounted) return;
-                        setState(() => _pdfRefreshTick += 1);
+                        if (result == null) return;
+                        if (result.ready) {
+                          Navigator.of(context).pop();
+                          return;
+                        }
+                        setState(() {
+                          _overridePdfData = result.pdfData;
+                          _pdfRefreshTick += 1;
+                        });
+                        ref.invalidate(orderByIdStreamProvider(order.id));
                       },
                       child: const Text('Completar datos'),
                     );
+                    final backButton = OutlinedButton(
+                      onPressed: _isReturning
+                          ? null
+                          : () async {
+                              final confirmed =
+                                  await _confirmReturnToPending(context);
+                              if (!mounted || confirmed != true) return;
+                              final actor =
+                                  ref.read(currentUserProfileProvider).value;
+                              if (actor == null) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Perfil no disponible.')),
+                                );
+                                return;
+                              }
+                              setState(() => _isReturning = true);
+                              try {
+                                await ref
+                                    .read(purchaseOrderRepositoryProvider)
+                                    .returnToCompras(
+                                      order: resolvedOrder,
+                                      comment: '',
+                                      items: resolvedOrder.items,
+                                      actor: actor,
+                                    );
+                                if (!mounted) return;
+                                final messenger = ScaffoldMessenger.of(context);
+                                Navigator.of(context).pop();
+                                messenger.showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      'Orden ${resolvedOrder.id} regresada a ordenes por confirmar.',
+                                    ),
+                                  ),
+                                );
+                              } catch (error, stack) {
+                                if (mounted) {
+                                  final message = reportError(
+                                    error,
+                                    stack,
+                                    context: 'CotizacionOrderPreview.return',
+                                  );
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text(message)),
+                                  );
+                                }
+                              } finally {
+                                if (mounted) {
+                                  setState(() => _isReturning = false);
+                                }
+                              }
+                            },
+                      child: const Text('Regresar a ordenes por confirmar'),
+                    );
 
-                    if (isNarrow) {
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          completeButton,
-                          const SizedBox(height: 8),
-                          rejectButton,
-                        ],
-                      );
-                    }
-
-                    return Row(
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Expanded(child: completeButton),
-                        const SizedBox(width: 12),
-                        Expanded(child: rejectButton),
+                        Row(
+                          children: [
+                            Expanded(child: backButton),
+                            const SizedBox(width: 8),
+                            Expanded(child: completeButton),
+                          ],
+                        ),
                       ],
                     );
                   },
@@ -625,56 +709,28 @@ class _CotizacionOrderPreviewScreenState
     );
   }
 
-  Future<void> _handleReject(PurchaseOrder order) async {
-    if (order.returnCount >= _maxCorrections) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Maximo de correcciones alcanzado. Crea otra requisicion.'),
+}
+
+Future<bool?> _confirmReturnToPending(BuildContext context) {
+  return showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Confirmar regreso'),
+      content: const Text(
+        'Esta orden regresará a órdenes por confirmar y se borrará la persona que autorizó. ¿Deseas continuar?',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancelar'),
         ),
-      );
-      return;
-    }
-
-    final review = await showItemReviewDialog(
-      context: context,
-      order: order,
-      title: 'Rechazar orden ${order.id}',
-      confirmLabel: 'Rechazar',
-    );
-    if (review == null) return;
-
-    setState(() => _isBusy = true);
-    try {
-      final actor = ref.read(currentUserProfileProvider).value;
-      if (actor == null) {
-        throw StateError('Perfil no disponible.');
-      }
-
-      final repo = ref.read(purchaseOrderRepositoryProvider);
-      await repo.requestEdit(
-        order: order,
-        comment: review.summary,
-        items: review.items,
-        actor: actor,
-      );
-
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Orden devuelta al solicitante.')),
-      );
-      Navigator.of(context).pop();
-    } catch (error, stack) {
-      if (!mounted) return;
-      final message = reportError(error, stack, context: 'CotizacionOrderPreview.reject');
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-    } finally {
-      if (mounted) {
-        setState(() => _isBusy = false);
-      }
-    }
-  }
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Regresar'),
+        ),
+      ],
+    ),
+  );
 }
 
 class CotizacionOrderReviewScreen extends ConsumerStatefulWidget {
@@ -736,13 +792,20 @@ class _CotizacionOrderReviewScreenState extends ConsumerState<CotizacionOrderRev
               .toList()
             ..sort();
 
+          final cachedDraft = SessionDraftStore.cotizacion(order.id);
+
           if (!_prefilled) {
             _prefilled = true;
-            _internalController.text = (order.internalOrder ?? '').trim();
-            _commentController.text = (order.comprasComment ?? '').trim();
+            if (cachedDraft != null) {
+              _internalController.text = cachedDraft.internalOrder;
+              _commentController.text = cachedDraft.comprasComment;
+            } else {
+              _internalController.text = (order.internalOrder ?? '').trim();
+              _commentController.text = (order.comprasComment ?? '').trim();
+            }
           }
 
-          _syncItems(order);
+          _syncItems(order, draftItems: cachedDraft?.items);
 
           final pending = _itemDrafts.where((item) => !_isCompleted(item)).length;
           final canContinue = _allSuppliersAssigned() && _allItemBudgetsAssigned();
@@ -762,17 +825,23 @@ class _CotizacionOrderReviewScreenState extends ConsumerState<CotizacionOrderRev
                       decoration: const InputDecoration(
                         labelText: 'Orden de compra interna',
                       ),
-                      onChanged: (_) => setState(() {}),
+                      onChanged: (_) {
+                        setState(() {});
+                        _saveDraft(order.id);
+                      },
                     ),
                     const SizedBox(height: 12),
                     TextFormField(
                       controller: _commentController,
                       decoration: const InputDecoration(
-                        labelText: 'Comentarios extras',
+                        labelText: 'Comentarios del área de compras',
                       ),
                       minLines: 2,
                       maxLines: 4,
-                      onChanged: (_) => setState(() {}),
+                      onChanged: (_) {
+                        setState(() {});
+                        _saveDraft(order.id);
+                      },
                     ),
                     const SizedBox(height: 12),
                     Card(
@@ -854,8 +923,8 @@ class _CotizacionOrderReviewScreenState extends ConsumerState<CotizacionOrderRev
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       FilledButton(
-                        onPressed: canContinue ? () => _saveAndClose(order) : null,
-                        child: const Text('Guardar cambios'),
+                        onPressed: canContinue ? () => _previewDraft(order) : null,
+                        child: const Text('Ver PDF'),
                       ),
                     ],
                   ),
@@ -878,17 +947,35 @@ class _CotizacionOrderReviewScreenState extends ConsumerState<CotizacionOrderRev
   // Envío
   // ---------------------------------------------------------------------------
 
-  Future<void> _saveAndClose(PurchaseOrder order) async {
+  Future<void> _previewDraft(PurchaseOrder order) async {
     final actor = ref.read(currentUserProfileProvider).value;
     if (actor == null) {
       _showMessage('Perfil no disponible.');
       return;
     }
     try {
-      await _persistApprovalData(order, actor.name);
+      final draftPayload = _buildDraftData(order, actor.name);
+      final pdfData = _buildPdfData(
+        order,
+        draftPayload,
+        cacheSalt: DateTime.now().millisecondsSinceEpoch.toString(),
+      );
+
+      final confirmed = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (_) => _CotizacionDraftPreviewScreen(pdfData: pdfData),
+        ),
+      );
+      if (confirmed != true) return;
+
+      final payload = await _persistApprovalData(order, actor.name, markReady: true);
+      final savedPdfData = _buildPdfData(order, payload);
       if (!mounted) return;
+      SessionDraftStore.clearCotizacion(order.id);
       _showMessage('Datos guardados.');
-      Navigator.of(context).pop();
+      Navigator.of(context).pop(
+        _CotizacionSaveResult(pdfData: savedPdfData, ready: true),
+      );
     } catch (error, stack) {
       if (!mounted) return;
       final message =
@@ -898,24 +985,89 @@ class _CotizacionOrderReviewScreenState extends ConsumerState<CotizacionOrderRev
   }
 
 
-  Future<void> _persistApprovalData(PurchaseOrder order, String reviewerName) async {
-    final repo = ref.read(purchaseOrderRepositoryProvider);
-    final reviewerArea = ref.read(currentUserProfileProvider).value?.areaDisplay ?? '';
+  _CotizacionSaveData _buildDraftData(
+    PurchaseOrder order,
+    String reviewerName,
+  ) {
+    final trimmedReviewer = reviewerName.trim();
+    final user = ref.read(currentUserProfileProvider).value;
+    final reviewerArea = (user?.areaDisplay ?? '').trim();
+    final fallbackName = (user?.name ?? '').trim();
+    final fallbackArea = reviewerArea.isNotEmpty
+        ? reviewerArea
+        : (order.comprasReviewerArea ?? '').trim();
+
+    final effectiveReviewerName = trimmedReviewer.isNotEmpty
+        ? trimmedReviewer
+        : (fallbackName.isNotEmpty
+            ? fallbackName
+            : (order.comprasReviewerName ?? 'Compras'));
+    final effectiveReviewerArea = fallbackArea.isNotEmpty
+        ? fallbackArea
+        : (order.comprasReviewerArea ?? 'Compras');
 
     final supplierBudgets = _supplierBudgetsFromItems();
     final budget = _sumBudgets(supplierBudgets);
+    final internalOrder = _internalController.text.trim();
+    final comprasComment = _commentController.text.trim();
+
+    return _CotizacionSaveData(
+      supplierBudgets: supplierBudgets,
+      budget: budget,
+      reviewerName: effectiveReviewerName,
+      reviewerArea: effectiveReviewerArea,
+      internalOrder: internalOrder,
+      comprasComment: comprasComment,
+      items: List<OrderItemDraft>.from(_itemDrafts),
+    );
+  }
+
+  OrderPdfData _buildPdfData(
+    PurchaseOrder order,
+    _CotizacionSaveData payload, {
+    String? cacheSalt,
+  }
+  ) {
+    final branding = ref.read(currentBrandingProvider);
+    return buildPdfDataFromOrder(
+      order,
+      branding: branding,
+      internalOrder: payload.internalOrder,
+      comprasComment: payload.comprasComment,
+      supplierBudgets: payload.supplierBudgets,
+      budget: payload.budget,
+      comprasReviewerName: payload.reviewerName,
+      comprasReviewerArea: payload.reviewerArea,
+      direccionGeneralName: order.direccionGeneralName,
+      direccionGeneralArea: order.direccionGeneralArea,
+      items: payload.items,
+      cacheSalt: cacheSalt,
+    );
+  }
+
+  Future<_CotizacionSaveData> _persistApprovalData(
+    PurchaseOrder order,
+    String reviewerName, {
+    required bool markReady,
+  }
+  ) async {
+    final repo = ref.read(purchaseOrderRepositoryProvider);
+    final payload = _buildDraftData(order, reviewerName);
 
     await repo.updateApprovalData(
       orderId: order.id,
       supplier: order.supplier,
-      internalOrder: _internalController.text.trim(),
-      budget: budget,
-      supplierBudgets: supplierBudgets,
-      comprasComment: _commentController.text.trim(),
-      comprasReviewerName: reviewerName,
-      comprasReviewerArea: reviewerArea,
-      items: _itemDrafts.map((item) => item.toModel()).toList(),
+      internalOrder: payload.internalOrder,
+      budget: payload.budget,
+      supplierBudgets: payload.supplierBudgets,
+      comprasComment: payload.comprasComment,
+      comprasReviewerName: payload.reviewerName,
+      comprasReviewerArea: payload.reviewerArea,
+      items: payload.items.map((item) => item.toModel()).toList(),
+      markReady: markReady,
     );
+
+    return payload;
   }
 
   // ---------------------------------------------------------------------------
@@ -1012,6 +1164,7 @@ class _CotizacionOrderReviewScreenState extends ConsumerState<CotizacionOrderRev
       _supplierController.clear();
       _budgetController.clear();
     });
+    _saveDraft(widget.orderId);
   }
 
   void _revertItem(int index) {
@@ -1019,11 +1172,13 @@ class _CotizacionOrderReviewScreenState extends ConsumerState<CotizacionOrderRev
       _itemDrafts[index] =
           _itemDrafts[index].copyWith(clearBudget: true, clearSupplier: true);
     });
+    _saveDraft(widget.orderId);
   }
 
   void _showMessage(String message) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
+
 
   // ---------------------------------------------------------------------------
   // Alta de proveedores
@@ -1104,14 +1259,31 @@ class _CotizacionOrderReviewScreenState extends ConsumerState<CotizacionOrderRev
   // Sync items / budgets
   // ---------------------------------------------------------------------------
 
-  void _syncItems(PurchaseOrder order) {
-    if (_itemsPrefilled && _itemDrafts.length == order.items.length) return;
+  void _syncItems(
+    PurchaseOrder order, {
+    List<OrderItemDraft>? draftItems,
+  }) {
+    final source = (draftItems != null && draftItems.length == order.items.length)
+        ? draftItems
+        : order.items.map(OrderItemDraft.fromModel).toList();
+    if (_itemsPrefilled && _itemDrafts.length == source.length) return;
 
     _itemDrafts
       ..clear()
-      ..addAll(order.items.map(OrderItemDraft.fromModel));
+      ..addAll(source);
 
     _itemsPrefilled = true;
+  }
+
+  void _saveDraft(String orderId) {
+    SessionDraftStore.saveCotizacion(
+      orderId,
+      CotizacionDraft(
+        internalOrder: _internalController.text.trim(),
+        comprasComment: _commentController.text.trim(),
+        items: List<OrderItemDraft>.from(_itemDrafts),
+      ),
+    );
   }
 
   _BudgetSummary _buildBudgetSummary() {
@@ -1316,6 +1488,147 @@ class _AssignmentItemCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class _CotizacionDraftPreviewScreen extends StatelessWidget {
+  const _CotizacionDraftPreviewScreen({required this.pdfData});
+
+  final OrderPdfData pdfData;
+
+  @override
+  Widget build(BuildContext context) {
+    return FocusTraversalGroup(
+      policy: WidgetOrderTraversalPolicy(),
+      descendantsAreFocusable: false,
+      descendantsAreTraversable: false,
+      child: FocusScope(
+        canRequestFocus: false,
+        child: Scaffold(
+          appBar: AppBar(
+            title: const Text('Ver PDF'),
+          ),
+          body: Column(
+            children: [
+              Expanded(
+                child: OrderPdfInlineView(
+                  data: pdfData,
+                  skipCache: true,
+                    pdfBuilder: buildCotizacionPdf,
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isNarrow = constraints.maxWidth < 360;
+                    final cancelButton = OutlinedButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('Cancelar'),
+                    );
+                    final sendButton = FilledButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('Enviar al dashboard'),
+                    );
+
+                    if (isNarrow) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          cancelButton,
+                          const SizedBox(height: 8),
+                          sendButton,
+                        ],
+                      );
+                    }
+
+                    return Row(
+                      children: [
+                        Expanded(child: cancelButton),
+                        const SizedBox(width: 12),
+                        Expanded(child: sendButton),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TabWithBadge extends StatelessWidget {
+  const _TabWithBadge({
+    required this.label,
+    required this.count,
+    required this.color,
+  });
+
+  final String label;
+  final int count;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final showBadge = count > 0;
+    final display = count > 99 ? '99+' : count.toString();
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(label),
+        if (showBadge) ...[
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              display,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _CotizacionSaveResult {
+  const _CotizacionSaveResult({
+    required this.pdfData,
+    required this.ready,
+  });
+
+  final OrderPdfData pdfData;
+  final bool ready;
+}
+
+class _CotizacionSaveData {
+  const _CotizacionSaveData({
+    required this.supplierBudgets,
+    required this.budget,
+    required this.reviewerName,
+    required this.reviewerArea,
+    required this.internalOrder,
+    required this.comprasComment,
+    required this.items,
+  });
+
+  final Map<String, num> supplierBudgets;
+  final num? budget;
+  final String reviewerName;
+  final String reviewerArea;
+  final String internalOrder;
+  final String comprasComment;
+  final List<OrderItemDraft> items;
 }
 
 

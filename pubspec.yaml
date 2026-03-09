@@ -46,3 +46,5 @@ flutter:
     - evidencias acerpro/ACERPRO_LOGO_1500_TRIM.png
     - logo-generico.png
     - assets/animations/lottie2.json
+    - assets/fonts/arial.ttf
+    - assets/fonts/arialbd.ttf

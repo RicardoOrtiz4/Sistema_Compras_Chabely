@@ -136,6 +136,8 @@ class CreateOrderState {
     this.returnCount = 0,
     this.resubmissionDates = const [],
     this.previewCreatedAt,
+    this.baselineSignature,
+    this.baselineUpdatedAt,
     this.message,
     this.error,
   });
@@ -149,6 +151,8 @@ class CreateOrderState {
   final int returnCount;
   final List<DateTime> resubmissionDates;
   final DateTime? previewCreatedAt;
+  final String? baselineSignature;
+  final DateTime? baselineUpdatedAt;
   final String? message;
   final Object? error;
 
@@ -162,6 +166,8 @@ class CreateOrderState {
     int? returnCount,
     List<DateTime>? resubmissionDates,
     DateTime? previewCreatedAt,
+    String? baselineSignature,
+    DateTime? baselineUpdatedAt,
     String? message,
     bool clearMessage = false,
     Object? error,
@@ -177,6 +183,8 @@ class CreateOrderState {
       returnCount: returnCount ?? this.returnCount,
       resubmissionDates: resubmissionDates ?? this.resubmissionDates,
       previewCreatedAt: previewCreatedAt ?? this.previewCreatedAt,
+      baselineSignature: baselineSignature ?? this.baselineSignature,
+      baselineUpdatedAt: baselineUpdatedAt ?? this.baselineUpdatedAt,
       message: clearMessage ? null : (message ?? this.message),
       error: clearError ? null : (error ?? this.error),
     );
@@ -187,6 +195,8 @@ class CreateOrderState {
       urgency: PurchaseOrderUrgency.media,
       items: [OrderItemDraft.empty(1)],
       previewCreatedAt: DateTime.now(),
+      baselineSignature: null,
+      baselineUpdatedAt: null,
     );
   }
 }
@@ -236,6 +246,11 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
               for (var i = 0; i < order.items.length; i++)
                 OrderItemDraft.fromModel(order.items[i]).copyWith(line: i + 1),
             ];
+      final baselineSignature = buildCreateOrderSignature(
+        urgency: order.urgency,
+        notes: order.clientNote ?? '',
+        items: items,
+      );
       state = state.copyWith(
         isLoadingDraft: false,
         draftId: draftId,
@@ -245,6 +260,8 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
         returnCount: order.returnCount,
         resubmissionDates: order.resubmissionDates,
         previewCreatedAt: order.createdAt ?? DateTime.now(),
+        baselineSignature: baselineSignature,
+        baselineUpdatedAt: order.updatedAt,
       );
     } catch (error, stack) {
       logError(error, stack, context: 'CreateOrderController.loadDraft');
@@ -380,26 +397,26 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
     state = state.copyWith(items: updated, urgency: _urgencyFromDate(date));
   }
 
-  Future<void> submit() async {
+  Future<String?> submit() async {
     final user = await _requireUser();
-    if (user == null) return;
+    if (user == null) return null;
     if (state.returnCount >= _maxCorrections) {
       state = state.copyWith(
         error: 'Máximo de correcciones alcanzado. Crea otra requisición.',
       );
-      return;
+      return null;
     }
 
     final invalid = state.items.where((item) => !item.isValid()).isNotEmpty;
     if (invalid) {
       state = state.copyWith(error: 'Completa todos los campos de los artículos');
-      return;
+      return null;
     }
 
     final repo = _ref.read(purchaseOrderRepositoryProvider);
     state = state.copyWith(isSubmitting: true, clearMessage: true, clearError: true);
     try {
-      await repo.submitOrder(
+      final orderId = await repo.submitOrder(
         draftId: state.draftId,
         requester: user,
         urgency: state.urgency,
@@ -413,6 +430,7 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
       state = CreateOrderState.initial().copyWith(
         message: 'Orden enviada a Compras',
       );
+      return orderId;
     } catch (error, stack) {
       logError(error, stack, context: 'CreateOrderController.submit');
       state = state.copyWith(
@@ -423,6 +441,7 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
           stack: stack,
         ),
       );
+      return null;
     }
   }
 
@@ -482,6 +501,56 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
   }
 }
 
+String buildCreateOrderSignature({
+  required PurchaseOrderUrgency urgency,
+  required String notes,
+  required List<OrderItemDraft> items,
+}) {
+  String normalize(String? value) => (value ?? '').trim();
+  String numOrEmpty(num? value) => value?.toString() ?? '';
+  String dateOrEmpty(DateTime? value) =>
+      value?.millisecondsSinceEpoch.toString() ?? '';
+
+  final buffer = StringBuffer()
+    ..write('urg:')
+    ..write(urgency.name)
+    ..write(';notes:')
+    ..write(normalize(notes))
+    ..write(';items:')
+    ..write(items.length)
+    ..write(';');
+
+  for (final item in items) {
+    buffer
+      ..write(item.line)
+      ..write('|')
+      ..write(item.pieces)
+      ..write('|')
+      ..write(normalize(item.partNumber))
+      ..write('|')
+      ..write(normalize(item.description))
+      ..write('|')
+      ..write(numOrEmpty(item.quantity))
+      ..write('|')
+      ..write(normalize(item.unit))
+      ..write('|')
+      ..write(normalize(item.customer))
+      ..write('|')
+      ..write(normalize(item.supplier))
+      ..write('|')
+      ..write(numOrEmpty(item.budget))
+      ..write('|')
+      ..write(dateOrEmpty(item.estimatedDate))
+      ..write('|')
+      ..write(item.reviewFlagged ? '1' : '0')
+      ..write('|')
+      ..write(normalize(item.reviewComment))
+      ..write(';');
+  }
+
+  return buffer.toString();
+}
+
 String _submitErrorMessage(Object error) {
   if (error is FirebaseFunctionsException) {
     final message = error.message;
@@ -504,3 +573,4 @@ final createOrderControllerProvider =
 });
 
 const _maxCorrections = 3;
+

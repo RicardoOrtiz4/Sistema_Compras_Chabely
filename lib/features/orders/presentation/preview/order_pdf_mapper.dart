@@ -1,4 +1,5 @@
 import 'package:sistema_compras/core/company_branding.dart';
+import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
@@ -20,6 +21,7 @@ OrderPdfData buildPdfDataFromOrder(
   DateTime? updatedAt,
   List<DateTime>? resubmissionDates,
   bool hideBudget = false,
+  String? cacheSalt,
 }) {
   final effectiveBranding = _brandingForOrder(order, branding);
 
@@ -35,14 +37,22 @@ OrderPdfData buildPdfDataFromOrder(
               : order.budget));
 
   final mappedItems = (items ?? order.items.map(OrderItemDraft.fromModel).toList());
+  final effectiveItems = hideBudget
+      ? mappedItems.map((item) => item.copyWith(clearBudget: true)).toList()
+      : mappedItems;
 
-  final requestedDate = mappedItems
+  final requestedDate = effectiveItems
       .map((item) => item.estimatedDate)
       .whereType<DateTime>()
       .fold<DateTime?>(null, (current, next) {
     if (current == null) return next;
     return next.isBefore(current) ? next : current;
   });
+  final fallbackRequestedDate = requestedDate ??
+      _requestedDateFromUrgency(
+        order.urgency,
+        order.createdAt ?? DateTime.now(),
+      );
 
   return OrderPdfData(
     branding: effectiveBranding,
@@ -50,7 +60,7 @@ OrderPdfData buildPdfDataFromOrder(
     requesterArea: order.areaName,
     areaName: order.areaName,
     urgency: order.urgency,
-    items: mappedItems,
+    items: effectiveItems,
     createdAt: createdAt ?? order.createdAt ?? DateTime.now(),
     updatedAt: updatedAt ?? order.updatedAt,
     observations: order.clientNote ?? '',
@@ -64,9 +74,10 @@ OrderPdfData buildPdfDataFromOrder(
     comprasReviewerArea: comprasReviewerArea ?? order.comprasReviewerArea ?? '',
     direccionGeneralName: direccionGeneralName ?? order.direccionGeneralName ?? '',
     direccionGeneralArea: direccionGeneralArea ?? order.direccionGeneralArea ?? '',
-    requestedDeliveryDate: requestedDate,
+    requestedDeliveryDate: fallbackRequestedDate,
     etaDate: order.etaDate,
     resubmissionDates: resubmissionDates ?? order.resubmissionDates,
+    cacheSalt: cacheSalt,
   );
 }
 
@@ -120,4 +131,21 @@ num _sumBudgets(Map<String, num> budgets) {
     total += value.toDouble();
   }
   return total;
+}
+
+DateTime _requestedDateFromUrgency(
+  PurchaseOrderUrgency urgency,
+  DateTime baseDate,
+) {
+  final base = DateTime(baseDate.year, baseDate.month, baseDate.day);
+  switch (urgency) {
+    case PurchaseOrderUrgency.urgente:
+      return base.add(const Duration(days: 1));
+    case PurchaseOrderUrgency.alta:
+      return base.add(const Duration(days: 3));
+    case PurchaseOrderUrgency.media:
+      return base.add(const Duration(days: 7));
+    case PurchaseOrderUrgency.baja:
+      return base.add(const Duration(days: 14));
+  }
 }

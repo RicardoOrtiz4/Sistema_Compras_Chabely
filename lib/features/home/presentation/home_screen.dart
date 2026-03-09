@@ -54,7 +54,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final isCompras = user != null && isComprasLabel(user.areaDisplay);
     final isDireccionGeneral =
         user != null && isDireccionGeneralLabel(user.areaDisplay);
-    final canViewGeneralHistory = user != null && (isAdmin || isDireccionGeneral);
+    final canViewGeneralHistory =
+        user != null && (isAdmin || isDireccionGeneral);
     final isContabilidad =
         user != null && isContabilidadLabel(user.areaDisplay);
     final isAlmacen = user != null && isAlmacenLabel(user.areaDisplay);
@@ -127,11 +128,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             context,
             title: 'Inicio',
             message:
-                'Desde aqu? accedes a los m?dulos seg?n tu rol.\n'
-                'Usa los botones de historial para ver tus ?rdenes o el historial general.\n'
-                'Si tienes permiso, cambia empresa con el ?cono de negocio.\n'
+                'Desde aquí accedes a los módulos según tu rol.\n'
+                'Usa los botones de historial para ver tus órdenes o el historial general.\n'
+                'Si tienes permiso, cambia empresa con el ícono de negocio.\n'
                 'Las tarjetas muestran conteos y te llevan a cada flujo.',
-            ),
+          ),
         ],
       ),
       body: userAsync.when(
@@ -234,7 +235,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 onTap: () => guardedPush(context, '/orders/almacen'),
               ),
 
-
             _HomeBlockData(
               title: 'Órdenes rechazadas',
               subtitle: 'Correcciones pendientes',
@@ -254,18 +254,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 builder: (context, constraints) {
                   const tileSpacing = 10.0;
                   const columns = 2;
-                  final cardWidth = (constraints.maxWidth -
-                          (tileSpacing * (columns - 1))) /
+                  final cardWidth =
+                      (constraints.maxWidth - (tileSpacing * (columns - 1))) /
                       columns;
                   final rows = (blocks.length / columns).ceil();
                   final screenHeight = MediaQuery.of(context).size.height;
                   final reserved = 120.0;
-                  final maxCardHeight = (screenHeight -
-                          reserved -
-                          (tileSpacing * (rows - 1))) /
+                  final maxCardHeight =
+                      (screenHeight - reserved - (tileSpacing * (rows - 1))) /
                       rows;
-                  final targetHeight =
-                      maxCardHeight.clamp(104.0, cardWidth < 200 ? 145.0 : 135.0);
+                  final targetHeight = maxCardHeight.clamp(
+                    104.0,
+                    cardWidth < 200 ? 145.0 : 135.0,
+                  );
                   final aspectRatio = cardWidth / targetHeight;
 
                   return ListView(
@@ -274,17 +275,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       GridView.builder(
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),
-                        gridDelegate:
-                            SliverGridDelegateWithFixedCrossAxisCount(
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                           crossAxisCount: columns,
                           crossAxisSpacing: tileSpacing,
                           mainAxisSpacing: tileSpacing,
                           childAspectRatio: aspectRatio,
                         ),
                         itemCount: blocks.length,
-                        itemBuilder: (context, index) => _HomeBlockCard(
-                          data: blocks[index],
-                        ),
+                        itemBuilder: (context, index) =>
+                            _HomeBlockCard(data: blocks[index]),
                       ),
                     ],
                   );
@@ -412,7 +411,6 @@ Future<_ReminderOption?> _showReminderDialog(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: _ReminderOptionTile(option: option),
               ),
-
           ],
         ),
       ),
@@ -475,10 +473,22 @@ List<_ReminderOption> _buildReminderOptions({
   final options = <_ReminderOption>[];
   if (isAdmin || isCompras) {
     if (pendingCount > 0) {
-      options.add(_ReminderOption('Órdenes por confirmar', '/orders/pending', pendingCount));
+      options.add(
+        _ReminderOption(
+          'Órdenes por confirmar',
+          '/orders/pending',
+          pendingCount,
+        ),
+      );
     }
     if (cotizacionesCount > 0) {
-      options.add(_ReminderOption('Cotizaciones', '/orders/cotizaciones', cotizacionesCount));
+      options.add(
+        _ReminderOption(
+          'Cotizaciones',
+          '/orders/cotizaciones',
+          cotizacionesCount,
+        ),
+      );
     }
     if (etaCount > 0) {
       options.add(
@@ -493,14 +503,22 @@ List<_ReminderOption> _buildReminderOptions({
   if (isAdmin || isDireccionGeneral) {
     if (direccionCount > 0) {
       options.add(
-        _ReminderOption('Dirección General', '/orders/direccion', direccionCount),
+        _ReminderOption(
+          'Dirección General',
+          '/orders/direccion',
+          direccionCount,
+        ),
       );
     }
   }
   if (isAdmin || isContabilidad) {
     if (contabilidadCount > 0) {
       options.add(
-        _ReminderOption('Contabilidad', '/orders/contabilidad', contabilidadCount),
+        _ReminderOption(
+          'Contabilidad',
+          '/orders/contabilidad',
+          contabilidadCount,
+        ),
       );
     }
   }
@@ -511,13 +529,16 @@ List<_ReminderOption> _buildReminderOptions({
   }
   if (rejectedCount > 0) {
     options.add(
-      _ReminderOption('?rdenes rechazadas', '/orders/rejected', rejectedCount, isRejected: true),
+      _ReminderOption(
+        'Ordenes  rechazadas',
+        '/orders/rejected',
+        rejectedCount,
+        isRejected: true,
+      ),
     );
   }
   return options;
 }
-
-
 
 int _readyToSendCount(List<PurchaseOrder>? orders) {
   if (orders == null) return 0;
@@ -546,7 +567,12 @@ bool _itemReadyForDashboard(PurchaseOrderItem item) {
 }
 
 class _ReminderOption {
-  const _ReminderOption(this.label, this.route, this.count, {this.isRejected = false});
+  const _ReminderOption(
+    this.label,
+    this.route,
+    this.count, {
+    this.isRejected = false,
+  });
 
   final String label;
   final String route;
@@ -562,9 +588,10 @@ class _ReminderOptionTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final softError = Color.lerp(scheme.error, Colors.white, 0.35) ?? scheme.error;
-    final badgeColor = option.isRejected ? Colors.white : softError;
-    final badgeTextColor = option.isRejected ? Colors.black : Colors.white;
+    final softError =
+        Color.lerp(scheme.error, Colors.white, 0.35) ?? scheme.error;
+    final badgeColor = softError;
+    final badgeTextColor = Colors.white;
 
     return InkWell(
       borderRadius: BorderRadius.circular(12),
@@ -603,49 +630,47 @@ class _HomeDrawer extends ConsumerWidget {
           padding: const EdgeInsets.symmetric(vertical: 12),
           children: [
             ListTile(
-                  leading: const Icon(Icons.storefront_outlined),
-                  title: const Text('Gestión de proveedores'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    guardedPush(context, '/partners/suppliers');
-                  },
-                ),
-            ListTile(
-                  leading: const Icon(Icons.groups_outlined),
-                  title: const Text('Gestión de clientes'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    guardedPush(context, '/partners/clients');
-                  },
-                ),
-            if (isAdmin)
-              ListTile(
-                    leading: const Icon(Icons.insights_outlined),
-                    title: const Text('Reportes'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      guardedPush(context, '/reports');
-                    },
-                  ),
-            if (isAdmin)
-              ListTile(
-                    leading: const Icon(Icons.admin_panel_settings_outlined),
-                    title: const Text('Administrar usuarios'),
-                    onTap: () {
-                      Navigator.pop(context);
-                      guardedPush(context, '/admin/users');
-                    },
-                  ),
-            ListTile(
-                  leading: const Icon(Icons.person_outline),
-                  title: const Text('Perfil'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    showProfileSheet(context, ref);
-                  },
+              leading: const Icon(Icons.storefront_outlined),
+              title: const Text('Gestión de proveedores'),
+              onTap: () {
+                Navigator.pop(context);
+                guardedPush(context, '/partners/suppliers');
+              },
             ),
-
-
+            ListTile(
+              leading: const Icon(Icons.groups_outlined),
+              title: const Text('Gestión de clientes'),
+              onTap: () {
+                Navigator.pop(context);
+                guardedPush(context, '/partners/clients');
+              },
+            ),
+            if (isAdmin)
+              ListTile(
+                leading: const Icon(Icons.insights_outlined),
+                title: const Text('Reportes'),
+                onTap: () {
+                  Navigator.pop(context);
+                  guardedPush(context, '/reports');
+                },
+              ),
+            if (isAdmin)
+              ListTile(
+                leading: const Icon(Icons.admin_panel_settings_outlined),
+                title: const Text('Administrar usuarios'),
+                onTap: () {
+                  Navigator.pop(context);
+                  guardedPush(context, '/admin/users');
+                },
+              ),
+            ListTile(
+              leading: const Icon(Icons.person_outline),
+              title: const Text('Perfil'),
+              onTap: () {
+                Navigator.pop(context);
+                showProfileSheet(context, ref);
+              },
+            ),
           ],
         ),
       ),
@@ -686,18 +711,19 @@ class _HomeBlockCard extends StatelessWidget {
     final borderColor = data.foreground.withOpacity(0.18);
     final shadowColor = Colors.black.withOpacity(0.12);
     final scheme = Theme.of(context).colorScheme;
-    final softError = Color.lerp(scheme.error, Colors.white, 0.35) ?? scheme.error;
+    final softError =
+        Color.lerp(scheme.error, Colors.white, 0.35) ?? scheme.error;
     final badgeColor = data.isRejected ? Colors.white : softError;
     final badgeTextColor = data.isRejected ? Colors.black : Colors.white;
     final titleStyle = Theme.of(context).textTheme.titleSmall?.copyWith(
-          fontWeight: FontWeight.w700,
-          color: data.foreground,
-          fontSize: 13.5,
-        );
+      fontWeight: FontWeight.w700,
+      color: data.foreground,
+      fontSize: 13.5,
+    );
     final subtitleStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
-          color: data.foreground.withOpacity(0.85),
-          fontSize: 11,
-        );
+      color: data.foreground.withOpacity(0.85),
+      fontSize: 11,
+    );
     final showBadge = data.count != null && data.count! > 0;
 
     return Material(
@@ -731,11 +757,7 @@ class _HomeBlockCard extends StatelessWidget {
                       color: data.foreground.withOpacity(0.18),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Icon(
-                      data.icon,
-                      color: data.foreground,
-                      size: 20,
-                    ),
+                    child: Icon(data.icon, color: data.foreground, size: 20),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
@@ -844,10 +866,3 @@ Future<void> _showCompanySwitcher(
     },
   );
 }
-
-
-
-
-
-
-

@@ -116,6 +116,8 @@ class _OrderHistoryAllScreenState extends ConsumerState<OrderHistoryAllScreen> {
                         orderMatchesSearch(order, _searchQuery, cache: _searchCache))
                     .toList();
                 final canLoadMore = orders.length >= _limit;
+                final showLoadMore =
+                    canLoadMore && filtered.length >= defaultOrderPageSize;
 
                 final branding = ref.read(currentBrandingProvider);
                 prefetchOrderPdfsForOrders(filtered, branding: branding);
@@ -176,7 +178,7 @@ class _OrderHistoryAllScreenState extends ConsumerState<OrderHistoryAllScreen> {
                                     dateRange = null;
                                   }),
                                 ),
-                                if (canLoadMore) ...[
+                                if (showLoadMore) ...[
                                   const SizedBox(height: 12),
                                   OutlinedButton.icon(
                                     onPressed: _loadMore,
@@ -188,7 +190,8 @@ class _OrderHistoryAllScreenState extends ConsumerState<OrderHistoryAllScreen> {
                             )
                           : ListView.separated(
                               padding: const EdgeInsets.all(16),
-                              itemCount: filtered.length + (canLoadMore ? 1 : 0),
+                              itemCount:
+                                  filtered.length + (showLoadMore ? 1 : 0),
                               separatorBuilder: (_, __) =>
                                   const SizedBox(height: 12),
                               itemBuilder: (context, index) {

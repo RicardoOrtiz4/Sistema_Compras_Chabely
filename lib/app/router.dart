@@ -176,7 +176,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => PreloadGate(
           loaders: (ref) => [
             ref.watch(currentUserProfileProvider),
-            ref.watch(pendingDireccionOrdersPagedProvider(defaultOrderPageSize)),
+            ref.watch(pendingDireccionOrdersProvider),
+            ref.watch(sharedQuotesProvider),
           ],
           child: const DireccionOrdersScreen(),
         ),
@@ -184,8 +185,9 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/orders/direccion/dashboard',
         name: 'direccionDashboard',
-        builder: (context, state) => const CotizacionesDashboardScreen(
+        builder: (context, state) => CotizacionesDashboardScreen(
           mode: CotizacionesDashboardMode.direccion,
+          onOpenOrder: (orderId) => guardedPush(context, '/orders/$orderId/pdf'),
         ),
       ),
       GoRoute(

@@ -1,36 +1,24 @@
-At least listener of the StateNotifier Instance of 'StateController<String?>' threw an exception when the notifier tried to update its state.
-
-The exceptions thrown are:
-
-Tried to modify a provider while the widget tree was building.
-If you are encountering this error, chances are you tried to modify a provider in a widget life-cycle, such as but not limited to:
-
-build
-
-initState
-
-dispose
-
-didUpdateWidget
-
-didChangeDependencies
-
-Modifying a provider inside those life-cycles is not allowed, as it could lead to an inconsistent UI state. For example, two widgets could listen to the same provider, but incorrectly receive different states.
-
-To fix this problem, you have one of two solutions:
-
-(preferred) Move the logic for modifying your provider outside of a widget life-cycle. For example, maybe you could update your provider inside a button's onPressed instead.
-
-Delay your modification, such as by encapsulating the modification in a Future((){}).
-This will perform your update after the widget tree is done building.
-dart-sdk/lib/internal/js_dev_runtime/private/ddc_runtime/errors.dart 274:3 throw
-package:flutter_riverpod/src/core/provider_scope.dart 333:7 [_debugCanModifyProviders]
-dart-sdk/lib/_internal/js_dev_runtime/private/ddc_runtime/operations.dart 118:77 tear
-package:riverpod/src/core/element.dart 735:30 [_debugAssertNotificationAllowed]
-package:riverpod/src/core/element.dart 777:38 [_notifyListeners]
-package:riverpod/src/core/element.dart 450:7 set value
-package:riverpod/src/core/element.dart 66:11 asyncTransition
-package:riverpod/src/core/element.dart 138:5 onData
-dart-sdk/lib/_internal/js_dev_runtime/private/ddc_runtime/operations.dart 118:77 tear
-package:riverpod/src/core/async_value.dart 158:20 AsyncValueExtensions.map
-package:riverpod/src/core/element.dart 75:14 set value
+[2026-03-05T12:55:19.907] ERROR [OrderPdfInlineView]: TooManyPagesException message=Instance of 'TooManyPagesException'
+js_primitives.dart:28 [2026-03-05T12:55:19.918] dart-sdk/lib/_internal/js_dev_runtime/private/ddc_runtime/errors.dart 274:3                 throw_
+js_primitives.dart:28 package:pdf/src/widgets/multi_page.dart 260:11                                              <fn>
+js_primitives.dart:28 package:pdf/src/widgets/multi_page.dart 263:16                                              generate
+js_primitives.dart:28 package:pdf/src/widgets/document.dart 117:9                                                 addPage
+js_primitives.dart:28 package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart 259:6   <fn>
+js_primitives.dart:28 dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 623:19                         <fn>
+js_primitives.dart:28 dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 648:23                         <fn>
+js_primitives.dart:28 dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 542:3                          _asyncStartSync
+js_primitives.dart:28 package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart 244:19  _buildOrderPdfWithAssets
+js_primitives.dart:28 package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart 183:10  <fn>
+js_primitives.dart:28 dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 623:19                         <fn>
+js_primitives.dart:28 dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 648:23                         <fn>
+js_primitives.dart:28 dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 594:19                         <fn>
+js_primitives.dart:28 dart-sdk/lib/async/zone.dart 1849:54                                                        runUnary
+js_primitives.dart:28 dart-sdk/lib/async/future_impl.dart 222:18                                                  handleValue
+js_primitives.dart:28 dart-sdk/lib/async/future_impl.dart 948:44                                                  handleValueCallback
+js_primitives.dart:28 dart-sdk/lib/async/future_impl.dart 977:13                                                  _propagateToListeners
+js_primitives.dart:28 dart-sdk/lib/async/future_impl.dart 543:9                                                   <fn>
+js_primitives.dart:28 dart-sdk/lib/async/schedule_microtask.dart 40:34                                            _microtaskLoop
+js_primitives.dart:28 dart-sdk/lib/async/schedule_microtask.dart 49:5                                             _startMicrotaskLoop
+js_primitives.dart:28 dart-sdk/lib/_internal/js_dev_runtime/private/ddc_runtime/operations.dart 118:77            tear
+js_primitives.dart:28 dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 188:69                         <fn>
+js_primitives.dart:28 

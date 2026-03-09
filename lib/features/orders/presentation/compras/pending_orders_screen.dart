@@ -3,15 +3,17 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 
-import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
+import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
+import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_status_duration.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_search.dart';
@@ -30,6 +32,9 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
   Timer? _searchDebounce;
   String _searchQuery = '';
   int _limit = defaultOrderPageSize;
+  bool _prefetching = false;
+  String? _lastPrefetchKey;
+  bool _prefetchScheduled = false;
 
   @override
   void initState() {
@@ -60,6 +65,45 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
 
   void _loadMore() {
     setState(() => _limit += orderPageSizeStep);
+  }
+
+  void _warmPendingCache(List<PurchaseOrder> orders) {
+    if (orders.isEmpty) return;
+    final key = orders
+        .take(defaultOrderPageSize)
+        .map((order) => '${order.id}:${order.updatedAt?.millisecondsSinceEpoch ?? 0}')
+        .join('|');
+    if (_lastPrefetchKey == key) return;
+    _lastPrefetchKey = key;
+    if (_prefetchScheduled) return;
+    _prefetchScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _prefetchScheduled = false;
+      if (!mounted) return;
+      setState(() => _prefetching = true);
+      final branding = ref.read(currentBrandingProvider);
+      final dataList = orders
+          .take(defaultOrderPageSize)
+          .map((order) => buildPdfDataFromOrder(order, branding: branding))
+          .toList(growable: false);
+      if (dataList.isEmpty) {
+        if (mounted) setState(() => _prefetching = false);
+        return;
+      }
+      Future(() async {
+        try {
+          for (final data in dataList) {
+            try {
+              await buildOrderPdf(data, useIsolate: true);
+            } catch (error, stack) {
+              logError(error, stack, context: 'PendingOrders.prefetch');
+            }
+          }
+        } finally {
+          if (mounted) setState(() => _prefetching = false);
+        }
+      });
+    });
   }
 
   @override
@@ -105,11 +149,11 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
                       orderMatchesSearch(order, trimmedQuery, cache: _searchCache))
                   .toList();
           final canLoadMore = orders.length >= _limit;
+          final showLoadMore =
+              canLoadMore && filtered.length >= defaultOrderPageSize;
+          _warmPendingCache(filtered);
 
-          final branding = ref.read(currentBrandingProvider);
-          prefetchOrderPdfsForOrders(filtered, branding: branding);
-
-          return Column(
+          final content = Column(
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -136,7 +180,7 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           const Text('No hay órdenes con ese filtro.'),
-                          if (canLoadMore) ...[
+                          if (showLoadMore) ...[
                             const SizedBox(height: 12),
                             OutlinedButton.icon(
                               onPressed: _loadMore,
@@ -148,7 +192,7 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
                       )
                     : ListView.separated(
                         padding: const EdgeInsets.all(16),
-                        itemCount: filtered.length + (canLoadMore ? 1 : 0),
+                        itemCount: filtered.length + (showLoadMore ? 1 : 0),
                         separatorBuilder: (_, __) => const SizedBox(height: 12),
                         itemBuilder: (context, index) {
                           if (index >= filtered.length) {
@@ -168,6 +212,12 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
                         },
                       ),
               ),
+            ],
+          );
+          return Stack(
+            children: [
+              content,
+              if (_prefetching) const Positioned.fill(child: AppSplash()),
             ],
           );
         },
@@ -200,6 +250,8 @@ class _PendingOrderCard extends ConsumerWidget {
         (order.lastReturnReason != null &&
             order.lastReturnReason!.trim().isNotEmpty);
 
+    final resubmissions = order.resubmissionDates;
+
     final eventsAsync = wasReturned ? ref.watch(orderEventsProvider(order.id)) : null;
 
     return Card(
@@ -213,6 +265,7 @@ class _PendingOrderCard extends ConsumerWidget {
               runSpacing: 4,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
+                _FolioPill(folio: order.id),
                 _UrgencyPill(urgency: order.urgency),
                 if (wasReturned)
                   Container(
@@ -236,6 +289,11 @@ class _PendingOrderCard extends ConsumerWidget {
             const SizedBox(height: 8),
             Text('Solicitante: ${order.requesterName}'),
             Text('Área: ${order.areaName}'),
+            if (resubmissions.isNotEmpty)
+              Text(
+                'Reenvío: ${_formatResubmissionStamp(resubmissions.last, order.createdAt)}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -243,10 +301,20 @@ class _PendingOrderCard extends ConsumerWidget {
                 if (wasReturned)
                   eventsAsync!.when(
                     data: (events) {
-                      final duration = _timeInRejected(order, events);
-                      if (duration == null) return const SizedBox.shrink();
+                      final timeInCotizaciones =
+                          _timeInCotizaciones(order, events);
+                      final timeInRejected = timeInCotizaciones == null
+                          ? _timeInRejected(order, events)
+                          : null;
+                      if (timeInCotizaciones == null &&
+                          timeInRejected == null) {
+                        return const SizedBox.shrink();
+                      }
+                      final label = timeInCotizaciones != null
+                          ? 'Tiempo en cotizaciones: ${_formatDuration(timeInCotizaciones)}'
+                          : 'Tiempo en rechazadas: ${_formatDuration(timeInRejected!)}';
                       return StatusDurationPill(
-                        text: 'Tiempo en rechazadas: ${_formatDuration(duration)}',
+                        text: label,
                         alignRight: false,
                       );
                     },
@@ -321,6 +389,35 @@ class _OrderCardSummary extends StatelessWidget {
   }
 }
 
+class _FolioPill extends StatelessWidget {
+  const _FolioPill({required this.folio});
+
+  final String folio;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final color = scheme.surfaceContainerHighest;
+    final textColor = scheme.onSurfaceVariant;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        folio,
+        style: TextStyle(
+          color: textColor,
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+}
+
 class _UrgencyPill extends StatelessWidget {
   const _UrgencyPill({required this.urgency});
 
@@ -389,6 +486,45 @@ Duration? _timeInRejected(
   return duration;
 }
 
+Duration? _timeInCotizaciones(
+  PurchaseOrder order,
+  List<PurchaseOrderEvent> events,
+) {
+  if (order.returnCount <= 0) return null;
+
+  PurchaseOrderEvent? lastReturn;
+  for (final event in events) {
+    if (event.type == 'return' &&
+        event.fromStatus == PurchaseOrderStatus.cotizaciones &&
+        event.toStatus == PurchaseOrderStatus.pendingCompras &&
+        event.timestamp != null) {
+      if (lastReturn == null ||
+          event.timestamp!.isAfter(lastReturn.timestamp!)) {
+        lastReturn = event;
+      }
+    }
+  }
+  if (lastReturn == null) return null;
+
+  PurchaseOrderEvent? lastEntry;
+  for (final event in events) {
+    if (event.fromStatus == PurchaseOrderStatus.pendingCompras &&
+        event.toStatus == PurchaseOrderStatus.cotizaciones &&
+        event.timestamp != null &&
+        event.timestamp!.isBefore(lastReturn.timestamp!)) {
+      if (lastEntry == null ||
+          event.timestamp!.isAfter(lastEntry.timestamp!)) {
+        lastEntry = event;
+      }
+    }
+  }
+  if (lastEntry == null) return null;
+
+  final duration = lastReturn.timestamp!.difference(lastEntry.timestamp!);
+  if (duration.isNegative) return null;
+  return duration;
+}
+
 String _formatDuration(Duration duration) {
   final totalMinutes = duration.inMinutes;
   if (totalMinutes <= 0) {
@@ -409,6 +545,20 @@ String _formatDuration(Duration duration) {
     return '$hours h$minutePart';
   }
   return '$minutes min';
+}
+
+final DateFormat _resubmissionTimeFormat = DateFormat('HH:mm');
+final DateFormat _resubmissionDateTimeFormat = DateFormat('dd MMM yyyy â€¢ HH:mm');
+
+String _formatResubmissionStamp(DateTime stamp, DateTime? createdAt) {
+  if (createdAt != null && _isSameDate(createdAt, stamp)) {
+    return _resubmissionTimeFormat.format(stamp);
+  }
+  return _resubmissionDateTimeFormat.format(stamp);
+}
+
+bool _isSameDate(DateTime a, DateTime b) {
+  return a.year == b.year && a.month == b.month && a.day == b.day;
 }
 
 

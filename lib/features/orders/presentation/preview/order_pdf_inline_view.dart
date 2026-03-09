@@ -7,19 +7,27 @@ import 'package:pdfx/pdfx.dart';
 
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
-import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 
-const double _webRenderScale = 1.6;
-const int _webRenderQuality = 85;
+const double _webRenderScale = 1.9;
+const int _webRenderQuality = 90;
 
 class OrderPdfInlineView extends StatefulWidget {
   const OrderPdfInlineView({
     required this.data,
+    this.skipCache = false,
+    this.preferOrderCache = false,
+    this.pdfBuilder,
     super.key,
   });
 
   final OrderPdfData data;
+  final bool skipCache;
+  final bool preferOrderCache;
+  final Future<Uint8List> Function(
+    OrderPdfData data, {
+    bool useIsolate,
+  })? pdfBuilder;
 
   @override
   State<OrderPdfInlineView> createState() => _OrderPdfInlineViewState();
@@ -57,7 +65,9 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
   void didUpdateWidget(covariant OrderPdfInlineView oldWidget) {
     super.didUpdateWidget(oldWidget);
     final nextSignature = _signatureFor(widget.data);
-    if (_signature != nextSignature) {
+    if (_signature != nextSignature ||
+        oldWidget.skipCache != widget.skipCache ||
+        oldWidget.pdfBuilder != widget.pdfBuilder) {
       _disposeController();
       _queueBuild();
     }
@@ -83,13 +93,35 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
 
   void _queueBuild() {
     _signature = _signatureFor(widget.data);
-    final cached = getCachedOrderPdf(widget.data);
-    if (cached != null) {
-      _bytesFuture = Future.value(cached);
-      return;
+    if (widget.preferOrderCache && !widget.skipCache) {
+      final cachedByFolio = getCachedOrderPdfForFolio(widget.data);
+      if (cachedByFolio != null) {
+        _bytesFuture = Future.value(cachedByFolio);
+        return;
+      }
+    }
+    if (widget.pdfBuilder == null && !widget.skipCache) {
+      final cached = getCachedOrderPdf(widget.data);
+      if (cached != null) {
+        _bytesFuture = Future.value(cached);
+        return;
+      }
     }
     _bytesFuture = Future(() async {
       await WidgetsBinding.instance.endOfFrame;
+      final builder = widget.pdfBuilder;
+      if (builder != null) {
+        return builder(
+          widget.data,
+          useIsolate: !kIsWeb,
+        );
+      }
+      if (widget.skipCache) {
+        return buildOrderPdfUncached(
+          widget.data,
+          useIsolate: !kIsWeb,
+        );
+      }
       return buildOrderPdf(
         widget.data,
         useIsolate: !kIsWeb,
@@ -119,116 +151,121 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<Uint8List>(
-      future: _bytesFuture,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
-          return _PdfLoading(label: 'Generando PDF...');
-        }
-        if (snapshot.hasError) {
-          final message = reportError(
-            snapshot.error!,
-            snapshot.stackTrace,
-            context: 'OrderPdfInlineView',
-          );
-          return Center(child: Text(message));
-        }
-        final bytes = snapshot.data;
-        if (bytes == null) {
-          return const Center(child: Text('No se pudo generar el PDF.'));
-        }
-        final bytesForPdf = kIsWeb ? Uint8List.fromList(bytes) : bytes;
-        if (kIsWeb) {
-          _webController  = PdfController(document: _openDocument(bytesForPdf));
-          _photoController  = PhotoViewController();
-          return Stack(
-            children: [
-              Listener(
-                onPointerSignal: (event) {
-                  if (event is PointerScrollEvent) {
-                    final keyboard = HardwareKeyboard.instance;
-                    final zoomModifier =
-                        keyboard.isControlPressed || keyboard.isMetaPressed;
-                    if (!zoomModifier) return;
-                    final dy = event.scrollDelta.dy;
-                    if (dy == 0) return;
-                    _applyWebZoom(dy > 0 ? 1 / 1.1 : 1.1);
-                  }
-                },
-                child: PdfView(
-                  controller: _webController!,
-                  scrollDirection: Axis.vertical,
-                  pageSnapping: false,
-                  renderer: _renderWebPage,
-                  builders: PdfViewBuilders<DefaultBuilderOptions>(
+    return FocusTraversalGroup(
+      policy: WidgetOrderTraversalPolicy(),
+      descendantsAreFocusable: false,
+      descendantsAreTraversable: false,
+      child: ExcludeFocus(
+        child: FutureBuilder<Uint8List>(
+          future: _bytesFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return _PdfLoading(label: 'Generando PDF...');
+            }
+            if (snapshot.hasError) {
+              final message = reportError(
+                snapshot.error!,
+                snapshot.stackTrace,
+                context: 'OrderPdfInlineView',
+              );
+              return Center(child: Text(message));
+            }
+            final bytes = snapshot.data;
+            if (bytes == null) {
+              return const Center(child: Text('No se pudo generar el PDF.'));
+            }
+            final bytesForPdf = kIsWeb ? Uint8List.fromList(bytes) : bytes;
+            if (kIsWeb) {
+              _webController  = PdfController(document: _openDocument(bytesForPdf));
+              _photoController  = PhotoViewController();
+              return Stack(
+                children: [
+                  Listener(
+                    onPointerSignal: (event) {
+                      if (event is PointerScrollEvent) {
+                        final keyboard = HardwareKeyboard.instance;
+                        final zoomModifier =
+                            keyboard.isControlPressed || keyboard.isMetaPressed;
+                        if (!zoomModifier) return;
+                        final dy = event.scrollDelta.dy;
+                        if (dy == 0) return;
+                        _applyWebZoom(dy > 0 ? 1 / 1.1 : 1.1);
+                      }
+                    },
+                    child: PdfView(
+                      controller: _webController!,
+                      scrollDirection: Axis.vertical,
+                      pageSnapping: false,
+                      renderer: _renderWebPage,
+                      builders: PdfViewBuilders<DefaultBuilderOptions>(
+                        options: const DefaultBuilderOptions(),
+                        errorBuilder: (context, error) {
+                          final message = reportError(error, StackTrace.current, context: 'PdfView');
+                          return Center(child: Text(message));
+                        },
+                        pageBuilder: (context, pageImage, index, document) {
+                          return PhotoViewGalleryPageOptions(
+                            imageProvider: PdfPageImageProvider(
+                              pageImage,
+                              index,
+                              document.id,
+                            ),
+                            controller: _photoController,
+                            minScale: PhotoViewComputedScale.contained * 1.0,
+                            maxScale: PhotoViewComputedScale.contained * 3.0,
+                            initialScale: PhotoViewComputedScale.contained * 1.0,
+                            filterQuality: FilterQuality.high,
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    right: 16,
+                    bottom: 16,
+                    child: _ZoomControls(
+                      onZoomIn: () => _applyWebZoom(1.2),
+                      onZoomOut: () => _applyWebZoom(1 / 1.2),
+                      onReset: _resetWebZoom,
+                    ),
+                  ),
+                ],
+              );
+            }
+            _controller  = PdfControllerPinch(
+              document: _openDocument(bytesForPdf),
+            );
+            return Stack(
+              children: [
+                PdfViewPinch(
+                  controller: _controller!,
+                  minScale: 1.0,
+                  maxScale: 6.0,
+                  onDocumentError: (error) {
+                    logError(error, StackTrace.current, context: 'OrderPdfInlineView.PdfViewPinch');
+                  },
+                  builders: PdfViewPinchBuilders<DefaultBuilderOptions>(
                     options: const DefaultBuilderOptions(),
                     errorBuilder: (context, error) {
-                      final message = reportError(error, StackTrace.current, context: 'PdfView');
+                      final message = reportError(error, StackTrace.current, context: 'PdfViewPinch');
                       return Center(child: Text(message));
-                    },
-                    pageBuilder: (context, pageImage, index, document) {
-                      return PhotoViewGalleryPageOptions(
-                        imageProvider: PdfPageImageProvider(
-                          pageImage,
-                          index,
-                          document.id,
-                        ),
-                        controller: _photoController,
-                        minScale: PhotoViewComputedScale.contained * 1.0,
-                        maxScale: PhotoViewComputedScale.contained * 3.0,
-                        initialScale: PhotoViewComputedScale.contained * 1.0,
-                        filterQuality: FilterQuality.high,
-                      );
                     },
                   ),
                 ),
-              ),
-              Positioned(
-                right: 16,
-                bottom: 16,
-                child: _ZoomControls(
-                  onZoomIn: () => _applyWebZoom(1.2),
-                  onZoomOut: () => _applyWebZoom(1 / 1.2),
-                  onReset: _resetWebZoom,
+                Positioned(
+                  right: 16,
+                  bottom: 16,
+                  child: _ZoomControls(
+                    onZoomIn: () => _applyZoom(1.2),
+                    onZoomOut: () => _applyZoom(1 / 1.2),
+                    onReset: _resetZoom,
+                  ),
                 ),
-              ),
-            ],
-          );
-        }
-        _controller  = PdfControllerPinch(
-          document: _openDocument(bytesForPdf),
-        );
-        return Stack(
-          children: [
-            PdfViewPinch(
-              controller: _controller!,
-              minScale: 1.0,
-              maxScale: 6.0,
-              onDocumentError: (error) {
-  logError(error, StackTrace.current, context: 'OrderPdfInlineView.PdfViewPinch');
-},
-
-              builders: PdfViewPinchBuilders<DefaultBuilderOptions>(
-                options: const DefaultBuilderOptions(),
-                errorBuilder: (context, error) {
-  final message = reportError(error, StackTrace.current, context: 'PdfViewPinch');
-  return Center(child: Text(message));
-},
-
-              ),
-            ),
-            Positioned(
-              right: 16,
-              bottom: 16,
-              child: _ZoomControls(
-                onZoomIn: () => _applyZoom(1.2),
-                onZoomOut: () => _applyZoom(1 / 1.2),
-                onReset: _resetZoom,
-              ),
-            ),
-          ],
-        );
-      },
+              ],
+            );
+          },
+        ),
+      ),
     );
   }
 
@@ -308,16 +345,26 @@ class _PdfLoading extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const AppSplash(compact: true, size: 140),
-            const SizedBox(height: 12),
-            Text(label),
-          ],
+    final scheme = Theme.of(context).colorScheme;
+    return ColoredBox(
+      color: scheme.surface,
+      child: SizedBox.expand(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(
+                  width: 56,
+                  height: 56,
+                  child: CircularProgressIndicator(strokeWidth: 4),
+                ),
+                const SizedBox(height: 16),
+                Text(label),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -434,6 +481,7 @@ String _signatureFor(OrderPdfData data) {
   for (final date in data.resubmissionDates) {
     addHash(date.millisecondsSinceEpoch);
   }
+  addHash(data.cacheSalt);
   for (final item in data.items) {
     addHash(item.line);
     addHash(item.pieces);

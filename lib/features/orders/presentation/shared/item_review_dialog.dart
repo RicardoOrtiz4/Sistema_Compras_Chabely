@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 
@@ -18,22 +18,10 @@ Future<ItemReviewResult?> showItemReviewDialog({
   required String title,
   required String confirmLabel,
 }) async {
-  final items = order.items;
-
-  // Estado inicial por item
-  final flags = <bool>[
-    for (final item in items) item.reviewFlagged,
-  ];
-  final comments = <String>[
-    for (final item in items) (item.reviewComment ?? ''),
-  ];
-
-  final controllers = <int, TextEditingController>{};
-  final searchController = TextEditingController();
-  String? errorText;
-
+  final rootNavigator = Navigator.of(context, rootNavigator: true);
   final result = await showModalBottomSheet<ItemReviewResult>(
-    context: context,
+    context: rootNavigator.context,
+    useRootNavigator: true,
     isScrollControlled: true,
     showDragHandle: true,
     backgroundColor: Theme.of(context).colorScheme.surface,
@@ -41,240 +29,281 @@ Future<ItemReviewResult?> showItemReviewDialog({
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
     ),
     builder: (sheetContext) {
-      return DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: 0.7,
-        minChildSize: 0.45,
-        maxChildSize: 0.95,
-        builder: (context, scrollController) {
-          return StatefulBuilder(
-            builder: (context, setState) {
-              final query = searchController.text.trim().toLowerCase();
-
-              final filteredIndexes = <int>[];
-              for (var i = 0; i < items.length; i++) {
-                if (_matchesQuery(items[i], query)) {
-                  filteredIndexes.add(i);
-                }
-              }
-
-              return Padding(
-                padding: EdgeInsets.fromLTRB(
-                  16,
-                  8,
-                  16,
-                  16 + MediaQuery.of(context).viewInsets.bottom,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            title,
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.close),
-                          tooltip: 'Cerrar',
-                          onPressed: () => Navigator.pop(sheetContext),
-                        ),
-                      ],
-                    ),
-                    if (errorText != null) ...[
-                      Text(
-                        errorText!,
-                        style: TextStyle(color: Theme.of(context).colorScheme.error),
-                      ),
-                      const SizedBox(height: 8),
-                    ],
-                    TextField(
-                      controller: searchController,
-                      decoration: const InputDecoration(
-                        labelText: 'Buscar artículo',
-                        prefixIcon: Icon(Icons.search),
-                      ),
-                      onChanged: (_) => setState(() {}),
-                    ),
-                    const SizedBox(height: 8),
-                    const _ReviewHeaderRow(),
-                    Expanded(
-                      child: ListView.separated(
-                        controller: scrollController,
-                        itemCount: filteredIndexes.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 8),
-                        itemBuilder: (context, index) {
-                          final itemIndex = filteredIndexes[index];
-                          final item = items[itemIndex];
-
-                          final controller = controllers.putIfAbsent(
-                            itemIndex,
-                            () => TextEditingController(text: comments[itemIndex]),
-                          );
-
-                          final flagged = flags[itemIndex];
-
-                          final background = flagged
-                              ? Theme.of(context).colorScheme.surfaceContainerHighest
-                              : Theme.of(context).colorScheme.surface;
-
-                          return Container(
-                            decoration: BoxDecoration(
-                              color: background,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: Theme.of(context).colorScheme.outlineVariant,
-                              ),
-                            ),
-                            padding: const EdgeInsets.all(12),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                SizedBox(
-                                  width: 36,
-                                  child: Checkbox(
-                                    value: flagged,
-                                    onChanged: (value) {
-                                      final newValue = value ?? false;
-                                      setState(() {
-                                        flags[itemIndex] = newValue;
-                                        if (!newValue) {
-                                          comments[itemIndex] = '';
-                                          final c = controllers[itemIndex];
-                                          if (c != null) c.text = '';
-                                        }
-                                        if (errorText != null) {
-                                          errorText = null;
-                                        }
-                                      });
-                                    },
-                                  ),
-                                ),
-                                Expanded(
-                                  flex: 3,
-                                  child: Padding(
-                                    padding: const EdgeInsets.only(top: 8),
-                                    child: Text(
-                                      'Item ${item.line}: ${item.description}',
-                                      style: Theme.of(context).textTheme.bodyMedium,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  flex: 4,
-                                  child: flagged
-                                      ? TextField(
-                                          controller: controller,
-                                          decoration: const InputDecoration(
-                                            labelText: 'Motivo',
-                                          ),
-                                          minLines: 2,
-                                          maxLines: 3,
-                                          onChanged: (_) {
-                                            comments[itemIndex] = controller.text;
-                                            if (errorText != null) {
-                                              setState(() => errorText = null);
-                                            }
-                                          },
-                                        )
-                                      : const Padding(
-                                          padding: EdgeInsets.only(top: 12),
-                                          child: Text(
-                                            'Activa para indicar motivo.',
-                                            style: TextStyle(fontSize: 12),
-                                          ),
-                                        ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: () => Navigator.pop(sheetContext),
-                            child: const Text('Cancelar'),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: FilledButton(
-                            onPressed: () {
-                              final flaggedCount = flags.where((v) => v).length;
-                              if (flaggedCount == 0) {
-                                setState(() {
-                                  errorText = 'Selecciona al menos un artículo.';
-                                });
-                                return;
-                              }
-
-                              for (var i = 0; i < items.length; i++) {
-                                if (!flags[i]) continue;
-                                if (comments[i].trim().isEmpty) {
-                                  setState(() {
-                                    errorText =
-                                        'Agrega un motivo en todos los artículos marcados.';
-                                  });
-                                  return;
-                                }
-                              }
-
-                              final updatedItems = <PurchaseOrderItem>[];
-                              final summaryParts = <String>[];
-
-                              for (var i = 0; i < items.length; i++) {
-                                final comment = comments[i].trim();
-                                final flagged = flags[i];
-
-                                updatedItems.add(
-                                  items[i].copyWith(
-                                    reviewFlagged: flagged,
-                                    reviewComment: flagged ? comment : null,
-                                    clearReviewComment: !flagged,
-                                  ),
-                                );
-
-                                if (flagged) {
-                                  summaryParts.add('Item ${items[i].line}: $comment');
-                                }
-                              }
-
-                              Navigator.pop(
-                                sheetContext,
-                                ItemReviewResult(
-                                  items: updatedItems,
-                                  summary: summaryParts.join(' | '),
-                                ),
-                              );
-                            },
-                            child: Text(confirmLabel),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              );
-            },
-          );
-        },
+      return _ItemReviewSheet(
+        order: order,
+        title: title,
+        confirmLabel: confirmLabel,
       );
     },
   );
 
-  for (final controller in controllers.values) {
-    controller.dispose();
-  }
-  searchController.dispose();
-
   return result;
+}
+
+class _ItemReviewSheet extends StatefulWidget {
+  const _ItemReviewSheet({
+    required this.order,
+    required this.title,
+    required this.confirmLabel,
+  });
+
+  final PurchaseOrder order;
+  final String title;
+  final String confirmLabel;
+
+  @override
+  State<_ItemReviewSheet> createState() => _ItemReviewSheetState();
+}
+
+class _ItemReviewSheetState extends State<_ItemReviewSheet> {
+  late final List<PurchaseOrderItem> _items;
+  late final List<bool> _flags;
+  late final List<String> _comments;
+  final Map<int, TextEditingController> _controllers = {};
+  final TextEditingController _searchController = TextEditingController();
+  String? _errorText;
+
+  @override
+  void initState() {
+    super.initState();
+    _items = widget.order.items;
+    _flags = [for (final item in _items) item.reviewFlagged];
+    _comments = [for (final item in _items) (item.reviewComment ?? '')];
+  }
+
+  @override
+  void dispose() {
+    for (final controller in _controllers.values) {
+      controller.dispose();
+    }
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.7,
+      minChildSize: 0.45,
+      maxChildSize: 0.95,
+      builder: (context, scrollController) {
+        final query = _searchController.text.trim().toLowerCase();
+
+        final filteredIndexes = <int>[];
+        for (var i = 0; i < _items.length; i++) {
+          if (_matchesQuery(_items[i], query)) {
+            filteredIndexes.add(i);
+          }
+        }
+
+        return Padding(
+          padding: EdgeInsets.fromLTRB(
+            16,
+            8,
+            16,
+            16 + MediaQuery.of(context).viewInsets.bottom,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      widget.title,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    tooltip: 'Cerrar',
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+              if (_errorText != null) ...[
+                Text(
+                  _errorText!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+                const SizedBox(height: 8),
+              ],
+              TextField(
+                controller: _searchController,
+                decoration: const InputDecoration(
+                  labelText: 'Buscar artÃ­culo',
+                  prefixIcon: Icon(Icons.search),
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 8),
+              const _ReviewHeaderRow(),
+              Expanded(
+                child: ListView.separated(
+                  controller: scrollController,
+                  itemCount: filteredIndexes.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (context, index) {
+                    final itemIndex = filteredIndexes[index];
+                    final item = _items[itemIndex];
+
+                    final controller = _controllers.putIfAbsent(
+                      itemIndex,
+                      () => TextEditingController(text: _comments[itemIndex]),
+                    );
+
+                    final flagged = _flags[itemIndex];
+
+                    final background = flagged
+                        ? Theme.of(context).colorScheme.surfaceContainerHighest
+                        : Theme.of(context).colorScheme.surface;
+
+                    return Container(
+                      decoration: BoxDecoration(
+                        color: background,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: Theme.of(context).colorScheme.outlineVariant,
+                        ),
+                      ),
+                      padding: const EdgeInsets.all(12),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(
+                            width: 36,
+                            child: Checkbox(
+                              value: flagged,
+                              onChanged: (value) {
+                                final newValue = value ?? false;
+                                setState(() {
+                                  _flags[itemIndex] = newValue;
+                                  if (!newValue) {
+                                    _comments[itemIndex] = '';
+                                    final c = _controllers[itemIndex];
+                                    if (c != null) c.text = '';
+                                  }
+                                  if (_errorText != null) {
+                                    _errorText = null;
+                                  }
+                                });
+                              },
+                            ),
+                          ),
+                          Expanded(
+                            flex: 3,
+                            child: Padding(
+                              padding: const EdgeInsets.only(top: 8),
+                              child: Text(
+                                'Item ${item.line}: ${item.description}',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            flex: 4,
+                            child: flagged
+                                ? TextField(
+                                    controller: controller,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Motivo',
+                                    ),
+                                    minLines: 2,
+                                    maxLines: 3,
+                                    onChanged: (_) {
+                                      _comments[itemIndex] = controller.text;
+                                      if (_errorText != null) {
+                                        setState(() => _errorText = null);
+                                      }
+                                    },
+                                  )
+                                : const Padding(
+                                    padding: EdgeInsets.only(top: 12),
+                                    child: Text(
+                                      'Activa para indicar motivo.',
+                                      style: TextStyle(fontSize: 12),
+                                    ),
+                                  ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Cancelar'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: () {
+                        final flaggedCount = _flags.where((v) => v).length;
+                        if (flaggedCount == 0) {
+                          setState(() {
+                            _errorText = 'Selecciona al menos un artÃ­culo.';
+                          });
+                          return;
+                        }
+
+                        for (var i = 0; i < _items.length; i++) {
+                          if (!_flags[i]) continue;
+                          if (_comments[i].trim().isEmpty) {
+                            setState(() {
+                              _errorText =
+                                  'Agrega un motivo en todos los artÃ­culos marcados.';
+                            });
+                            return;
+                          }
+                        }
+
+                        final updatedItems = <PurchaseOrderItem>[];
+                        final summaryParts = <String>[];
+
+                        for (var i = 0; i < _items.length; i++) {
+                          final comment = _comments[i].trim();
+                          final flagged = _flags[i];
+
+                          updatedItems.add(
+                            _items[i].copyWith(
+                              reviewFlagged: flagged,
+                              reviewComment: flagged ? comment : null,
+                              clearReviewComment: !flagged,
+                            ),
+                          );
+
+                          if (flagged) {
+                            summaryParts.add('Item ${_items[i].line}: $comment');
+                          }
+                        }
+
+                        Navigator.pop(
+                          context,
+                          ItemReviewResult(
+                            items: updatedItems,
+                            summary: summaryParts.join(' | '),
+                          ),
+                        );
+                      },
+                      child: Text(widget.confirmLabel),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
 }
 
 class _ReviewHeaderRow extends StatelessWidget {
@@ -288,7 +317,7 @@ class _ReviewHeaderRow extends StatelessWidget {
       child: Row(
         children: [
           const SizedBox(width: 36),
-          Expanded(flex: 3, child: Text('Artículo', style: labelStyle)),
+          Expanded(flex: 3, child: Text('ArtÃ­culo', style: labelStyle)),
           const SizedBox(width: 8),
           Expanded(flex: 4, child: Text('Motivo', style: labelStyle)),
         ],

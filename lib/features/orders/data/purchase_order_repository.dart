@@ -160,7 +160,7 @@ class PurchaseOrderRepository {
     );
   }
 
-  Future<void> submitOrder({
+  Future<String> submitOrder({
     String? draftId,
     required AppUser requester,
     required PurchaseOrderUrgency urgency,
@@ -210,7 +210,7 @@ class PurchaseOrderRepository {
           type: 'advance',
           itemsSnapshot: items,
         );
-        return;
+        return trimmedDraftId;
       }
     }
 
@@ -255,6 +255,7 @@ class PurchaseOrderRepository {
       type: 'advance',
       itemsSnapshot: items,
     );
+    return orderId;
   }
 
   Future<void> requestEdit({
@@ -305,6 +306,7 @@ class PurchaseOrderRepository {
     String? comprasReviewerArea,
     String? internalOrder,
     List<PurchaseOrderItem>? items,
+    bool markReady = false,
   }) async {
     final trimmedSupplier = supplier?.trim();
     final trimmedComment = comprasComment?.trim();
@@ -324,6 +326,7 @@ class PurchaseOrderRepository {
       'comprasReviewerArea': (comprasReviewerArea == null || comprasReviewerArea.trim().isEmpty)
           ? null
           : comprasReviewerArea.trim(),
+      'cotizacionReady': markReady ? true : false,
       'updatedAt': ServerValue.timestamp,
     };
 
@@ -332,6 +335,16 @@ class PurchaseOrderRepository {
     }
 
     await _ordersRef.child(orderId).update(payload);
+  }
+
+  Future<void> setCotizacionReady({
+    required String orderId,
+    required bool ready,
+  }) async {
+    await _ordersRef.child(orderId).update({
+      'cotizacionReady': ready,
+      'updatedAt': ServerValue.timestamp,
+    });
   }
 
   Future<void> markPaymentDone({
@@ -493,6 +506,81 @@ class PurchaseOrderRepository {
     await _markSharedQuotesNeedsUpdate(order);
   }
 
+  Future<void> returnToCotizaciones({
+    required PurchaseOrder order,
+    required String comment,
+    required List<PurchaseOrderItem> items,
+    required AppUser actor,
+  }) async {
+    final trimmed = comment.trim();
+    final orderRef = _ordersRef.child(order.id);
+    final nextDireccionReturnCount = order.direccionReturnCount + 1;
+    final timingUpdate = _statusTimingUpdate(order);
+
+    final updates = <String, Object?>{
+      'purchaseOrders/${order.id}/status': PurchaseOrderStatus.cotizaciones.name,
+      'purchaseOrders/${order.id}/direccionComment':
+          trimmed.isEmpty ? null : trimmed,
+      'purchaseOrders/${order.id}/direccionGeneralName': null,
+      'purchaseOrders/${order.id}/direccionGeneralArea': null,
+      'purchaseOrders/${order.id}/direccionReturnCount': nextDireccionReturnCount,
+      'purchaseOrders/${order.id}/cotizacionReady': false,
+      'purchaseOrders/${order.id}/items': items.map((item) => item.toMap()).toList(),
+      'purchaseOrders/${order.id}/updatedAt': ServerValue.timestamp,
+      ...timingUpdate.map(
+        (key, value) => MapEntry('purchaseOrders/${order.id}/$key', value),
+      ),
+    };
+
+    for (final ref in order.sharedQuoteRefs) {
+      final quoteId = ref.quoteId.trim();
+      if (quoteId.isEmpty) continue;
+      updates['sharedQuotes/$quoteId/approvedAt'] = null;
+      updates['sharedQuotes/$quoteId/approvedOrderIds'] = null;
+      updates['sharedQuotes/$quoteId/updatedAt'] = ServerValue.timestamp;
+    }
+
+    await _database.ref().update(updates);
+
+    await _appendEvent(
+      orderRef,
+      fromStatus: order.status,
+      toStatus: PurchaseOrderStatus.cotizaciones,
+      byUserId: actor.id,
+      byRole: _actorRoleLabel(actor),
+      type: 'return',
+      itemsSnapshot: items,
+      comment: trimmed.isEmpty ? null : trimmed,
+    );
+
+    await _markSharedQuotesNeedsUpdate(order);
+  }
+
+  Future<void> approveSharedQuoteFromDireccion({
+    required SharedQuote quote,
+    required AppUser actor,
+    required List<String> approvedOrderIds,
+  }) async {
+    final trimmedName = actor.name.trim();
+    final trimmedArea = actor.areaDisplay.trim();
+    final mergedApproved = {
+      ...quote.approvedOrderIds.map((id) => id.trim()).where((id) => id.isNotEmpty),
+      ...approvedOrderIds.map((id) => id.trim()).where((id) => id.isNotEmpty),
+    };
+    final totalIds = quote.orderIds.map((id) => id.trim()).where((id) => id.isNotEmpty);
+    final allApproved = totalIds.every(mergedApproved.contains);
+
+    await _sharedQuotesRef.child(quote.id).update({
+      'approvedOrderIds': mergedApproved.isEmpty
+          ? null
+          : {for (final id in mergedApproved) id: true},
+      'approvedAt': allApproved ? ServerValue.timestamp : null,
+      'approvedByName': allApproved && trimmedName.isNotEmpty ? trimmedName : null,
+      'approvedByArea': allApproved && trimmedArea.isNotEmpty ? trimmedArea : null,
+      'updatedAt': ServerValue.timestamp,
+    });
+  }
+
   Stream<List<SharedQuote>> watchSharedQuotes() {
     return _sharedQuotesRef.onValue.map((event) {
       final value = event.snapshot.value;
@@ -561,6 +649,7 @@ class PurchaseOrderRepository {
       supplier: supplier.trim(),
       orderIds: orderIds,
       pdfUrl: cleanedUrl,
+      approvedOrderIds: const [],
       needsUpdate: !hasUrl,
       version: 1,
     );
@@ -591,12 +680,17 @@ class PurchaseOrderRepository {
   }) async {
     final updatedRefs = _removeSharedQuoteRef(order.sharedQuoteRefs, quote.id);
     final nextLinks = _removeQuoteLink(order.cotizacionLinks, quote.id);
+    final primaryId = order.primaryQuoteId?.trim();
+    final nextPrimary = primaryId == quote.id
+        ? (updatedRefs.isNotEmpty ? updatedRefs.first.quoteId : null)
+        : primaryId;
 
     await _ordersRef.child(order.id).update({
       'sharedQuoteRefs': updatedRefs.isEmpty ? null : updatedRefs.map((ref) => ref.toMap()).toList(),
       'cotizacionLinks': nextLinks.isEmpty ? null : nextLinks.map((link) => link.toMap()).toList(),
       'cotizacionPdfUrls': nextLinks.map((link) => link.url).toList(),
       'cotizacionPdfUrl': nextLinks.isEmpty ? null : nextLinks.first.url,
+      'primaryQuoteId': nextPrimary?.trim().isEmpty ?? true ? null : nextPrimary?.trim(),
       'updatedAt': ServerValue.timestamp,
     });
 
@@ -632,6 +726,8 @@ class PurchaseOrderRepository {
       supplier: quote.supplier,
       orderIds: orderIds,
       pdfUrl: cleaned,
+      approvedOrderIds: quote.approvedOrderIds,
+      approvedAt: quote.approvedAt,
       needsUpdate: false,
       version: nextVersion,
     );
@@ -663,12 +759,19 @@ class PurchaseOrderRepository {
   }) async {
     final nextRefs = _upsertSharedQuoteRef(order.sharedQuoteRefs, quote);
     final nextLinks = _upsertQuoteLink(order.cotizacionLinks, quote);
+    final existingPrimary = order.primaryQuoteId?.trim();
+    final nextPrimary = (existingPrimary != null && existingPrimary.isNotEmpty)
+        ? existingPrimary
+        : (order.sharedQuoteRefs.isNotEmpty
+            ? order.sharedQuoteRefs.first.quoteId
+            : quote.id);
 
     await _ordersRef.child(order.id).update({
       'sharedQuoteRefs': nextRefs.isEmpty ? null : nextRefs.map((ref) => ref.toMap()).toList(),
       'cotizacionLinks': nextLinks.isEmpty ? null : nextLinks.map((link) => link.toMap()).toList(),
       'cotizacionPdfUrls': nextLinks.map((link) => link.url).toList(),
       'cotizacionPdfUrl': nextLinks.isEmpty ? null : nextLinks.first.url,
+      'primaryQuoteId': nextPrimary.trim().isEmpty ? null : nextPrimary.trim(),
       'updatedAt': ServerValue.timestamp,
     });
   }
@@ -691,6 +794,9 @@ class PurchaseOrderRepository {
       'updatedAt': ServerValue.timestamp,
       ...timingUpdate,
     };
+    if (targetStatus == PurchaseOrderStatus.cotizaciones) {
+      payload['cotizacionReady'] = false;
+    }
 
     if (trimmedReviewer != null && trimmedReviewer.isNotEmpty) {
       payload['comprasReviewerName'] = trimmedReviewer;
@@ -699,16 +805,37 @@ class PurchaseOrderRepository {
       payload['comprasReviewerArea'] = trimmedArea;
     }
 
-    await orderRef.update(payload);
+    final eventRef = orderRef.child('events').push();
+    final eventKey = eventRef.key;
+    if (eventKey == null) {
+      await orderRef.update(payload);
+      await _appendEvent(
+        orderRef,
+        fromStatus: order.status,
+        toStatus: targetStatus,
+        byUserId: actor.id,
+        byRole: _actorRoleLabel(actor),
+        type: 'advance',
+      );
+      return;
+    }
 
-    await _appendEvent(
-      orderRef,
-      fromStatus: order.status,
-      toStatus: targetStatus,
-      byUserId: actor.id,
-      byRole: _actorRoleLabel(actor),
-      type: 'advance',
-    );
+    final eventPayload = <String, dynamic>{
+      'fromStatus': order.status.name,
+      'toStatus': targetStatus.name,
+      'byUserId': actor.id,
+      'byRole': _actorRoleLabel(actor),
+      'timestamp': ServerValue.timestamp,
+      'type': 'advance',
+    };
+
+    final updates = <String, Object?>{};
+    for (final entry in payload.entries) {
+      updates['purchaseOrders/${order.id}/${entry.key}'] = entry.value;
+    }
+    updates['purchaseOrders/${order.id}/events/$eventKey'] = eventPayload;
+
+    await _database.ref().update(updates);
   }
 
   Future<void> sendToDireccionWithCotizacion({

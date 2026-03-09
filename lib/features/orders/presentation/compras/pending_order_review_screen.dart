@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -5,11 +7,13 @@ import 'package:go_router/go_router.dart';
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
+import 'package:sistema_compras/core/optimistic_action.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
+import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_inline_view.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/item_review_dialog.dart';
@@ -100,6 +104,7 @@ class _PendingOrderReviewScreenState
                 child: OrderPdfInlineView(
                   key: ValueKey('review-pdf-$_pdfRefreshToken'),
                   data: pdfData,
+                  preferOrderCache: true,
                 ),
               ),
               Padding(
@@ -190,35 +195,59 @@ class _PendingOrderReviewScreenState
     if (review == null) return;
 
     setState(() => _isBusy = true);
-    try {
-      final actor = ref.read(currentUserProfileProvider).value;
-      if (actor == null) {
-        throw StateError('Perfil no disponible.');
-      }
-
-      final repo = ref.read(purchaseOrderRepositoryProvider);
-      await repo.requestEdit(
-        order: order,
-        comment: review.summary,
-        items: review.items,
-        actor: actor,
-      );
-
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Orden devuelta al solicitante.')),
-      );
-      context.pop();
-    } catch (error, stack) {
-      if (!mounted) return;
-      final message =
-          reportError(error, stack, context: 'PendingOrderReviewScreen.reject');
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-    } finally {
+    final actor = ref.read(currentUserProfileProvider).value;
+    if (actor == null) {
       if (mounted) {
         setState(() => _isBusy = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Perfil no disponible.')),
+        );
       }
+      return;
+    }
+
+    await runOptimisticAction(
+      context: context,
+      onNavigate: () => context.pop(),
+      pendingLabel: 'Regresando al solicitante...',
+      successMessage: 'Orden devuelta al solicitante.',
+      errorContext: 'PendingOrderReviewScreen.reject',
+      action: () async {
+        final repo = ref.read(purchaseOrderRepositoryProvider);
+        final branding = ref.read(currentBrandingProvider);
+        await repo.requestEdit(
+          order: order,
+          comment: review.summary,
+          items: review.items,
+          actor: actor,
+        );
+        try {
+          PurchaseOrder? refreshed;
+          for (var attempt = 0; attempt < 2; attempt++) {
+            refreshed = await repo.fetchOrderById(order.id);
+            if (refreshed != null) {
+              break;
+            }
+            await Future.delayed(const Duration(milliseconds: 300));
+          }
+          if (refreshed == null) return;
+          final pdfData = buildPdfDataFromOrder(
+            refreshed,
+            branding: branding,
+          );
+          await buildOrderPdf(pdfData, useIsolate: false);
+        } catch (error, stack) {
+          logError(
+            error,
+            stack,
+            context: 'PendingOrderReviewScreen.warmRejectedCache',
+          );
+        }
+      },
+    );
+
+    if (mounted) {
+      setState(() => _isBusy = false);
     }
   }
 
@@ -262,6 +291,7 @@ class _PendingOrderApprovalScreenState
     extends ConsumerState<PendingOrderApprovalScreen> {
   bool _isSubmitting = false;
   int _pdfRefreshToken = 0;
+  OrderPdfData? _frozenPdfData;
 
   @override
   Widget build(BuildContext context) {
@@ -295,12 +325,15 @@ class _PendingOrderApprovalScreenState
           final reviewerArea = (order.comprasReviewerArea ?? '').trim().isEmpty
               ? actor?.areaDisplay
               : order.comprasReviewerArea;
-          final pdfData = buildPdfDataFromOrder(
+          final computedPdfData = buildPdfDataFromOrder(
             order,
             branding: branding,
             comprasReviewerName: reviewerName,
             comprasReviewerArea: reviewerArea,
           );
+          final pdfData = _isSubmitting && _frozenPdfData != null
+              ? _frozenPdfData!
+              : computedPdfData;
 
           return Column(
             children: [
@@ -340,56 +373,83 @@ class _PendingOrderApprovalScreenState
   }
 
   Future<void> _handleApprove(PurchaseOrder order) async {
-    setState(() => _isSubmitting = true);
-    try {
-      final actor = ref.read(currentUserProfileProvider).value;
-      if (actor == null) {
-        throw StateError('Perfil no disponible.');
-      }
-
-      final confirmed =
-          await _confirmSendToCotizaciones(actor.name, actor.areaDisplay);
-      if (!confirmed) {
-        if (mounted) {
-          setState(() {
-            _isSubmitting = false;
-            _pdfRefreshToken += 1;
-          });
-        }
-        return;
-      }
-
-      final reviewerName = (order.comprasReviewerName ?? '').trim().isEmpty
-          ? actor.name
-          : order.comprasReviewerName;
-      final reviewerArea = (order.comprasReviewerArea ?? '').trim().isEmpty
-          ? actor.areaDisplay
-          : order.comprasReviewerArea;
-
-      await ref.read(purchaseOrderRepositoryProvider).transitionStatus(
-        order: order,
-        targetStatus: PurchaseOrderStatus.cotizaciones,
-        actor: actor,
-        comprasReviewerName: reviewerName,
-        comprasReviewerArea: reviewerArea,
-      );
-
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Orden enviada a Cotizaciones.')),
-      );
-      guardedGo(context, '/orders/pending');
-    } catch (error, stack) {
-      if (!mounted) return;
-      final message =
-          reportError(error, stack, context: 'PendingOrderApprovalScreen.approve');
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-    } finally {
+    setState(() {
+      _isSubmitting = true;
+      _frozenPdfData = _buildPdfData(order);
+    });
+    final actor = ref.read(currentUserProfileProvider).value;
+    if (actor == null) {
       if (mounted) {
-        setState(() => _isSubmitting = false);
+        setState(() {
+          _isSubmitting = false;
+          _frozenPdfData = null;
+        });
       }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Perfil no disponible.')),
+      );
+      return;
     }
+
+    final confirmed =
+        await _confirmSendToCotizaciones(actor.name, actor.areaDisplay);
+    if (!confirmed) {
+      if (mounted) {
+        setState(() {
+          _isSubmitting = false;
+          _frozenPdfData = null;
+          _pdfRefreshToken += 1;
+        });
+      }
+      return;
+    }
+
+    final reviewerName = (order.comprasReviewerName ?? '').trim().isEmpty
+        ? actor.name
+        : order.comprasReviewerName;
+    final reviewerArea = (order.comprasReviewerArea ?? '').trim().isEmpty
+        ? actor.areaDisplay
+        : order.comprasReviewerArea;
+
+    await runOptimisticAction(
+      context: context,
+      onNavigate: () => guardedGo(context, '/orders/pending'),
+      pendingLabel: 'Enviando a Cotizaciones...',
+      successMessage: 'Orden enviada a Cotizaciones.',
+      errorContext: 'PendingOrderApprovalScreen.approve',
+      action: () => ref.read(purchaseOrderRepositoryProvider).transitionStatus(
+            order: order,
+            targetStatus: PurchaseOrderStatus.cotizaciones,
+            actor: actor,
+            comprasReviewerName: reviewerName,
+            comprasReviewerArea: reviewerArea,
+          ),
+    );
+
+    if (mounted) {
+      setState(() {
+        _isSubmitting = false;
+        _frozenPdfData = null;
+      });
+    }
+  }
+
+  OrderPdfData _buildPdfData(PurchaseOrder order) {
+    final branding = ref.read(currentBrandingProvider);
+    final actor = ref.read(currentUserProfileProvider).value;
+    final reviewerName = (order.comprasReviewerName ?? '').trim().isEmpty
+        ? actor?.name
+        : order.comprasReviewerName;
+    final reviewerArea = (order.comprasReviewerArea ?? '').trim().isEmpty
+        ? actor?.areaDisplay
+        : order.comprasReviewerArea;
+    return buildPdfDataFromOrder(
+      order,
+      branding: branding,
+      comprasReviewerName: reviewerName,
+      comprasReviewerArea: reviewerArea,
+      resubmissionDates: const [],
+    );
   }
 
   Future<bool> _confirmSendToCotizaciones(String name, String area) async {

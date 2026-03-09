@@ -1,22 +1,27 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:csv/csv.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sistema_compras/core/area_labels.dart';
+import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/core/widgets/searchable_select.dart';
 import 'package:sistema_compras/core/widgets/info_action.dart';
+import 'package:sistema_compras/features/auth/domain/app_user.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/domain/order_folio.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
+import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 import 'package:sistema_compras/features/partners/data/partner_repository.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
 
@@ -58,6 +63,8 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
   bool _draftRequested = false;
   bool _resetRequested = false;
   bool _copyRequested = false;
+  Timer? _pdfWarmTimer;
+  String? _lastPdfWarmSignature;
 
   late final TextEditingController _notesController;
   ScaffoldMessengerState? _messenger;
@@ -70,6 +77,7 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
 
   @override
   void dispose() {
+    _pdfWarmTimer?.cancel();
     _notesController.dispose();
     super.dispose();
   }
@@ -130,6 +138,11 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
         final message = reportError(next.error!, StackTrace.current,
   context: 'CreateOrderScreen');
         _messenger?.showSnackBar(SnackBar(content: Text(message)));
+      }
+
+      final user = ref.read(currentUserProfileProvider).value;
+      if (user != null) {
+        _schedulePdfWarm(next, user);
       }
     });
 
@@ -393,7 +406,7 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                         : Text(
                             controller.returnCount >= _maxCorrections
                                 ? 'Requiere nueva requisición'
-                                : 'Previsualizar PDF',
+                                : 'Revisar PDF',
                           ),
                   ),
                 ),
@@ -521,6 +534,53 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
       ),
     );
     return result ?? false;
+  }
+
+  void _schedulePdfWarm(CreateOrderState state, AppUser user) {
+    if (state.isLoadingDraft) return;
+    if (state.items.isEmpty) return;
+    final signature = buildCreateOrderSignature(
+      urgency: state.urgency,
+      notes: state.notes,
+      items: state.items,
+    );
+    final previewCreatedAt = state.previewCreatedAt?.millisecondsSinceEpoch ?? 0;
+    final cacheSignature = '$signature|$previewCreatedAt|${state.returnCount}';
+    if (_lastPdfWarmSignature == cacheSignature) return;
+    _lastPdfWarmSignature = cacheSignature;
+
+    final baselineSignature = state.baselineSignature;
+    final hasEdits = baselineSignature == null
+        ? true
+        : baselineSignature != signature;
+    if (state.returnCount > 0 && hasEdits) {
+      return;
+    }
+
+    _pdfWarmTimer?.cancel();
+    _pdfWarmTimer = Timer(const Duration(milliseconds: 550), () {
+      if (!mounted) return;
+      final branding = ref.read(currentBrandingProvider);
+      final requestedDate = _earliestDate(state.items);
+      final modificationDate = state.returnCount > 0
+          ? (hasEdits ? DateTime.now() : state.baselineUpdatedAt)
+          : null;
+      final pdfData = OrderPdfData(
+        branding: branding,
+        folio: normalizeFolio(state.draftId) ?? '',
+        requesterName: user.name,
+        requesterArea: user.areaDisplay,
+        areaName: user.areaDisplay,
+        urgency: state.urgency,
+        items: state.items,
+        createdAt: state.previewCreatedAt ?? DateTime.now(),
+        updatedAt: modificationDate,
+        observations: state.notes,
+        requestedDeliveryDate: requestedDate,
+        resubmissionDates: state.resubmissionDates,
+      );
+      unawaited(buildOrderPdf(pdfData, useIsolate: !kIsWeb));
+    });
   }
 }
 

@@ -6,6 +6,8 @@ class SharedQuote {
     required this.pdfUrl,
     this.createdAt,
     this.updatedAt,
+    this.approvedOrderIds = const [],
+    this.approvedAt,
     this.needsUpdate = false,
     this.version = 1,
   });
@@ -16,6 +18,8 @@ class SharedQuote {
   final String pdfUrl;
   final DateTime? createdAt;
   final DateTime? updatedAt;
+  final List<String> approvedOrderIds;
+  final DateTime? approvedAt;
   final bool needsUpdate;
   final int version;
 
@@ -27,6 +31,8 @@ class SharedQuote {
       pdfUrl: (data['pdfUrl'] as String?) ?? '',
       createdAt: _parseDateTime(data['createdAt']),
       updatedAt: _parseDateTime(data['updatedAt']),
+      approvedOrderIds: _parseOrderIds(data['approvedOrderIds']),
+      approvedAt: _parseDateTime(data['approvedAt']),
       needsUpdate: _parseBool(data['needsUpdate']),
       version: (data['version'] as num?)?.toInt() ?? 1,
     );
@@ -41,6 +47,10 @@ class SharedQuote {
       'version': version,
       'createdAt': createdAt?.millisecondsSinceEpoch,
       'updatedAt': updatedAt?.millisecondsSinceEpoch,
+      'approvedOrderIds': approvedOrderIds.isEmpty
+          ? null
+          : {for (final id in approvedOrderIds) id: true},
+      'approvedAt': approvedAt?.millisecondsSinceEpoch,
     };
   }
 }

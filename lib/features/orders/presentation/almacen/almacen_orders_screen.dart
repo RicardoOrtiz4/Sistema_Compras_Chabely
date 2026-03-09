@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
+import 'package:sistema_compras/core/session_drafts.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
@@ -93,6 +94,8 @@ class _AlmacenOrdersScreenState extends ConsumerState<AlmacenOrdersScreen> {
               .where((order) => orderMatchesSearch(order, _searchQuery, cache: _searchCache))
               .toList();
           final canLoadMore = orders.length >= _limit;
+          final showLoadMore =
+              canLoadMore && filtered.length >= defaultOrderPageSize;
 
           final branding = ref.read(currentBrandingProvider);
           prefetchOrderPdfsForOrders(filtered, branding: branding);
@@ -124,7 +127,7 @@ class _AlmacenOrdersScreenState extends ConsumerState<AlmacenOrdersScreen> {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           const Text('No hay ordenes con ese filtro.'),
-                          if (canLoadMore) ...[
+                          if (showLoadMore) ...[
                             const SizedBox(height: 12),
                             OutlinedButton.icon(
                               onPressed: _loadMore,
@@ -136,7 +139,7 @@ class _AlmacenOrdersScreenState extends ConsumerState<AlmacenOrdersScreen> {
                       )
                     : ListView.separated(
                         padding: const EdgeInsets.all(16),
-                        itemCount: filtered.length + (canLoadMore ? 1 : 0),
+                        itemCount: filtered.length + (showLoadMore ? 1 : 0),
                         separatorBuilder: (_, __) => const SizedBox(height: 12),
                         itemBuilder: (context, index) {
                           if (index >= filtered.length) {
@@ -298,6 +301,12 @@ class _AlmacenOrderReviewScreenState
   bool _isSubmitting = false;
 
   @override
+  void initState() {
+    super.initState();
+    _commentController.addListener(() => _saveDraft(widget.orderId));
+  }
+
+  @override
   void dispose() {
     _commentController.dispose();
     for (final draft in _drafts) {
@@ -418,9 +427,53 @@ class _AlmacenOrderReviewScreenState
       ..clear()
       ..addAll(order.items.map(_ReceivedItemDraft.fromItem));
 
-    _commentController.text = (order.almacenComment ?? '').trim();
+    final cachedDraft = SessionDraftStore.almacen(order.id);
+    if (cachedDraft != null) {
+      _commentController.text = cachedDraft.comment;
+      for (final draft in _drafts) {
+        final line = draft.item.line;
+        final cachedQty = cachedDraft.qtyByLine[line];
+        if (cachedQty != null) {
+          draft.qtyController.text = cachedQty;
+        }
+        final cachedComment = cachedDraft.commentByLine[line];
+        if (cachedComment != null) {
+          draft.commentController.text = cachedComment;
+        }
+      }
+    } else {
+      _commentController.text = (order.almacenComment ?? '').trim();
+    }
+
     _qtyErrors.clear();
     _seededOrderId = order.id;
+    _attachDraftListeners(order.id);
+  }
+
+  void _attachDraftListeners(String orderId) {
+    for (final draft in _drafts) {
+      draft.qtyController.addListener(() => _saveDraft(orderId));
+      draft.commentController.addListener(() => _saveDraft(orderId));
+    }
+  }
+
+  void _saveDraft(String orderId) {
+    final qtyByLine = <int, String>{};
+    final commentByLine = <int, String>{};
+
+    for (final draft in _drafts) {
+      qtyByLine[draft.item.line] = draft.qtyController.text;
+      commentByLine[draft.item.line] = draft.commentController.text;
+    }
+
+    SessionDraftStore.saveAlmacen(
+      orderId,
+      AlmacenDraft(
+        comment: _commentController.text,
+        qtyByLine: qtyByLine,
+        commentByLine: commentByLine,
+      ),
+    );
   }
 
   Future<void> _handleSubmit(PurchaseOrder order) async {
@@ -481,6 +534,7 @@ class _AlmacenOrderReviewScreenState
 
       if (!mounted) return;
 
+      SessionDraftStore.clearAlmacen(order.id);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Recepcion guardada.')),
       );

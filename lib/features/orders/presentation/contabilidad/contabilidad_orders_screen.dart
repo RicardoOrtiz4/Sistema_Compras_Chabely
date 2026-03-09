@@ -9,6 +9,7 @@ import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
+import 'package:sistema_compras/core/session_drafts.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
@@ -96,6 +97,8 @@ class _ContabilidadOrdersScreenState
               .where((order) => orderMatchesSearch(order, _searchQuery, cache: _searchCache))
               .toList();
           final canLoadMore = orders.length >= _limit;
+          final showLoadMore =
+              canLoadMore && filtered.length >= defaultOrderPageSize;
 
           final branding = ref.read(currentBrandingProvider);
           prefetchOrderPdfsForOrders(filtered, branding: branding);
@@ -127,7 +130,7 @@ class _ContabilidadOrdersScreenState
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           const Text('No hay órdenes con ese filtro.'),
-                          if (canLoadMore) ...[
+                          if (showLoadMore) ...[
                             const SizedBox(height: 12),
                             OutlinedButton.icon(
                               onPressed: _loadMore,
@@ -139,7 +142,7 @@ class _ContabilidadOrdersScreenState
                       )
                     : ListView.separated(
                         padding: const EdgeInsets.all(16),
-                        itemCount: filtered.length + (canLoadMore ? 1 : 0),
+                        itemCount: filtered.length + (showLoadMore ? 1 : 0),
                         separatorBuilder: (_, __) =>
                             const SizedBox(height: 12),
                         itemBuilder: (context, index) {
@@ -295,7 +298,18 @@ class _ContabilidadOrderReviewScreenState
           }
           if (!_prefilled) {
             _prefilled = true;
-            _seedFacturaLinks(order);
+            final cachedDraft = SessionDraftStore.contabilidad(order.id);
+            if (cachedDraft != null) {
+              _facturaLinks
+                ..clear()
+                ..addAll(
+                  cachedDraft.facturaLinks
+                      .map((url) => _FacturaLinkDraft(url: url)),
+                );
+              _linkController.text = cachedDraft.pendingLink;
+            } else {
+              _seedFacturaLinks(order);
+            }
           }
 
           return Column(
@@ -328,6 +342,7 @@ class _ContabilidadOrderReviewScreenState
                             keyboardType: TextInputType.url,
                             textInputAction: TextInputAction.done,
                             autocorrect: false,
+                            onChanged: (_) => _saveDraft(order.id),
                             onSubmitted: (_) => _addFacturaLink(),
                           ),
                         ),
@@ -457,10 +472,12 @@ class _ContabilidadOrderReviewScreenState
       _facturaLinks.add(_FacturaLinkDraft(url: link));
       _linkController.clear();
     });
+    _saveDraft(widget.orderId);
   }
 
   void _removeFacturaLink(_FacturaLinkDraft link) {
     setState(() => _facturaLinks.removeWhere((entry) => entry.url == link.url));
+    _saveDraft(widget.orderId);
   }
 
   Future<void> _editFacturaLink(_FacturaLinkDraft link) async {
@@ -533,6 +550,7 @@ class _ContabilidadOrderReviewScreenState
         _facturaLinks[index] = updated;
       }
     });
+    _saveDraft(widget.orderId);
   }
 
   Future<void> _handleSend(PurchaseOrder order) async {
@@ -560,6 +578,7 @@ class _ContabilidadOrderReviewScreenState
 
       if (!mounted) return;
 
+      SessionDraftStore.clearContabilidad(order.id);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Factura enviada a almacén.')),
       );
@@ -575,6 +594,16 @@ class _ContabilidadOrderReviewScreenState
         setState(() => _isSubmitting = false);
       }
     }
+  }
+
+  void _saveDraft(String orderId) {
+    SessionDraftStore.saveContabilidad(
+      orderId,
+      ContabilidadDraft(
+        facturaLinks: _facturaLinks.map((entry) => entry.url).toList(),
+        pendingLink: _linkController.text,
+      ),
+    );
   }
 
   Future<void> _openLink(String raw) async {
@@ -675,4 +704,5 @@ class _OrderHeaderSummary extends StatelessWidget {
     );
   }
 }
+
 

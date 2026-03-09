@@ -6,6 +6,7 @@ import 'package:sistema_compras/app/router.dart';
 import 'package:sistema_compras/core/app_logger.dart';
 import 'package:sistema_compras/core/app_theme.dart';
 import 'package:sistema_compras/core/company_branding.dart';
+import 'package:sistema_compras/core/optimistic_action.dart';
 import 'package:sistema_compras/core/providers.dart';
 import 'package:sistema_compras/core/services/notification_service.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
@@ -63,16 +64,20 @@ class SistemaComprasApp extends ConsumerWidget {
             },
           ),
         },
-        child: Focus(
-          autofocus: true,
+        child: FocusTraversalGroup(
+          policy: WidgetOrderTraversalPolicy(),
           child: MaterialApp.router(
             title: 'Sistema de Compras - ${branding.displayName}',
             debugShowCheckedModeBanner: false,
             theme: AppTheme.lightFor(branding),
             darkTheme: AppTheme.darkFor(branding),
             routerConfig: router,
-            builder: (context, child) =>
+            builder: (context, child) => Stack(
+              children: [
                 child ?? const SizedBox.shrink(),
+                const OptimisticSyncBanner(),
+              ],
+            ),
           ),
         ),
       ),

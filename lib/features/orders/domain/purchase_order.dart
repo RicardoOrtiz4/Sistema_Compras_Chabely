@@ -235,6 +235,8 @@ class PurchaseOrder {
     this.cotizacionPdfUrls = const [],
     this.cotizacionLinks = const [],
     this.sharedQuoteRefs = const [],
+    this.primaryQuoteId,
+    this.cotizacionReady,
     this.facturaPdfUrl,
     this.facturaPdfUrls = const [],
     this.pdfUrl,
@@ -281,6 +283,8 @@ class PurchaseOrder {
   final List<String> cotizacionPdfUrls;
   final List<CotizacionLink> cotizacionLinks;
   final List<SharedQuoteRef> sharedQuoteRefs;
+  final String? primaryQuoteId;
+  final bool? cotizacionReady;
   final String? facturaPdfUrl;
   final List<String> facturaPdfUrls;
   final String? pdfUrl;
@@ -334,6 +338,8 @@ class PurchaseOrder {
       'sharedQuoteRefs': sharedQuoteRefs.isEmpty
           ? null
           : sharedQuoteRefs.map((ref) => ref.toMap()).toList(),
+      'primaryQuoteId': primaryQuoteId?.trim().isEmpty ?? true ? null : primaryQuoteId?.trim(),
+      'cotizacionReady': cotizacionReady,
       'facturaPdfUrl': facturaPdfUrl,
       'facturaPdfUrls': facturaPdfUrls,
       'pdfUrl': pdfUrl,
@@ -419,6 +425,10 @@ class PurchaseOrder {
       cotizacionPdfUrls: _urlsFromLinks(mergedLinks),
       cotizacionLinks: mergedLinks,
       sharedQuoteRefs: _parseSharedQuoteRefs(data['sharedQuoteRefs']),
+      primaryQuoteId: (data['primaryQuoteId'] as String?)?.trim(),
+      cotizacionReady: data['cotizacionReady'] == null
+          ? null
+          : _parseBool(data['cotizacionReady']),
       facturaPdfUrl: singleFactura,
       facturaPdfUrls: facturaUrls,
       pdfUrl: data['pdfUrl'] as String?,

@@ -1,18 +1,23 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sistema_compras/core/area_labels.dart';
 import 'package:sistema_compras/core/company_branding.dart';
+import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
+import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
 import 'package:sistema_compras/features/orders/domain/order_folio.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_inline_view.dart';
+import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 
 class OrderPdfPreviewScreen extends ConsumerStatefulWidget {
@@ -62,11 +67,11 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Previsualizar PDF'),
+        title: const Text('Revisar PDF'),
         actions: [
           infoAction(
             context,
-            title: 'Previsualizar PDF',
+            title: 'Revisar PDF',
             message:
                 'Revisa el PDF antes de enviar la requisicion.\n'
                 'Si es reenvio, se mostraran los cambios.\n'
@@ -81,11 +86,26 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
           }
 
           final folio = _folioFromDraft(controller.draftId);
-          final requestedDate = _requestedDeliveryDate(controller.items);
+          final requestedDate = _requestedDeliveryDate(
+            controller.items,
+            controller.urgency,
+            controller.previewCreatedAt ?? DateTime.now(),
+          );
           final branding = ref.watch(currentBrandingProvider);
 
-          final modificationDate =
-              controller.returnCount > 0 ? DateTime.now() : null;
+          final baselineSignature = controller.baselineSignature;
+          final currentSignature = buildCreateOrderSignature(
+            urgency: controller.urgency,
+            notes: controller.notes,
+            items: controller.items,
+          );
+          final hasEdits = baselineSignature == null
+              ? true
+              : baselineSignature != currentSignature;
+
+          final modificationDate = controller.returnCount > 0
+              ? (hasEdits ? DateTime.now() : controller.baselineUpdatedAt)
+              : null;
 
           final pdfData = OrderPdfData(
             branding: branding,
@@ -150,12 +170,18 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
                         : () async {
                             if (controller.returnCount > 0) {
                               prefetchOrderPdfs([pdfData], limit: 1);
-                              final confirmed = await _confirmResubmission(context);
+                              final confirmed = await _confirmResubmission(
+                                context,
+                                hasEdits: hasEdits,
+                              );
                               if (confirmed != true) return;
                             }
-                            await ref
+                            final orderId = await ref
                                 .read(createOrderControllerProvider.notifier)
                                 .submit();
+                            if (orderId != null) {
+                              unawaited(_warmPendingCache(orderId));
+                            }
                           },
                     child: controller.isSubmitting
                         ? const SizedBox(
@@ -182,6 +208,27 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _warmPendingCache(String orderId) async {
+    try {
+      final repo = ref.read(purchaseOrderRepositoryProvider);
+      PurchaseOrder? order;
+      for (var attempt = 0; attempt < 2; attempt++) {
+        order = await repo.fetchOrderById(orderId);
+        if (order != null && order.createdAt != null) {
+          break;
+        }
+        await Future.delayed(const Duration(milliseconds: 300));
+      }
+
+      if (order == null) return;
+
+      final branding = ref.read(currentBrandingProvider);
+      prefetchOrderPdfsForOrders([order], branding: branding, limit: 1);
+    } catch (error, stack) {
+      logError(error, stack, context: 'OrderPdfPreviewScreen.warmCache');
+    }
   }
 }
 
@@ -222,7 +269,11 @@ String _contactLabel(String? rawRole) {
   return normalized;
 }
 
-DateTime? _requestedDeliveryDate(List<OrderItemDraft> items) {
+DateTime? _requestedDeliveryDate(
+  List<OrderItemDraft> items,
+  PurchaseOrderUrgency urgency,
+  DateTime baseDate,
+) {
   DateTime? selected;
   for (final item in items) {
     final date = item.estimatedDate;
@@ -231,18 +282,43 @@ DateTime? _requestedDeliveryDate(List<OrderItemDraft> items) {
       selected = date;
     }
   }
-  return selected;
+  return selected ?? _requestedDateFromUrgency(urgency, baseDate);
 }
+
+DateTime _requestedDateFromUrgency(
+  PurchaseOrderUrgency urgency,
+  DateTime baseDate,
+) {
+  final base = DateTime(baseDate.year, baseDate.month, baseDate.day);
+  switch (urgency) {
+    case PurchaseOrderUrgency.urgente:
+      return base.add(const Duration(days: 1));
+    case PurchaseOrderUrgency.alta:
+      return base.add(const Duration(days: 3));
+    case PurchaseOrderUrgency.media:
+      return base.add(const Duration(days: 7));
+    case PurchaseOrderUrgency.baja:
+      return base.add(const Duration(days: 14));
+  }
+}
+
 
 const int _maxCorrections = 3;
 
-Future<bool?> _confirmResubmission(BuildContext context) {
+Future<bool?> _confirmResubmission(
+  BuildContext context, {
+  required bool hasEdits,
+}) {
+  final warning = hasEdits
+      ? ''
+      : '\n\nNo detectamos cambios en la orden. '
+          'Es posible que la vuelvan a rechazar.';
   return showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
       title: const Text('Confirmar reenvío'),
-      content: const Text(
-        'Esta orden regresará a órdenes por confirmar. ¿Deseas continuar?',
+      content: Text(
+        'Esta orden regresará a órdenes por confirmar. ¿Deseas continuar?$warning',
       ),
       actions: [
         TextButton(
@@ -257,4 +333,3 @@ Future<bool?> _confirmResubmission(BuildContext context) {
     ),
   );
 }
-

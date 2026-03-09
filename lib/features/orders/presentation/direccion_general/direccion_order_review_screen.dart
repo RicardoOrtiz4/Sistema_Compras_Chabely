@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
+import 'package:sistema_compras/core/optimistic_action.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
@@ -125,7 +126,7 @@ class _DireccionOrderReviewScreenState extends ConsumerState<DireccionOrderRevie
                         }
                       },
                       icon: const Icon(Icons.picture_as_pdf_outlined),
-                      label: const Text('Previsualizar PDF'),
+                      label: const Text('Revisar PDF'),
                     ),
                     const SizedBox(height: 8),
                   ],
@@ -190,30 +191,31 @@ class _DireccionOrderReviewScreenState extends ConsumerState<DireccionOrderRevie
     final confirmed = await _confirmPaymentDone(order.id);
     if (!confirmed!) return;
     setState(() => _isBusy = true);
-    try {
-      final actor = ref.read(currentUserProfileProvider).value;
-      if (actor == null) {
-        throw StateError('Perfil no disponible.');
-      }
-      final repo = ref.read(purchaseOrderRepositoryProvider);
-      await repo.markPaymentDone(order: order, actor: actor);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Orden autorizada.')),
-      );
-      Navigator.pop(context);
-    } catch (error, stack) {
-      if (!mounted) return;
-      final message = reportError(
-        error,
-        stack,
-        context: 'DireccionOrderReviewScreen.paymentDone',
-      );
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-    } finally {
+    final actor = ref.read(currentUserProfileProvider).value;
+    if (actor == null) {
       if (mounted) {
         setState(() => _isBusy = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Perfil no disponible.')),
+        );
       }
+      return;
+    }
+
+    await runOptimisticAction(
+      context: context,
+      onNavigate: () => Navigator.pop(context),
+      pendingLabel: 'Autorizando orden...',
+      successMessage: 'Orden autorizada.',
+      errorContext: 'DireccionOrderReviewScreen.paymentDone',
+      action: () => ref.read(purchaseOrderRepositoryProvider).markPaymentDone(
+            order: order,
+            actor: actor,
+          ),
+    );
+
+    if (mounted) {
+      setState(() => _isBusy = false);
     }
   }
 
@@ -235,35 +237,33 @@ class _DireccionOrderReviewScreenState extends ConsumerState<DireccionOrderRevie
     );
     if (review == null) return;
     setState(() => _isBusy = true);
-    try {
-      final actor = ref.read(currentUserProfileProvider).value;
-      if (actor == null) {
-        throw StateError('Perfil no disponible.');
-      }
-      final repo = ref.read(purchaseOrderRepositoryProvider);
-      await repo.returnToCompras(
-        order: order,
-        comment: review.summary,
-        items: review.items,
-        actor: actor,
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Orden regresada a Compras.')),
-      );
-      Navigator.pop(context);
-    } catch (error, stack) {
-      if (!mounted) return;
-      final message = reportError(
-        error,
-        stack,
-        context: 'DireccionOrderReviewScreen.return',
-      );
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-    } finally {
+    final actor = ref.read(currentUserProfileProvider).value;
+    if (actor == null) {
       if (mounted) {
         setState(() => _isBusy = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Perfil no disponible.')),
+        );
       }
+      return;
+    }
+
+    await runOptimisticAction(
+      context: context,
+      onNavigate: () => Navigator.pop(context),
+      pendingLabel: 'Regresando a Compras...',
+      successMessage: 'Orden regresada a Compras.',
+      errorContext: 'DireccionOrderReviewScreen.return',
+      action: () => ref.read(purchaseOrderRepositoryProvider).returnToCompras(
+            order: order,
+            comment: review.summary,
+            items: review.items,
+            actor: actor,
+          ),
+    );
+
+    if (mounted) {
+      setState(() => _isBusy = false);
     }
   }
 

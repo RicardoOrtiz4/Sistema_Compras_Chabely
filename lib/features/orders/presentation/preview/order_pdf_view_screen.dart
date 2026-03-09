@@ -13,7 +13,7 @@ import 'package:sistema_compras/features/orders/data/purchase_order_repository.d
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_inline_view.dart';
-import 'package:sistema_compras/features/orders/presentation/shared/order_csv_export.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_rejection_history.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
 
 class OrderPdfViewScreen extends ConsumerStatefulWidget {
@@ -32,22 +32,48 @@ class _OrderPdfViewScreenState extends ConsumerState<OrderPdfViewScreen> {
   @override
   Widget build(BuildContext context) {
     final orderAsync = ref.watch(orderByIdStreamProvider(widget.orderId));
+    final actions = orderAsync.maybeWhen(
+      data: (order) {
+        if (order == null) return const <Widget>[];
+        final eventsAsync = ref.watch(orderEventsProvider(order.id));
+        final hasReturns = order.returnCount > 0;
+        return [
+          eventsAsync.when(
+            data: (events) {
+              final canShow =
+                  hasReturns && events.any((event) => event.type == 'return');
+              return IconButton(
+                icon: const Icon(Icons.history),
+                tooltip: 'Historial de cambios',
+                onPressed:
+                    canShow ? () => _showHistory(context, order, events) : null,
+              );
+            },
+            loading: () => IconButton(
+              icon: const Icon(Icons.history),
+              tooltip: 'Historial de cambios',
+              onPressed: null,
+            ),
+            error: (_, __) => IconButton(
+              icon: const Icon(Icons.history),
+              tooltip: 'Historial de cambios',
+              onPressed: null,
+            ),
+          ),
+        ];
+      },
+      orElse: () => const <Widget>[],
+    );
     return Scaffold(
       appBar: AppBar(
         title: const Text('PDF de orden'),
         actions: [
-          if (orderAsync.value != null)
-            IconButton(
-              tooltip: 'Descargar CSV',
-              icon: const Icon(Icons.download_outlined),
-              onPressed: () => exportOrderCsv(context, orderAsync.value!),
-            ),
+          ...actions,
           infoAction(
             context,
             title: 'PDF de orden',
             message:
                 'Consulta el PDF generado.\n'
-                'Puedes descargar el CSV.\n'
                 'Si es borrador, veras acciones de editar o eliminar.',
           ),
         ],
@@ -197,6 +223,29 @@ class _OrderPdfViewScreenState extends ConsumerState<OrderPdfViewScreen> {
         setState(() => _isBusy = false);
       }
     }
+  }
+
+  void _showHistory(
+    BuildContext context,
+    PurchaseOrder order,
+    List<PurchaseOrderEvent> events,
+  ) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: OrderRejectionHistory(
+              order: order,
+              events: events,
+              showOnlyOriginal: true,
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Future<bool?> _showDeleteDialog(PurchaseOrder order) async {

@@ -91,6 +91,8 @@ class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
               .where((order) => orderMatchesSearch(order, _searchQuery, cache: _searchCache))
               .toList();
           final canLoadMore = orders.length >= _limit;
+          final showLoadMore =
+              canLoadMore && filtered.length >= defaultOrderPageSize;
 
           final branding = ref.read(currentBrandingProvider);
           // Prefetch para que los thumbnails / PDFs carguen más rápido.
@@ -130,7 +132,7 @@ class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           const Text('No hay órdenes con ese filtro.'),
-                          if (canLoadMore) ...[
+                          if (showLoadMore) ...[
                             const SizedBox(height: 12),
                             OutlinedButton.icon(
                               onPressed: _loadMore,
@@ -142,7 +144,7 @@ class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
                       )
                     : ListView.separated(
                         padding: const EdgeInsets.all(16),
-                        itemCount: filtered.length + (canLoadMore ? 1 : 0),
+                        itemCount: filtered.length + (showLoadMore ? 1 : 0),
                         separatorBuilder: (_, __) => const SizedBox(height: 12),
                         itemBuilder: (context, index) {
                           if (index >= filtered.length) {
