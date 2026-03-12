@@ -6,7 +6,6 @@ import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
-import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 
@@ -19,6 +18,10 @@ class ReportsScreen extends ConsumerStatefulWidget {
 
 class _ReportsScreenState extends ConsumerState<ReportsScreen> {
   DateTimeRange? _dateRange;
+  List<PurchaseOrder>? _cachedOrders;
+  DateTimeRange? _cachedDerivedRange;
+  int? _cachedDerivedMinuteKey;
+  _ReportsDerivedData? _cachedDerivedData;
 
   @override
   Widget build(BuildContext context) {
@@ -27,16 +30,6 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Panel Direccion General'),
-        actions: [
-          infoAction(
-            context,
-            title: 'Panel Direccion General',
-            message:
-                'Filtra por rango de fechas para comparar periodos.\n'
-                'Revisa totales, promedios y tendencias.\n'
-                'Las tablas muestran resumen por proveedor, area y urgencia.',
-          ),
-        ],
       ),
       body: ordersAsync.when(
         data: (orders) {
@@ -44,7 +37,8 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
             return const Center(child: Text('No hay órdenes registradas.'));
           }
 
-          final filtered = _applyDateRange(orders, _dateRange);
+          final derived = _resolveDerivedData(orders);
+          final filtered = derived.filtered;
           if (filtered.isEmpty) {
             return _EmptyReport(onClear: _clearRange);
           }
@@ -52,34 +46,25 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
           final numberFormat = NumberFormat('#,##0');
           final moneyFormat = NumberFormat('#,##0.##');
 
-          final totalOrders = filtered.length;
-          final ordersWithBudget = _countWithBudget(filtered);
+          final totalOrders = derived.totalOrders;
+          final ordersWithBudget = derived.ordersWithBudget;
           final ordersWithoutBudget = totalOrders - ordersWithBudget;
-          final totalBudget = _sumBudget(filtered);
-          final avgTicket =
-              ordersWithBudget == 0 ? 0 : totalBudget / ordersWithBudget;
+          final totalBudget = derived.totalBudget;
+          final avgTicket = derived.avgTicket;
 
-          final comparison = _budgetComparison(orders, _dateRange);
-          final trendItems = _monthlyBudgetTrend(
-            _dateRange == null ? orders : filtered,
-            range: _dateRange,
-          );
+          final comparison = derived.comparison;
+          final trendItems = derived.trendItems;
 
-          final supplierItems = _budgetBySupplier(filtered);
-          final areaItems = _budgetByArea(filtered);
-          final urgencyItems = _budgetByUrgency(filtered);
+          final supplierItems = derived.supplierItems;
+          final areaItems = derived.areaItems;
+          final urgencyItems = derived.urgencyItems;
 
-          final diffByOrder = _discrepancyByOrder(filtered);
-          final diffBySupplier = _discrepancyBySupplier(filtered);
-          final diffByItem = _discrepancyByItem(filtered);
+          final diffByOrder = derived.diffByOrder;
+          final diffBySupplier = derived.diffBySupplier;
+          final diffByItem = derived.diffByItem;
 
-          final now = DateTime.now();
-          final orderTimings = filtered
-              .map((order) => _orderTimingForOrder(order, now))
-              .toList()
-            ..sort((a, b) => b.total.compareTo(a.total));
-
-          final statusAverageItems = _statusAverageItems(orderTimings);
+          final orderTimings = derived.orderTimings;
+          final statusAverageItems = derived.statusAverageItems;
 
           final deltaValue = comparison.current - comparison.previous;
           final deltaPercent =
@@ -252,6 +237,66 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
   }
 
   void _clearRange() => setState(() => _dateRange = null);
+
+  _ReportsDerivedData _resolveDerivedData(List<PurchaseOrder> orders) {
+    final now = DateTime.now();
+    final minuteKey = now.millisecondsSinceEpoch ~/ 60000;
+    final cached = _cachedDerivedData;
+    if (cached != null &&
+        identical(_cachedOrders, orders) &&
+        _sameDateRange(_cachedDerivedRange, _dateRange) &&
+        _cachedDerivedMinuteKey == minuteKey) {
+      return cached;
+    }
+
+    final derived = _buildDerivedData(orders, now, _dateRange);
+    _cachedOrders = orders;
+    _cachedDerivedRange = _dateRange;
+    _cachedDerivedMinuteKey = minuteKey;
+    _cachedDerivedData = derived;
+    return derived;
+  }
+
+  _ReportsDerivedData _buildDerivedData(
+    List<PurchaseOrder> orders,
+    DateTime now,
+    DateTimeRange? range,
+  ) {
+    final filtered = _applyDateRange(orders, range);
+    final ordersWithBudget = _countWithBudget(filtered);
+    final totalBudget = _sumBudget(filtered);
+    final orderTimings = filtered
+        .map((order) => _orderTimingForOrder(order, now))
+        .toList()
+      ..sort((a, b) => b.total.compareTo(a.total));
+
+    return _ReportsDerivedData(
+      filtered: filtered,
+      totalOrders: filtered.length,
+      ordersWithBudget: ordersWithBudget,
+      totalBudget: totalBudget,
+      avgTicket: ordersWithBudget == 0 ? 0 : totalBudget / ordersWithBudget,
+      comparison: _budgetComparison(orders, range),
+      trendItems: _monthlyBudgetTrend(
+        range == null ? orders : filtered,
+        range: range,
+      ),
+      supplierItems: _budgetBySupplier(filtered),
+      areaItems: _budgetByArea(filtered),
+      urgencyItems: _budgetByUrgency(filtered),
+      diffByOrder: _discrepancyByOrder(filtered),
+      diffBySupplier: _discrepancyBySupplier(filtered),
+      diffByItem: _discrepancyByItem(filtered),
+      orderTimings: orderTimings,
+      statusAverageItems: _statusAverageItems(orderTimings),
+    );
+  }
+
+  bool _sameDateRange(DateTimeRange? left, DateTimeRange? right) {
+    if (identical(left, right)) return true;
+    if (left == null || right == null) return left == right;
+    return left.start == right.start && left.end == right.end;
+  }
 
   List<PurchaseOrder> _applyDateRange(
     List<PurchaseOrder> orders,
@@ -757,6 +802,42 @@ class _SectionTitle extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(title, style: Theme.of(context).textTheme.titleMedium);
   }
+}
+
+class _ReportsDerivedData {
+  const _ReportsDerivedData({
+    required this.filtered,
+    required this.totalOrders,
+    required this.ordersWithBudget,
+    required this.totalBudget,
+    required this.avgTicket,
+    required this.comparison,
+    required this.trendItems,
+    required this.supplierItems,
+    required this.areaItems,
+    required this.urgencyItems,
+    required this.diffByOrder,
+    required this.diffBySupplier,
+    required this.diffByItem,
+    required this.orderTimings,
+    required this.statusAverageItems,
+  });
+
+  final List<PurchaseOrder> filtered;
+  final int totalOrders;
+  final int ordersWithBudget;
+  final num totalBudget;
+  final num avgTicket;
+  final _PeriodComparison comparison;
+  final List<_BreakdownItem> trendItems;
+  final List<_BreakdownItem> supplierItems;
+  final List<_BreakdownItem> areaItems;
+  final List<_BreakdownItem> urgencyItems;
+  final List<_BreakdownItem> diffByOrder;
+  final List<_BreakdownItem> diffBySupplier;
+  final List<_BreakdownItem> diffByItem;
+  final List<_OrderTiming> orderTimings;
+  final List<_BreakdownItem> statusAverageItems;
 }
 
 class _StatCard extends StatelessWidget {

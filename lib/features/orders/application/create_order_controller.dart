@@ -23,6 +23,8 @@ class OrderItemDraft {
     this.estimatedDate,
     this.reviewFlagged = false,
     this.reviewComment,
+    this.receivedQuantity,
+    this.receivedComment,
   });
 
   final int line;
@@ -37,6 +39,8 @@ class OrderItemDraft {
   final DateTime? estimatedDate;
   final bool reviewFlagged;
   final String? reviewComment;
+  final num? receivedQuantity;
+  final String? receivedComment;
 
   OrderItemDraft copyWith({
     int? line,
@@ -55,6 +59,10 @@ class OrderItemDraft {
     bool clearBudget = false,
     bool clearSupplier = false,
     bool clearReviewComment = false,
+    bool clearReceivedQuantity = false,
+    bool clearReceivedComment = false,
+    num? receivedQuantity,
+    String? receivedComment,
   }) {
     final nextPieces = pieces ?? this.pieces;
     final nextQuantity = quantity ?? nextPieces;
@@ -71,6 +79,8 @@ class OrderItemDraft {
       estimatedDate: removeEstimatedDate ? null : (estimatedDate ?? this.estimatedDate),
       reviewFlagged: reviewFlagged ?? this.reviewFlagged,
       reviewComment: clearReviewComment ? null : (reviewComment ?? this.reviewComment),
+      receivedQuantity: clearReceivedQuantity ? null : (receivedQuantity ?? this.receivedQuantity),
+      receivedComment: clearReceivedComment ? null : (receivedComment ?? this.receivedComment),
     );
   }
 
@@ -88,6 +98,8 @@ class OrderItemDraft {
       estimatedDate: estimatedDate,
       reviewFlagged: reviewFlagged,
       reviewComment: reviewComment,
+      receivedQuantity: receivedQuantity,
+      receivedComment: receivedComment,
     );
   }
 
@@ -121,6 +133,8 @@ class OrderItemDraft {
       estimatedDate: item.estimatedDate,
       reviewFlagged: item.reviewFlagged,
       reviewComment: item.reviewComment,
+      receivedQuantity: item.receivedQuantity,
+      receivedComment: item.receivedComment,
     );
   }
 }
@@ -136,6 +150,11 @@ class CreateOrderState {
     this.returnCount = 0,
     this.resubmissionDates = const [],
     this.previewCreatedAt,
+    this.previewUpdatedAt,
+    this.previewAccepted = false,
+    this.scheduleChangeConfirmed = false,
+    this.baselineUrgency,
+    this.baselineRequestedDate,
     this.baselineSignature,
     this.baselineUpdatedAt,
     this.message,
@@ -151,10 +170,28 @@ class CreateOrderState {
   final int returnCount;
   final List<DateTime> resubmissionDates;
   final DateTime? previewCreatedAt;
+  final DateTime? previewUpdatedAt;
+  final bool previewAccepted;
+  final bool scheduleChangeConfirmed;
+  final PurchaseOrderUrgency? baselineUrgency;
+  final DateTime? baselineRequestedDate;
   final String? baselineSignature;
   final DateTime? baselineUpdatedAt;
   final String? message;
   final Object? error;
+
+  DateTime? get requestedDate {
+    return items.isEmpty ? null : items.first.estimatedDate;
+  }
+
+  bool get requiresScheduleChange => returnCount > 0;
+
+  bool get hasScheduleChange {
+    if (!requiresScheduleChange) return true;
+    if (scheduleChangeConfirmed) return true;
+    if (baselineUrgency != null && baselineUrgency != urgency) return true;
+    return !_isSameRequestedDate(baselineRequestedDate, requestedDate);
+  }
 
   CreateOrderState copyWith({
     PurchaseOrderUrgency? urgency,
@@ -166,9 +203,19 @@ class CreateOrderState {
     int? returnCount,
     List<DateTime>? resubmissionDates,
     DateTime? previewCreatedAt,
+    DateTime? previewUpdatedAt,
+    bool? previewAccepted,
+    bool? scheduleChangeConfirmed,
+    PurchaseOrderUrgency? baselineUrgency,
+    DateTime? baselineRequestedDate,
     String? baselineSignature,
     DateTime? baselineUpdatedAt,
     String? message,
+    bool clearPreviewUpdatedAt = false,
+    bool clearBaselineUrgency = false,
+    bool clearBaselineRequestedDate = false,
+    bool clearBaselineSignature = false,
+    bool clearBaselineUpdatedAt = false,
     bool clearMessage = false,
     Object? error,
     bool clearError = false,
@@ -183,8 +230,24 @@ class CreateOrderState {
       returnCount: returnCount ?? this.returnCount,
       resubmissionDates: resubmissionDates ?? this.resubmissionDates,
       previewCreatedAt: previewCreatedAt ?? this.previewCreatedAt,
-      baselineSignature: baselineSignature ?? this.baselineSignature,
-      baselineUpdatedAt: baselineUpdatedAt ?? this.baselineUpdatedAt,
+      previewUpdatedAt: clearPreviewUpdatedAt
+          ? null
+          : (previewUpdatedAt ?? this.previewUpdatedAt),
+      previewAccepted: previewAccepted ?? this.previewAccepted,
+      scheduleChangeConfirmed:
+          scheduleChangeConfirmed ?? this.scheduleChangeConfirmed,
+      baselineUrgency: clearBaselineUrgency
+          ? null
+          : (baselineUrgency ?? this.baselineUrgency),
+      baselineRequestedDate: clearBaselineRequestedDate
+          ? null
+          : (baselineRequestedDate ?? this.baselineRequestedDate),
+      baselineSignature: clearBaselineSignature
+          ? null
+          : (baselineSignature ?? this.baselineSignature),
+      baselineUpdatedAt: clearBaselineUpdatedAt
+          ? null
+          : (baselineUpdatedAt ?? this.baselineUpdatedAt),
       message: clearMessage ? null : (message ?? this.message),
       error: clearError ? null : (error ?? this.error),
     );
@@ -195,6 +258,11 @@ class CreateOrderState {
       urgency: PurchaseOrderUrgency.media,
       items: [OrderItemDraft.empty(1)],
       previewCreatedAt: DateTime.now(),
+      previewUpdatedAt: null,
+      previewAccepted: false,
+      scheduleChangeConfirmed: false,
+      baselineUrgency: null,
+      baselineRequestedDate: null,
       baselineSignature: null,
       baselineUpdatedAt: null,
     );
@@ -207,21 +275,29 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
   final Ref _ref;
 
   void setUrgency(PurchaseOrderUrgency urgency) {
+    if (urgency == state.urgency) return;
     final date = _dateFromUrgency(urgency);
     final updated = [
       for (final item in state.items) item.copyWith(estimatedDate: date),
     ];
-    state = state.copyWith(urgency: urgency, items: updated);
+    state = _markPreviewEdited(
+      state.copyWith(
+        urgency: urgency,
+        items: updated,
+        scheduleChangeConfirmed: false,
+      ),
+    );
   }
 
   void setNotes(String notes) {
-    state = state.copyWith(notes: notes);
+    if (notes == state.notes) return;
+    state = _markPreviewEdited(state.copyWith(notes: notes));
   }
 
   void syncUrgencyFromDate(DateTime date) {
     final nextUrgency = _urgencyFromDate(date);
     if (nextUrgency == state.urgency) return;
-    state = state.copyWith(urgency: nextUrgency);
+    state = _markPreviewEdited(state.copyWith(urgency: nextUrgency));
   }
 
   PurchaseOrderUrgency urgencyFromDate(DateTime date) {
@@ -260,8 +336,15 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
         returnCount: order.returnCount,
         resubmissionDates: order.resubmissionDates,
         previewCreatedAt: order.createdAt ?? DateTime.now(),
+        previewUpdatedAt: order.updatedAt,
+        previewAccepted: false,
+        scheduleChangeConfirmed: false,
+        baselineUrgency: order.urgency,
+        baselineRequestedDate: _requestedDateForItems(items),
+        clearPreviewUpdatedAt: order.updatedAt == null,
         baselineSignature: baselineSignature,
         baselineUpdatedAt: order.updatedAt,
+        clearBaselineUpdatedAt: order.updatedAt == null,
       );
     } catch (error, stack) {
       logError(error, stack, context: 'CreateOrderController.loadDraft');
@@ -296,6 +379,8 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
                   line: i + 1,
                   reviewFlagged: false,
                   clearReviewComment: true,
+                  clearReceivedQuantity: true,
+                  clearReceivedComment: true,
                 ),
             ];
       state = state.copyWith(
@@ -307,6 +392,13 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
         returnCount: 0,
         resubmissionDates: const [],
         previewCreatedAt: DateTime.now(),
+        previewAccepted: false,
+        scheduleChangeConfirmed: false,
+        clearPreviewUpdatedAt: true,
+        clearBaselineUrgency: true,
+        clearBaselineRequestedDate: true,
+        clearBaselineSignature: true,
+        clearBaselineUpdatedAt: true,
       );
     } catch (error, stack) {
       logError(error, stack, context: 'CreateOrderController.loadFromOrder');
@@ -334,12 +426,14 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
     if (urgency != null) {
       nextState = nextState.copyWith(urgency: urgency);
     }
-    state = nextState;
+    state = _markPreviewEdited(nextState);
   }
 
   void replaceItems(List<OrderItemDraft> items) {
     if (items.isEmpty) {
-      state = state.copyWith(items: [OrderItemDraft.empty(1)]);
+      state = _markPreviewEdited(
+        state.copyWith(items: [OrderItemDraft.empty(1)]),
+      );
       return;
     }
     final normalized = [
@@ -350,7 +444,7 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
     if (urgency != null) {
       next = next.copyWith(urgency: urgency);
     }
-    state = next;
+    state = _markPreviewEdited(next);
   }
 
   void removeItem(int index) {
@@ -364,7 +458,7 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
     if (urgency != null) {
       next = next.copyWith(urgency: urgency);
     }
-    state = next;
+    state = _markPreviewEdited(next);
   }
 
   void updateItem(int index, OrderItemDraft item) {
@@ -387,14 +481,34 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
         next = state.copyWith(items: nextItems, urgency: _urgencyFromDate(sharedDate));
       }
     }
-    state = next;
+    state = _markPreviewEdited(next);
   }
 
   void setMaxDeliveryDate(DateTime date) {
     final updated = [
       for (final item in state.items) item.copyWith(estimatedDate: date),
     ];
-    state = state.copyWith(items: updated, urgency: _urgencyFromDate(date));
+    state = _markPreviewEdited(
+      state.copyWith(
+        items: updated,
+        urgency: _urgencyFromDate(date),
+        scheduleChangeConfirmed: false,
+      ),
+    );
+  }
+
+  void refreshRequestedDateForCurrentUrgency() {
+    final date = _dateFromUrgency(state.urgency);
+    final updated = [
+      for (final item in state.items) item.copyWith(estimatedDate: date),
+    ];
+    state = _markPreviewEdited(
+      state.copyWith(
+        items: updated,
+        urgency: state.urgency,
+        scheduleChangeConfirmed: true,
+      ),
+    );
   }
 
   Future<String?> submit() async {
@@ -428,7 +542,7 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
             .toList(),
       );
       state = CreateOrderState.initial().copyWith(
-        message: 'Orden enviada a Compras',
+        message: 'Orden enviada y en proceso de confirmarción',
       );
       return orderId;
     } catch (error, stack) {
@@ -447,6 +561,10 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
 
   void reset() {
     state = CreateOrderState.initial();
+  }
+
+  void acceptPreview() {
+    state = state.copyWith(previewAccepted: true);
   }
 
   Future<AppUser?> _requireUser() async {
@@ -485,6 +603,10 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
     return PurchaseOrderUrgency.baja;
   }
 
+  DateTime? _requestedDateForItems(List<OrderItemDraft> items) {
+    return items.isEmpty ? null : items.first.estimatedDate;
+  }
+
   DateTime _dateFromUrgency(PurchaseOrderUrgency urgency) {
     final now = DateTime.now();
     final base = DateTime(now.year, now.month, now.day);
@@ -499,6 +621,21 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
         return base.add(const Duration(days: 14));
     }
   }
+
+  CreateOrderState _markPreviewEdited(CreateOrderState next) {
+    return next.copyWith(
+      previewUpdatedAt: DateTime.now(),
+      previewAccepted: false,
+    );
+  }
+}
+
+bool _isSameRequestedDate(DateTime? left, DateTime? right) {
+  if (identical(left, right)) return true;
+  if (left == null || right == null) return left == right;
+  return left.year == right.year &&
+      left.month == right.month &&
+      left.day == right.day;
 }
 
 String buildCreateOrderSignature({
@@ -545,6 +682,10 @@ String buildCreateOrderSignature({
       ..write(item.reviewFlagged ? '1' : '0')
       ..write('|')
       ..write(normalize(item.reviewComment))
+      ..write('|')
+      ..write(numOrEmpty(item.receivedQuantity))
+      ..write('|')
+      ..write(normalize(item.receivedComment))
       ..write(';');
   }
 

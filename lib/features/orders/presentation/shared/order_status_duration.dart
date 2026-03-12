@@ -64,24 +64,32 @@ class OrderStatusDurationPill extends StatelessWidget {
     required this.order,
     this.alignRight = true,
     this.prefix,
+    this.label,
+    this.durationOverride,
   });
 
   final PurchaseOrder order;
   final bool alignRight;
   final String? prefix;
+  final String? label;
+  final Duration? durationOverride;
 
   @override
   Widget build(BuildContext context) {
-    final since = order.statusEnteredAt ?? order.updatedAt ?? order.createdAt;
-    if (since == null) return const SizedBox.shrink();
+    Duration? diff = durationOverride;
+    if (diff == null) {
+      final since = order.statusEnteredAt ?? order.updatedAt ?? order.createdAt;
+      if (since == null) return const SizedBox.shrink();
 
-    final now = DateTime.now();
-    var diff = now.difference(since);
-    if (diff.isNegative) diff = Duration.zero;
+      final now = DateTime.now();
+      diff = now.difference(since);
+      if (diff.isNegative) diff = Duration.zero;
+    }
 
     final durationLabel = formatDurationLabel(diff);
     final statusLabel = order.status.label;
-    final text = '${prefix ?? 'Tiempo en $statusLabel'}: $durationLabel';
+    final baseLabel = label ?? prefix ?? 'Tiempo en $statusLabel';
+    final text = '$baseLabel: $durationLabel';
 
     return StatusDurationPill(
       text: text,

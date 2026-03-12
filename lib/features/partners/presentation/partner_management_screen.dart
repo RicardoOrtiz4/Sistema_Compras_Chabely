@@ -5,7 +5,6 @@ import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/providers.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
-import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/partners/data/partner_repository.dart';
 
 class PartnerManagementScreen extends ConsumerWidget {
@@ -26,17 +25,6 @@ class PartnerManagementScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(title),
-        actions: [
-          infoAction(
-            context,
-            title: title,
-            message:
-                'Administra ${type.pluralLabel.toLowerCase()} de esta empresa.\n'
-                'Usa "Nuevo" para agregar.\n'
-                'Editar cambia el nombre.\n'
-                'Eliminar borra el registro para todos.',
-          ),
-        ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _showUpsertDialog(context, ref, type),

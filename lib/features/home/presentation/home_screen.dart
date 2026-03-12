@@ -1,24 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:riverpod/legacy.dart';
+import 'package:flutter_riverpod/misc.dart';
 
 import 'package:sistema_compras/core/area_labels.dart';
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
+import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/widgets/app_logo.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
-import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/auth/domain/app_user.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
-import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 import 'package:sistema_compras/features/profile/presentation/profile_sheet.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
-
-final _reminderSeenUserIdProvider = StateProvider<String?>((ref) => null);
-final _reminderOpenProvider = StateProvider<bool>((ref) => false);
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -28,27 +24,43 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
-  bool _reminderScheduled = false;
+  ProviderSubscription<AsyncValue<AppUser?>>? _profileSubscription;
+  ProviderSubscription<CompanyBranding>? _brandingSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _profileSubscription = ref.listenManual<AsyncValue<AppUser?>>(
+      currentUserProfileProvider,
+      (previous, next) {
+        if (previous?.value == null && next.value != null) {
+          final branding = ref.read(currentBrandingProvider);
+          warmUpPdfAssets(branding);
+        }
+      },
+    );
+    _brandingSubscription = ref.listenManual<CompanyBranding>(
+      currentBrandingProvider,
+      (previous, next) {
+        if (previous?.id == next.id) return;
+        warmUpPdfAssets(next);
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _profileSubscription?.close();
+    _brandingSubscription?.close();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    ref.listen(currentUserProfileProvider, (previous, next) {
-      if (previous?.value == null && next.value != null) {
-        final branding = ref.read(currentBrandingProvider);
-        warmUpPdfAssets(branding);
-        warmUpPdfEngine(branding);
-      }
-    });
-    ref.listen(currentBrandingProvider, (previous, next) {
-      if (previous?.id == next.id) return;
-      warmUpPdfAssets(next);
-      warmUpPdfEngine(next);
-    });
     final scheme = Theme.of(context).colorScheme;
     final userAsync = ref.watch(currentUserProfileProvider);
     final user = userAsync.value;
     final branding = ref.watch(currentBrandingProvider);
-    final availableBrandings = ref.watch(availableBrandingsProvider);
     final isAdmin = user != null && isAdminRole(user.role);
     final canSwitchCompany = _canSwitchCompany(user, isAdmin);
     final isCompras = user != null && isComprasLabel(user.areaDisplay);
@@ -59,25 +71,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final isContabilidad =
         user != null && isContabilidadLabel(user.areaDisplay);
     final isAlmacen = user != null && isAlmacenLabel(user.areaDisplay);
-    final pendingAsync = ref.watch(pendingComprasOrdersProvider);
-    final cotizacionesAsync = ref.watch(cotizacionesOrdersProvider);
-    final rejectedAsync = ref.watch(rejectedOrdersProvider);
-    final direccionAsync = ref.watch(pendingDireccionOrdersProvider);
-    final etaAsync = ref.watch(pendingEtaOrdersProvider);
-    final contabilidadAsync = ref.watch(contabilidadOrdersProvider);
-    final almacenAsync = ref.watch(almacenOrdersProvider);
-    final pendingCount = pendingAsync.value?.length ?? 0;
-    final cotizacionesCount = cotizacionesAsync.value?.length ?? 0;
-    final readyToSendCount = _readyToSendCount(cotizacionesAsync.value);
-    final rejectedCount = rejectedAsync.value?.length ?? 0;
-    final direccionCount = direccionAsync.value?.length ?? 0;
-    final etaCount = etaAsync.value?.length ?? 0;
-    final contabilidadCount = contabilidadAsync.value?.length ?? 0;
-    final almacenCount = almacenAsync.value?.length ?? 0;
     final surfaceColor = scheme.surface;
 
     return Scaffold(
-      drawer: _HomeDrawer(isAdmin: isAdmin),
+      drawer: _HomeDrawer(
+        isAdmin: isAdmin,
+        onOpenProfile: () => showProfileSheet(context, ref),
+      ),
       appBar: AppBar(
         toolbarHeight: 96,
         backgroundColor: surfaceColor,
@@ -85,7 +85,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         title: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            const AppLogo(size: 72),
+            AppLogo(size: 72, logoAsset: branding.logoAsset),
             const SizedBox(width: 12),
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -102,16 +102,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         ),
         actions: [
           if (canSwitchCompany)
-            IconButton(
-              icon: const Icon(Icons.business_outlined),
-              tooltip: 'Cambiar empresa',
-              onPressed: () => _showCompanySwitcher(
-                context,
-                ref,
-                branding,
-                availableBrandings,
-              ),
-            ),
+            _CompanySwitcherAction(currentBranding: branding),
           if (user != null)
             IconButton(
               icon: const Icon(Icons.access_time),
@@ -124,15 +115,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               tooltip: 'Historial general',
               onPressed: () => guardedPush(context, '/orders/history/all'),
             ),
-          infoAction(
-            context,
-            title: 'Inicio',
-            message:
-                'Desde aquí accedes a los módulos según tu rol.\n'
-                'Usa los botones de historial para ver tus órdenes o el historial general.\n'
-                'Si tienes permiso, cambia empresa con el ícono de negocio.\n'
-                'Las tarjetas muestran conteos y te llevan a cada flujo.',
-          ),
         ],
       ),
       body: userAsync.when(
@@ -140,29 +122,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           if (user == null) {
             return const AppSplash();
           }
-          _maybeShowReminder(
-            context,
-            user: user,
-            isAdmin: isAdmin,
-            isCompras: isCompras,
-            isDireccionGeneral: isDireccionGeneral,
-            isContabilidad: isContabilidad,
-            isAlmacen: isAlmacen,
-            pendingCount: pendingCount,
-            cotizacionesCount: cotizacionesCount,
-            direccionCount: direccionCount,
-            etaCount: etaCount,
-            contabilidadCount: contabilidadCount,
-            almacenCount: almacenCount,
-            rejectedCount: rejectedCount,
-            pendingReady: pendingAsync.hasValue,
-            cotizacionesReady: cotizacionesAsync.hasValue,
-            direccionReady: direccionAsync.hasValue,
-            etaReady: etaAsync.hasValue,
-            contabilidadReady: contabilidadAsync.hasValue,
-            almacenReady: almacenAsync.hasValue,
-            rejectedReady: rejectedAsync.hasValue,
-          );
           final blocks = <_HomeBlockData>[
             _HomeBlockData(
               title: 'Crear orden de compra',
@@ -179,19 +138,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 icon: Icons.fact_check_outlined,
                 color: scheme.secondary,
                 foreground: scheme.onSecondary,
-                count: pendingCount,
+                countProvider: pendingComprasCountProvider,
                 onTap: () => guardedPush(context, '/orders/pending'),
               ),
             if (isAdmin || isCompras)
               _HomeBlockData(
                 title: 'Cotizaciones',
-                subtitle: readyToSendCount > 0
-                    ? 'Asignar proveedor y presupuesto | Listas para enviar: $readyToSendCount'
-                    : 'Asignar proveedor y presupuesto',
+                subtitle: 'Asignar proveedor y presupuesto',
                 icon: Icons.request_quote_outlined,
                 color: scheme.secondaryContainer,
                 foreground: scheme.onSecondaryContainer,
-                count: cotizacionesCount,
+                countProvider: cotizacionesModuleCountProvider,
                 onTap: () => guardedPush(context, '/orders/cotizaciones'),
               ),
             if (isAdmin || isDireccionGeneral)
@@ -201,7 +158,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 icon: Icons.approval_outlined,
                 color: scheme.tertiary,
                 foreground: scheme.onTertiary,
-                count: direccionCount,
+                countProvider: pendingDireccionBundleCountProvider,
                 onTap: () => guardedPush(context, '/orders/direccion'),
               ),
             if (isAdmin || isCompras)
@@ -211,7 +168,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 icon: Icons.assignment_turned_in_outlined,
                 color: scheme.secondary,
                 foreground: scheme.onSecondary,
-                count: etaCount,
+                countProvider: pendingEtaCountProvider,
                 onTap: () => guardedPush(context, '/orders/eta'),
               ),
             if (isAdmin || isContabilidad)
@@ -221,7 +178,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 icon: Icons.receipt_long_outlined,
                 color: scheme.tertiary,
                 foreground: scheme.onTertiary,
-                count: contabilidadCount,
+                countProvider: contabilidadCountProvider,
                 onTap: () => guardedPush(context, '/orders/contabilidad'),
               ),
             if (isAdmin || isAlmacen)
@@ -231,7 +188,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 icon: Icons.inventory_2_outlined,
                 color: scheme.primary,
                 foreground: scheme.onPrimary,
-                count: almacenCount,
+                countProvider: almacenCountProvider,
                 onTap: () => guardedPush(context, '/orders/almacen'),
               ),
 
@@ -242,7 +199,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               color: scheme.error,
               foreground: scheme.onError,
               isRejected: true,
-              count: rejectedCount,
+              countProvider: rejectedCountProvider,
               onTap: () => guardedPush(context, '/orders/rejected'),
             ),
           ];
@@ -301,329 +258,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ),
     );
   }
-
-  void _maybeShowReminder(
-    BuildContext context, {
-    required AppUser user,
-    required bool isAdmin,
-    required bool isCompras,
-    required bool isDireccionGeneral,
-    required bool isContabilidad,
-    required bool isAlmacen,
-    required int pendingCount,
-    required int cotizacionesCount,
-    required int direccionCount,
-    required int etaCount,
-    required int contabilidadCount,
-    required int almacenCount,
-    required int rejectedCount,
-    required bool pendingReady,
-    required bool cotizacionesReady,
-    required bool direccionReady,
-    required bool etaReady,
-    required bool contabilidadReady,
-    required bool almacenReady,
-    required bool rejectedReady,
-  }) {
-    if (!_isHomeRouteActive(context)) return;
-    final seenForUser = ref.read(_reminderSeenUserIdProvider);
-    if (seenForUser == user.id) return;
-    if (ref.read(_reminderOpenProvider)) return;
-    if (_reminderScheduled) return;
-    if (!_isReminderReady(
-      isAdmin: isAdmin,
-      isCompras: isCompras,
-      isDireccionGeneral: isDireccionGeneral,
-      isContabilidad: isContabilidad,
-      isAlmacen: isAlmacen,
-      pendingReady: pendingReady,
-      cotizacionesReady: cotizacionesReady,
-      direccionReady: direccionReady,
-      etaReady: etaReady,
-      contabilidadReady: contabilidadReady,
-      almacenReady: almacenReady,
-      rejectedReady: rejectedReady,
-    )) {
-      return;
-    }
-    final options = _buildReminderOptions(
-      isAdmin: isAdmin,
-      isCompras: isCompras,
-      isDireccionGeneral: isDireccionGeneral,
-      isContabilidad: isContabilidad,
-      isAlmacen: isAlmacen,
-      pendingCount: pendingCount,
-      cotizacionesCount: cotizacionesCount,
-      direccionCount: direccionCount,
-      etaCount: etaCount,
-      contabilidadCount: contabilidadCount,
-      almacenCount: almacenCount,
-      rejectedCount: rejectedCount,
-    );
-    if (options.isEmpty) {
-      return;
-    }
-    _reminderScheduled = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _reminderScheduled = false;
-      if (!mounted) {
-        return;
-      }
-      if (!_isHomeRouteActive(context)) return;
-      if (ref.read(_reminderOpenProvider)) return;
-      if (ref.read(_reminderSeenUserIdProvider) == user.id) return;
-      ref.read(_reminderSeenUserIdProvider.notifier).state = user.id;
-      ref.read(_reminderOpenProvider.notifier).state = true;
-      _showReminderDialog(context, options: options).then((selection) {
-        if (!mounted) return;
-        ref.read(_reminderOpenProvider.notifier).state = false;
-        if (selection == null) return;
-        guardedPush(context, selection.route);
-      });
-    });
-  }
 }
 
-bool _isHomeRouteActive(BuildContext context) {
-  final route = ModalRoute.of(context);
-  if (route == null) return true;
-  return route.isCurrent;
-}
+class _HomeDrawer extends StatelessWidget {
+  const _HomeDrawer({required this.isAdmin, required this.onOpenProfile});
 
-Future<_ReminderOption?> _showReminderDialog(
-  BuildContext context, {
-  required List<_ReminderOption> options,
-}) {
-  return showDialog<_ReminderOption>(
-    context: context,
-    barrierDismissible: false,
-    builder: (dialogContext) => AlertDialog(
-      title: const Text('Resumen de pendientes'),
-      content: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('Selecciona la sección a revisar:'),
-            const SizedBox(height: 12),
-            for (final option in options)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: _ReminderOptionTile(option: option),
-              ),
-          ],
-        ),
-      ),
-      actions: [
-        FilledButton(
-          onPressed: () => Navigator.pop(dialogContext),
-          child: const Text('Cerrar'),
-        ),
-      ],
-    ),
-  );
-}
-
-bool _isReminderReady({
-  required bool isAdmin,
-  required bool isCompras,
-  required bool isDireccionGeneral,
-  required bool isContabilidad,
-  required bool isAlmacen,
-  required bool pendingReady,
-  required bool cotizacionesReady,
-  required bool direccionReady,
-  required bool etaReady,
-  required bool contabilidadReady,
-  required bool almacenReady,
-  required bool rejectedReady,
-}) {
-  if (isAdmin || isCompras) {
-    if (!pendingReady || !cotizacionesReady || !etaReady) {
-      return false;
-    }
-  }
-  if (isAdmin || isDireccionGeneral) {
-    if (!direccionReady) return false;
-  }
-  if (isAdmin || isContabilidad) {
-    if (!contabilidadReady) return false;
-  }
-  if (isAdmin || isAlmacen) {
-    if (!almacenReady) return false;
-  }
-  if (!rejectedReady) return false;
-  return true;
-}
-
-List<_ReminderOption> _buildReminderOptions({
-  required bool isAdmin,
-  required bool isCompras,
-  required bool isDireccionGeneral,
-  required bool isContabilidad,
-  required bool isAlmacen,
-  required int pendingCount,
-  required int cotizacionesCount,
-  required int direccionCount,
-  required int etaCount,
-  required int contabilidadCount,
-  required int almacenCount,
-  required int rejectedCount,
-}) {
-  final options = <_ReminderOption>[];
-  if (isAdmin || isCompras) {
-    if (pendingCount > 0) {
-      options.add(
-        _ReminderOption(
-          'Órdenes por confirmar',
-          '/orders/pending',
-          pendingCount,
-        ),
-      );
-    }
-    if (cotizacionesCount > 0) {
-      options.add(
-        _ReminderOption(
-          'Cotizaciones',
-          '/orders/cotizaciones',
-          cotizacionesCount,
-        ),
-      );
-    }
-    if (etaCount > 0) {
-      options.add(
-        _ReminderOption(
-          'Pendientes de fecha estimada',
-          '/orders/eta',
-          etaCount,
-        ),
-      );
-    }
-  }
-  if (isAdmin || isDireccionGeneral) {
-    if (direccionCount > 0) {
-      options.add(
-        _ReminderOption(
-          'Dirección General',
-          '/orders/direccion',
-          direccionCount,
-        ),
-      );
-    }
-  }
-  if (isAdmin || isContabilidad) {
-    if (contabilidadCount > 0) {
-      options.add(
-        _ReminderOption(
-          'Contabilidad',
-          '/orders/contabilidad',
-          contabilidadCount,
-        ),
-      );
-    }
-  }
-  if (isAdmin || isAlmacen) {
-    if (almacenCount > 0) {
-      options.add(_ReminderOption('Almac?n', '/orders/almacen', almacenCount));
-    }
-  }
-  if (rejectedCount > 0) {
-    options.add(
-      _ReminderOption(
-        'Ordenes  rechazadas',
-        '/orders/rejected',
-        rejectedCount,
-        isRejected: true,
-      ),
-    );
-  }
-  return options;
-}
-
-int _readyToSendCount(List<PurchaseOrder>? orders) {
-  if (orders == null) return 0;
-  var count = 0;
-  for (final order in orders) {
-    if (_orderReadyToSend(order)) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-bool _orderReadyToSend(PurchaseOrder order) {
-  if (order.items.isEmpty) return false;
-  return order.items.every(_itemReadyForDashboard) && _hasQuoteLink(order);
-}
-
-bool _hasQuoteLink(PurchaseOrder order) {
-  return order.cotizacionLinks.any((link) => link.url.trim().isNotEmpty);
-}
-
-bool _itemReadyForDashboard(PurchaseOrderItem item) {
-  final supplier = (item.supplier ?? '').trim();
-  final budget = item.budget ?? 0;
-  return supplier.isNotEmpty && budget > 0;
-}
-
-class _ReminderOption {
-  const _ReminderOption(
-    this.label,
-    this.route,
-    this.count, {
-    this.isRejected = false,
-  });
-
-  final String label;
-  final String route;
-  final int count;
-  final bool isRejected;
-}
-
-class _ReminderOptionTile extends StatelessWidget {
-  const _ReminderOptionTile({required this.option});
-
-  final _ReminderOption option;
+  final bool isAdmin;
+  final VoidCallback onOpenProfile;
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final softError =
-        Color.lerp(scheme.error, Colors.white, 0.35) ?? scheme.error;
-    final badgeColor = softError;
-    final badgeTextColor = Colors.white;
-
-    return InkWell(
-      borderRadius: BorderRadius.circular(12),
-      onTap: () => Navigator.pop(context, option),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: scheme.outlineVariant),
-        ),
-        child: Row(
-          children: [
-            Expanded(child: Text(option.label)),
-            _CountBadge(
-              count: option.count,
-              color: badgeColor,
-              textColor: badgeTextColor,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _HomeDrawer extends ConsumerWidget {
-  const _HomeDrawer({required this.isAdmin});
-
-  final bool isAdmin;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
     return Drawer(
       child: SafeArea(
         child: ListView(
@@ -668,7 +312,7 @@ class _HomeDrawer extends ConsumerWidget {
               title: const Text('Perfil'),
               onTap: () {
                 Navigator.pop(context);
-                showProfileSheet(context, ref);
+                onOpenProfile();
               },
             ),
           ],
@@ -687,7 +331,7 @@ class _HomeBlockData {
     required this.foreground,
     required this.onTap,
     this.isRejected = false,
-    this.count,
+    this.countProvider,
   });
 
   final String title;
@@ -695,21 +339,33 @@ class _HomeBlockData {
   final IconData icon;
   final Color color;
   final Color foreground;
-  final int? count;
+  final ProviderListenable<AsyncValue<int>>? countProvider;
   final VoidCallback onTap;
   final bool isRejected;
 }
 
-class _HomeBlockCard extends StatelessWidget {
+class _HomeBlockCard extends StatefulWidget {
   const _HomeBlockCard({required this.data});
 
   final _HomeBlockData data;
 
   @override
+  State<_HomeBlockCard> createState() => _HomeBlockCardState();
+}
+
+class _HomeBlockCardState extends State<_HomeBlockCard> {
+  bool _hovered = false;
+
+  @override
   Widget build(BuildContext context) {
+    final data = widget.data;
     final background = data.color;
-    final borderColor = data.foreground.withOpacity(0.18);
-    final shadowColor = Colors.black.withOpacity(0.12);
+    final borderColor = _hovered
+        ? data.foreground.withValues(alpha: 0.34)
+        : data.foreground.withValues(alpha: 0.14);
+    final shadowColor = _hovered
+        ? data.foreground.withValues(alpha: 0.16)
+        : Colors.black.withValues(alpha: 0.08);
     final scheme = Theme.of(context).colorScheme;
     final softError =
         Color.lerp(scheme.error, Colors.white, 0.35) ?? scheme.error;
@@ -721,73 +377,228 @@ class _HomeBlockCard extends StatelessWidget {
       fontSize: 13.5,
     );
     final subtitleStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
-      color: data.foreground.withOpacity(0.85),
+      color: data.foreground.withValues(alpha: _hovered ? 0.88 : 0.8),
       fontSize: 11,
     );
-    final showBadge = data.count != null && data.count! > 0;
+    final iconSurface = _hovered
+        ? data.foreground.withValues(alpha: 0.18)
+        : data.foreground.withValues(alpha: 0.1);
 
-    return Material(
-      color: background,
-      borderRadius: BorderRadius.circular(22),
-      elevation: 0,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(22),
-        onTap: data.onTap,
-        child: Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        transform: Matrix4.translationValues(0, _hovered ? -2.5 : 0, 0),
+        child: Material(
+          color: background,
+          borderRadius: BorderRadius.circular(22),
+          elevation: 0,
+          child: InkWell(
             borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: borderColor, width: 1),
-            boxShadow: [
-              BoxShadow(
-                color: shadowColor,
-                blurRadius: 16,
-                offset: const Offset(0, 8),
-              ),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: data.foreground.withOpacity(0.18),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(data.icon, color: data.foreground, size: 20),
+            onTap: data.onTap,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(
+                  color: borderColor,
+                  width: _hovered ? 1.2 : 1,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: shadowColor,
+                    blurRadius: _hovered ? 24 : 14,
+                    offset: Offset(0, _hovered ? 12 : 8),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      data.title,
-                      style: titleStyle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  if (showBadge) ...[
-                    const SizedBox(width: 6),
-                    _CountBadge(
-                      count: data.count!,
-                      color: badgeColor,
-                      textColor: badgeTextColor,
-                    ),
-                  ],
                 ],
               ),
-              const SizedBox(height: 6),
-              Text(
-                data.subtitle,
-                style: subtitleStyle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: AnimatedOpacity(
+                        duration: const Duration(milliseconds: 180),
+                        opacity: _hovered ? 1 : 0.72,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(22),
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Colors.white.withValues(
+                                  alpha: _hovered ? 0.14 : 0.06,
+                                ),
+                                Colors.white.withValues(alpha: 0.02),
+                                Colors.transparent,
+                              ],
+                              stops: const [0, 0.38, 1],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    left: 10,
+                    right: 10,
+                    top: 0,
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOutCubic,
+                      height: 2.2,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(999),
+                        gradient: LinearGradient(
+                          colors: [
+                            data.foreground.withValues(
+                              alpha: _hovered ? 0.92 : 0.0,
+                            ),
+                            data.foreground.withValues(
+                              alpha: _hovered ? 0.26 : 0.0,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          AnimatedContainer(
+                            duration: const Duration(milliseconds: 180),
+                            curve: Curves.easeOutCubic,
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              color: iconSurface,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: data.foreground.withValues(
+                                  alpha: _hovered ? 0.18 : 0.08,
+                                ),
+                              ),
+                            ),
+                            child: Icon(
+                              data.icon,
+                              color: data.foreground,
+                              size: 20,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: AnimatedSlide(
+                              duration: const Duration(milliseconds: 180),
+                              curve: Curves.easeOutCubic,
+                              offset: _hovered
+                                  ? const Offset(0.01, 0)
+                                  : Offset.zero,
+                              child: Text(
+                                data.title,
+                                style: titleStyle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ),
+                          _HomeBlockBadgeSlot(
+                            data: data,
+                            hovered: _hovered,
+                            badgeColor: badgeColor,
+                            badgeTextColor: badgeTextColor,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      AnimatedSlide(
+                        duration: const Duration(milliseconds: 180),
+                        curve: Curves.easeOutCubic,
+                        offset: _hovered ? const Offset(0.01, 0) : Offset.zero,
+                        child: Text(
+                          data.subtitle,
+                          style: subtitleStyle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _HomeBlockBadgeSlot extends ConsumerWidget {
+  const _HomeBlockBadgeSlot({
+    required this.data,
+    required this.hovered,
+    required this.badgeColor,
+    required this.badgeTextColor,
+  });
+
+  final _HomeBlockData data;
+  final bool hovered;
+  final Color badgeColor;
+  final Color badgeTextColor;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final countProvider = data.countProvider;
+    if (countProvider == null) {
+      return const SizedBox.shrink();
+    }
+
+    final countAsync = ref.watch(countProvider);
+    final count = countAsync.valueOrNull;
+    final showBadge = count != null && count > 0;
+
+    if (!showBadge) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(left: 6),
+      child: AnimatedSlide(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        offset: hovered ? const Offset(0, -0.04) : Offset.zero,
+        child: _CountBadge(
+          count: count,
+          color: badgeColor,
+          textColor: badgeTextColor,
+        ),
+      ),
+    );
+  }
+}
+
+class _CompanySwitcherAction extends ConsumerWidget {
+  const _CompanySwitcherAction({required this.currentBranding});
+
+  final CompanyBranding currentBranding;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final availableBrandings = ref.watch(availableBrandingsProvider);
+    return IconButton(
+      icon: const Icon(Icons.business_outlined),
+      tooltip: 'Cambiar empresa',
+      onPressed: () => _showCompanySwitcher(
+        context,
+        ref,
+        currentBranding,
+        availableBrandings,
       ),
     );
   }

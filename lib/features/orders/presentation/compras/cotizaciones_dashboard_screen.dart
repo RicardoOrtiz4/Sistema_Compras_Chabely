@@ -1,9 +1,12 @@
-import 'dart:async';
+﻿import 'dart:async';
+
+import 'dart:collection';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
+import 'package:sistema_compras/core/extensions.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:sistema_compras/core/error_reporter.dart';
@@ -13,10 +16,9 @@ import 'package:sistema_compras/features/orders/application/order_providers.dart
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/domain/shared_quote.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_pdf_preload_gate.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
-import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
-import 'package:sistema_compras/features/orders/presentation/shared/order_search.dart';
 
 enum CotizacionesDashboardMode { compras, direccion }
 
@@ -42,108 +44,49 @@ class _CotizacionesDashboardScreenState
   final Set<String> _selectedOrderIds = <String>{};
   late final TextEditingController _bundleLabelController;
   late final TextEditingController _bundleLinkController;
-  late final TextEditingController _searchController;
-  final OrderSearchCache _searchCache = OrderSearchCache();
+  ProviderSubscription<AsyncValue<List<PurchaseOrder>>>? _legacyOrdersSubscription;
+  ProviderSubscription<AsyncValue<List<SharedQuote>>>? _legacyBundlesSubscription;
   bool _migrationInProgress = false;
   bool _migrationDone = false;
-  bool _sendingToDireccion = false;
-  bool _prefetchingDireccion = false;
   final Set<String> _bundleBusyIds = <String>{};
-  String? _lastDireccionPrefetchKey;
-  bool _prefetchScheduled = false;
-  Timer? _searchDebounce;
-  String _searchQuery = '';
+  final Set<String> _dismissedDireccionBundleIds = <String>{};
+  final Set<String> _editedDashboardOrderIds = <String>{};
+  final Set<String> _editedBundleIds = <String>{};
   int _orderLimit = defaultOrderPageSize;
   int _bundleLimit = defaultOrderPageSize;
+  List<PurchaseOrder>? _derivedOrdersRef;
+  List<PurchaseOrder>? _derivedAllOrdersRef;
+  List<SharedQuote>? _derivedBundlesRef;
+  List<PurchaseOrder>? _latestOrdersForMigration;
+  List<SharedQuote>? _latestBundlesForMigration;
+  bool? _derivedReadOnly;
+  _DashboardDerivedData? _derivedCache;
 
   bool get _isReadOnly => widget.mode == CotizacionesDashboardMode.direccion;
-
-  void _warmPdfCacheForDireccion(List<PurchaseOrder> orders) {
-    if (!_isReadOnly || orders.isEmpty) return;
-    final branding = ref.read(currentBrandingProvider);
-    final key = orders
-        .map((order) => '${order.id}:${order.updatedAt?.millisecondsSinceEpoch ?? 0}')
-        .join('|');
-    if (_lastDireccionPrefetchKey == key) return;
-    _lastDireccionPrefetchKey = key;
-    if (_prefetchScheduled) return;
-    _prefetchScheduled = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _prefetchScheduled = false;
-      if (!mounted) return;
-      setState(() => _prefetchingDireccion = true);
-      Future(() async {
-        try {
-          // Deja que el loader pinte y anime antes de iniciar el trabajo pesado.
-          await Future<void>.delayed(const Duration(milliseconds: 16));
-          if (!mounted) return;
-
-          final dataList = orders
-              .take(3)
-              .map((order) => buildPdfDataFromOrder(order, branding: branding))
-              .toList(growable: false);
-          if (dataList.isEmpty) {
-            if (mounted) {
-              setState(() => _prefetchingDireccion = false);
-            }
-            return;
-          }
-
-          for (final data in dataList) {
-            try {
-              // Cede el hilo entre PDFs para mantener la animación fluida.
-              await Future<void>.delayed(const Duration(milliseconds: 8));
-              await buildOrderPdf(data, useIsolate: true);
-            } catch (error, stack) {
-              logError(error, stack, context: 'DireccionDashboard.prefetch');
-            }
-          }
-        } finally {
-          if (mounted) {
-            setState(() => _prefetchingDireccion = false);
-          }
-        }
-      });
-    });
-  }
 
   @override
   void initState() {
     super.initState();
     _bundleLabelController = TextEditingController();
     _bundleLinkController = TextEditingController();
-    _searchController = TextEditingController();
+    _bindLegacyMigrationListeners();
+  }
+
+  @override
+  void didUpdateWidget(covariant CotizacionesDashboardScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.mode != widget.mode) {
+      _unbindLegacyMigrationListeners();
+      _bindLegacyMigrationListeners();
+    }
   }
 
   @override
   void dispose() {
+    _unbindLegacyMigrationListeners();
     _bundleLabelController.dispose();
     _bundleLinkController.dispose();
-    _searchDebounce?.cancel();
-    _searchController.dispose();
     super.dispose();
-  }
-
-  void _updateSearch(String value) {
-    _searchDebounce?.cancel();
-    _searchDebounce = Timer(const Duration(milliseconds: 250), () {
-      if (!mounted) return;
-      setState(() {
-        _searchQuery = value;
-        _orderLimit = defaultOrderPageSize;
-        _bundleLimit = defaultOrderPageSize;
-      });
-    });
-  }
-
-  void _clearSearch() {
-    _searchDebounce?.cancel();
-    _searchController.clear();
-    setState(() {
-      _searchQuery = '';
-      _orderLimit = defaultOrderPageSize;
-      _bundleLimit = defaultOrderPageSize;
-    });
   }
 
   void _loadMoreOrders() {
@@ -159,68 +102,42 @@ class _CotizacionesDashboardScreenState
     final ordersAsync = widget.mode == CotizacionesDashboardMode.compras
         ? ref.watch(cotizacionesOrdersProvider)
         : ref.watch(pendingDireccionOrdersProvider);
+    final allOrdersAsync = _isReadOnly
+        ? const AsyncValue<List<PurchaseOrder>>.data(<PurchaseOrder>[])
+        : ref.watch(comprasDashboardAllOrdersProvider);
     final bundlesAsync = ref.watch(sharedQuotesProvider);
 
     final body = ordersAsync.when(
-      data: (orders) => bundlesAsync.when(
-        data: (bundles) {
-          if (!_isReadOnly) {
-            _maybeMigrateLegacyLinks(orders, bundles);
-          }
-
-          final visibleOrders = _isReadOnly
-              ? orders
-              : orders.where(_orderReady).toList();
-          _warmPdfCacheForDireccion(orders);
-          _searchCache.retainFor(visibleOrders);
-          final ordersById = {for (final order in orders) order.id: order};
-          final visibleBundlesBase = _filterBundlesForOrders(bundles, ordersById);
+      data: (orders) => allOrdersAsync.when(
+        data: (allOrders) => bundlesAsync.when(
+          data: (bundles) {
+          final derived = _resolveDerivedData(
+            orders,
+            bundles,
+            allOrders: allOrders,
+          );
+          final visibleOrders = derived.visibleOrders;
+          final ordersById = derived.ordersById;
           final visibleBundles = _isReadOnly
-              ? visibleBundlesBase
-                  .where(
-                    (bundle) => bundle.orderIds.any(
-                      (id) =>
-                          ordersById.containsKey(id) &&
-                          !bundle.approvedOrderIds.contains(id),
-                    ),
-                  )
-                  .toList()
-              : visibleBundlesBase;
-          final quotesById = {
-            for (final bundle in bundles) bundle.id: bundle,
-          };
-          final trimmedQuery = _searchQuery.trim();
-          final filteredOrders = trimmedQuery.isEmpty
-              ? visibleOrders
-              : visibleOrders
-                  .where(
-                    (order) => orderMatchesSearch(
-                      order,
-                      trimmedQuery,
-                      cache: _searchCache,
-                    ),
-                  )
-                  .toList();
+              ? derived.visibleBundles
+                    .where(
+                      (bundle) =>
+                          !_dismissedDireccionBundleIds.contains(bundle.id),
+                    )
+                    .toList(growable: false)
+              : derived.visibleBundles;
+          final quotesById = derived.quotesById;
+          final filteredOrders = visibleOrders;
           final limitedOrders = _isReadOnly
               ? filteredOrders
               : filteredOrders.take(_orderLimit).toList();
-          final filteredBundles = trimmedQuery.isEmpty
-              ? visibleBundles
-              : visibleBundles
-                  .where(
-                    (bundle) => _bundleMatchesSearch(
-                      bundle,
-                      ordersById,
-                      trimmedQuery,
-                    ),
-                  )
-                  .toList();
+          final filteredBundles = visibleBundles;
           final limitedBundles = filteredBundles.take(_bundleLimit).toList();
           final canLoadMoreOrders =
               !_isReadOnly && filteredOrders.length > limitedOrders.length;
           final canLoadMoreBundles =
               filteredBundles.length > limitedBundles.length;
-          final bundleCountByOrder = _bundleCountByOrder(visibleBundles);
+          final bundleCountByOrder = derived.bundleCountByOrder;
           final visibleOrderIds = visibleOrders.map((order) => order.id).toSet();
           final selectedVisibleIds =
               _selectedOrderIds.intersection(visibleOrderIds);
@@ -228,141 +145,118 @@ class _CotizacionesDashboardScreenState
           final selectedLimitedIds =
               selectedVisibleIds.intersection(limitedOrderIds);
 
-          final ordersReadyToSend =
-              _isReadOnly ? const <PurchaseOrder>[] : _ordersReadyToSend(visibleOrders);
-          final ordersReadyIds = ordersReadyToSend.map((order) => order.id).toSet();
-          final bundlesReadyToSend = _isReadOnly
-              ? const <SharedQuote>[]
-              : visibleBundles
-                  .where((bundle) => bundle.orderIds.any(ordersReadyIds.contains))
-                  .toList();
-
-          final showEmptySearch = trimmedQuery.isNotEmpty &&
-              filteredOrders.isEmpty &&
-              filteredBundles.isEmpty;
-
-          return Column(
+          final content = Column(
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                child: TextField(
-                  controller: _searchController,
-                  decoration: InputDecoration(
-                    labelText:
-                        'Buscar por folio, solicitante, área, proveedor, link...',
-                    prefixIcon: const Icon(Icons.search),
-                    suffixIcon: _searchQuery.isEmpty
-                        ? null
-                        : IconButton(
-                            icon: const Icon(Icons.clear),
-                            onPressed: _clearSearch,
-                          ),
-                  ),
-                  onChanged: _updateSearch,
-                ),
-              ),
-              const SizedBox(height: 12),
               Expanded(
-                child: showEmptySearch
-                    ? const Center(
-                        child: Text('No hay resultados con ese filtro.'),
-                      )
-                    : ListView(
-                        padding: const EdgeInsets.all(16),
-                        children: [
-                          if (!_isReadOnly) ...[
-                            _OrdersSection(
-                              orders: limitedOrders,
-                              readOnly: _isReadOnly,
-                              selectedOrderIds: selectedLimitedIds,
-                              bundleCountByOrder: bundleCountByOrder,
-                              onToggleSelection: _toggleSelection,
-                              onSelectAllPending: _selectAllPending,
-                              onClearSelection: _clearSelection,
-                              onOpenOrder: (order) => _showOrderDetails(order),
-                            ),
-                            if (canLoadMoreOrders) ...[
-                              const SizedBox(height: 8),
-                              Center(
-                                child: OutlinedButton.icon(
-                                  onPressed: _loadMoreOrders,
-                                  icon: const Icon(Icons.expand_more),
-                                  label: const Text('Ver más'),
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                            ],
-                            const SizedBox(height: 16),
-                          ],
-                          _BundlesSection(
-                            bundles: limitedBundles,
-                            ordersById: ordersById,
-                            readOnly: _isReadOnly,
-                            showOpenQuote: _isReadOnly,
-                            onOpenQuoteLink: _openLink,
-                            busyBundleIds: _bundleBusyIds,
-                            selectedCount: selectedVisibleIds.length,
-                            emptyMessage: _isReadOnly
-                                ? 'Aún no hay cotizaciones enviadas.'
-                                : 'Aún no hay cotizaciones registradas.',
-                            labelController: _bundleLabelController,
-                            linkController: _bundleLinkController,
-                            onCreateBundle: _isReadOnly
-                                ? null
-                                : () => _createBundle(visibleOrders),
-                            onRejectBundle: _isReadOnly
-                                ? (bundle) => _handleRejectBundle(
-                                      bundle,
-                                      ordersById,
-                                    )
-                                : null,
-                            onSendToEta: _isReadOnly
-                                ? (bundle) => _handleSendToEtaBundle(
-                                      bundle,
-                                      ordersById,
-                                      quotesById,
-                                    )
-                                : null,
-                            onEditBundle: _isReadOnly ? null : _editBundleLink,
-                            onManageBundle: _isReadOnly
-                                ? null
-                                : (bundle) => _manageBundle(bundle, visibleOrders),
-                            onDeleteBundle: _isReadOnly
-                                ? null
-                                : (bundle) => _deleteBundle(bundle, ordersById),
-                            onOpenLink: _openLink,
-                            onOpenOrder: widget.onOpenOrder,
-                          ),
-                          if (canLoadMoreBundles) ...[
-                            const SizedBox(height: 8),
-                            Center(
-                              child: OutlinedButton.icon(
-                                onPressed: _loadMoreBundles,
-                                icon: const Icon(Icons.expand_more),
-                                label: const Text('Ver más'),
-                              ),
-                            ),
-                          ],
-                          if (!_isReadOnly) ...[
-                            const SizedBox(height: 16),
-                            _SendToDireccionSection(
-                              ordersCount: ordersReadyToSend.length,
-                              bundlesCount: bundlesReadyToSend.length,
-                              isBusy: _sendingToDireccion,
-                              onSend: ordersReadyToSend.isEmpty || _sendingToDireccion
-                                  ? null
-                                  : () => _confirmSendToDireccion(ordersReadyToSend),
-                            ),
-                          ],
-                        ],
+                child: ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    if (!_isReadOnly) ...[
+                      _OrdersSection(
+                        orders: limitedOrders,
+                        readOnly: _isReadOnly,
+                        selectedOrderIds: selectedLimitedIds,
+                        bundleCountByOrder: bundleCountByOrder,
+                        onToggleSelection: _toggleSelection,
+                        onSelectAllPending: _selectAllPending,
+                        onClearSelection: _clearSelection,
+                        onOpenOrder: (order) => guardedPdfPush(
+                          context,
+                          '/orders/${order.id}/pdf',
+                        ),
                       ),
+                      if (canLoadMoreOrders) ...[
+                        const SizedBox(height: 8),
+                        Center(
+                          child: OutlinedButton.icon(
+                            onPressed: _loadMoreOrders,
+                            icon: const Icon(Icons.expand_more),
+                            label: const Text('Ver mÃ¡s'),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+                      const SizedBox(height: 16),
+                    ],
+                    _BundlesSection(
+                      bundles: limitedBundles,
+                      ordersById: ordersById,
+                      readOnly: _isReadOnly,
+                      showOpenQuote: _isReadOnly,
+                      onOpenQuoteLink: _openLink,
+                      busyBundleIds: _bundleBusyIds,
+                      selectedCount: selectedVisibleIds.length,
+                      emptyMessage: _isReadOnly
+                          ? 'Aún no hay cotizaciones enviadas.'
+                          : 'Aún no hay cotizaciones registradas.',
+                      labelController: _bundleLabelController,
+                      linkController: _bundleLinkController,
+                      onCreateBundle: _isReadOnly
+                          ? null
+                          : () => _createBundle(visibleOrders),
+                      onRejectBundle: _isReadOnly
+                          ? (bundle) => _handleRejectBundle(
+                                bundle,
+                                ordersById,
+                              )
+                          : null,
+                      onSendToDireccion: _isReadOnly
+                          ? null
+                          : (bundle) => _sendBundleToDireccion(
+                                bundle,
+                                ordersById,
+                              ),
+                      onSendToEta: _isReadOnly
+                          ? (bundle) => _handleSendToEtaBundle(
+                                bundle,
+                                ordersById,
+                                quotesById,
+                              )
+                          : null,
+                      onEditBundle: _isReadOnly
+                          ? null
+                          : (bundle) => _editBundle(bundle, visibleOrders),
+                      onDeleteBundle: _isReadOnly
+                          ? null
+                          : (bundle) => _deleteBundle(bundle, ordersById),
+                      onOpenLink: _openLink,
+                      onOpenOrder:
+                          widget.onOpenOrder ??
+                          (orderId) => guardedPdfPush(
+                                context,
+                                '/orders/$orderId/pdf',
+                              ),
+                      onEditOrder: _isReadOnly ? null : _editOrderDataFromDashboard,
+                      editedOrderIds: _editedDashboardOrderIds,
+                    ),
+                    if (canLoadMoreBundles) ...[
+                      const SizedBox(height: 8),
+                      Center(
+                        child: OutlinedButton.icon(
+                          onPressed: _loadMoreBundles,
+                          icon: const Icon(Icons.expand_more),
+                          label: const Text('Ver más'),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ),
             ],
           );
-        },
+          return OrderPdfPreloadGate(
+            orders: visibleOrders,
+            child: content,
+          );
+          },
+          loading: () => const AppSplash(),
+          error: (error, stack) => _ErrorPanel(
+            message: reportError(error, stack, context: 'CotizacionesDashboard.bundles'),
+          ),
+        ),
         loading: () => const AppSplash(),
         error: (error, stack) => _ErrorPanel(
-          message: reportError(error, stack, context: 'CotizacionesDashboard.bundles'),
+          message: reportError(error, stack, context: 'CotizacionesDashboard.allOrders'),
         ),
       ),
       loading: () => const AppSplash(),
@@ -371,18 +265,7 @@ class _CotizacionesDashboardScreenState
       ),
     );
 
-    final showLoadingOverlay = _isReadOnly && _prefetchingDireccion;
-    final composedBody = _isReadOnly
-        ? Stack(
-            children: [
-              body,
-              if (showLoadingOverlay)
-                const Positioned.fill(
-                  child: AppSplash(),
-                ),
-            ],
-          )
-        : body;
+    final composedBody = body;
 
     if (widget.embedded) {
       return composedBody;
@@ -399,6 +282,111 @@ class _CotizacionesDashboardScreenState
       ),
       body: composedBody,
     );
+  }
+
+  void _bindLegacyMigrationListeners() {
+    if (_isReadOnly) return;
+
+    final ordersProvider = widget.mode == CotizacionesDashboardMode.compras
+        ? cotizacionesOrdersProvider
+        : pendingDireccionOrdersProvider;
+    _latestOrdersForMigration = ref.read(ordersProvider).valueOrNull;
+    _latestBundlesForMigration = ref.read(sharedQuotesProvider).valueOrNull;
+
+    _legacyOrdersSubscription =
+        ref.listenManual<AsyncValue<List<PurchaseOrder>>>(ordersProvider, (
+      _,
+      next,
+    ) {
+      _latestOrdersForMigration = next.valueOrNull;
+      _triggerLegacyMigrationIfReady();
+    });
+    _legacyBundlesSubscription =
+        ref.listenManual<AsyncValue<List<SharedQuote>>>(sharedQuotesProvider, (
+      _,
+      next,
+    ) {
+      _latestBundlesForMigration = next.valueOrNull;
+      _triggerLegacyMigrationIfReady();
+    });
+    _triggerLegacyMigrationIfReady();
+  }
+
+  void _unbindLegacyMigrationListeners() {
+    _legacyOrdersSubscription?.close();
+    _legacyOrdersSubscription = null;
+    _legacyBundlesSubscription?.close();
+    _legacyBundlesSubscription = null;
+    _latestOrdersForMigration = null;
+    _latestBundlesForMigration = null;
+  }
+
+  void _triggerLegacyMigrationIfReady() {
+    if (_isReadOnly) return;
+    final orders = _latestOrdersForMigration;
+    final bundles = _latestBundlesForMigration;
+    if (orders == null || bundles == null) return;
+    _maybeMigrateLegacyLinks(orders, bundles);
+  }
+
+  _DashboardDerivedData _resolveDerivedData(
+    List<PurchaseOrder> orders,
+    List<SharedQuote> bundles,
+    {
+    List<PurchaseOrder>? allOrders,
+  }
+  ) {
+    final cached = _derivedCache;
+    if (cached != null &&
+        identical(_derivedOrdersRef, orders) &&
+        identical(_derivedAllOrdersRef, allOrders) &&
+        identical(_derivedBundlesRef, bundles) &&
+        _derivedReadOnly == _isReadOnly) {
+      return cached;
+    }
+
+    final ordersForLookup = _isReadOnly ? orders : (allOrders ?? orders);
+    final ordersById = {for (final order in ordersForLookup) order.id: order};
+    final visibleOrders = _isReadOnly
+        ? List<PurchaseOrder>.unmodifiable(orders)
+        : List<PurchaseOrder>.unmodifiable(orders.where(_orderReady));
+    final visibleOrderIds = visibleOrders.map((order) => order.id).toSet();
+    final visibleBundlesBase = _isReadOnly
+        ? List<SharedQuote>.unmodifiable(
+            _filterBundlesForOrders(bundles, ordersById),
+          )
+        : List<SharedQuote>.unmodifiable(
+            _visibleComprasBundles(
+              bundles: bundles,
+              visibleOrderIds: visibleOrderIds,
+              ordersById: ordersById,
+            ),
+          );
+    final visibleBundles = _isReadOnly
+        ? List<SharedQuote>.unmodifiable(
+            visibleBundlesBase.where(
+              (bundle) => bundle.orderIds.any(
+                (id) =>
+                    ordersById.containsKey(id) &&
+                    !bundle.approvedOrderIds.contains(id),
+              ),
+            ).where((bundle) => !bundle.needsUpdate),
+          )
+        : visibleBundlesBase;
+    final quotesById = {for (final bundle in bundles) bundle.id: bundle};
+    final derived = _DashboardDerivedData(
+      visibleOrders: visibleOrders,
+      ordersById: ordersById,
+      visibleBundles: visibleBundles,
+      quotesById: quotesById,
+      bundleCountByOrder: _bundleCountByOrder(visibleBundles),
+    );
+    _derivedOrdersRef = orders;
+    _derivedAllOrdersRef = allOrders;
+    _derivedBundlesRef = bundles;
+    _derivedReadOnly = _isReadOnly;
+    _derivedCache = derived;
+    return derived;
   }
 
   void _toggleSelection(String orderId, bool selected) {
@@ -426,20 +414,15 @@ class _CotizacionesDashboardScreenState
     setState(() => _selectedOrderIds.clear());
   }
 
-  void _showOrderDetails(PurchaseOrder order) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => _OrderDetailsSheet(order: order),
-    );
-  }
-
   Future<void> _createBundle(List<PurchaseOrder> orders) async {
     if (_selectedOrderIds.isEmpty) return;
 
     final link = _bundleLinkController.text.trim();
     final label = _bundleLabelController.text.trim();
+    final bundles = ref.read(sharedQuotesProvider).maybeWhen(
+          data: (items) => items,
+          orElse: () => const <SharedQuote>[],
+        );
     final selectedOrders = orders
         .where((order) => _selectedOrderIds.contains(order.id))
         .toList();
@@ -448,8 +431,21 @@ class _CotizacionesDashboardScreenState
       _showMessage('Ingresa un link de cotizacion.');
       return;
     }
+    if (label.isEmpty) {
+      _showMessage('Ingresa una etiqueta.');
+      return;
+    }
     if (!_isValidUrl(link)) {
       _showMessage('Ingresa un link valido.');
+      return;
+    }
+    final duplicateMessage = _validateBundleUniqueness(
+      bundles: bundles,
+      label: label,
+      link: link,
+    );
+    if (duplicateMessage != null) {
+      _showMessage(duplicateMessage);
       return;
     }
 
@@ -468,7 +464,7 @@ class _CotizacionesDashboardScreenState
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               const SizedBox(height: 12),
-              if (label.isNotEmpty) Text('Etiqueta: $label'),
+              Text('Etiqueta: $label'),
               Text('Link: $link'),
               const SizedBox(height: 12),
               for (final order in selectedOrders)
@@ -514,56 +510,15 @@ class _CotizacionesDashboardScreenState
     }
   }
 
-  Future<void> _editBundleLink(SharedQuote bundle) async {
-    final controller = TextEditingController(text: bundle.pdfUrl);
-
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Actualizar link'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            labelText: 'Link de cotizacion',
-            prefixIcon: Icon(Icons.link),
-          ),
-          keyboardType: TextInputType.url,
-          textInputAction: TextInputAction.done,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Guardar'),
-          ),
-        ],
-      ),
-    );
-
-    final link = controller.text.trim();
-    controller.dispose();
-
-    if (result != true) return;
-    if (!_isValidUrl(link)) {
-      _showMessage('Ingresa un link valido.');
-      return;
-    }
-
-    try {
-      final repo = ref.read(purchaseOrderRepositoryProvider);
-      await repo.updateSharedQuoteLink(quote: bundle, pdfUrl: _normalizeLink(link));
-      if (!mounted) return;
-      _showMessage('Link actualizado.');
-    } catch (error, stack) {
-      if (!mounted) return;
-      _showMessage(reportError(error, stack, context: 'CotizacionesDashboard.updateLink'));
-    }
-  }
-
-  Future<void> _manageBundle(SharedQuote bundle, List<PurchaseOrder> orders) async {
+  Future<void> _editBundle(
+    SharedQuote bundle,
+    List<PurchaseOrder> orders,
+  ) async {
+    final linkController = TextEditingController(text: bundle.pdfUrl);
+    final bundles = ref.read(sharedQuotesProvider).maybeWhen(
+          data: (items) => items,
+          orElse: () => const <SharedQuote>[],
+        );
     final selected = bundle.orderIds.toSet();
     final availableOrders = orders.toList();
 
@@ -571,12 +526,27 @@ class _CotizacionesDashboardScreenState
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setStateDialog) => AlertDialog(
-          title: Text('Ordenes en ${_bundleLabel(bundle)}'),
+          title: Text('Editar agrupacion ${_bundleLabel(bundle)}'),
           content: SizedBox(
             width: double.maxFinite,
             child: ListView(
               shrinkWrap: true,
               children: [
+                TextField(
+                  controller: linkController,
+                  decoration: const InputDecoration(
+                    labelText: 'Link de cotizacion',
+                    prefixIcon: Icon(Icons.link),
+                  ),
+                  keyboardType: TextInputType.url,
+                  textInputAction: TextInputAction.next,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Órdenes en la agrupación',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                const SizedBox(height: 8),
                 for (final order in availableOrders)
                   CheckboxListTile(
                     value: selected.contains(order.id),
@@ -589,7 +559,7 @@ class _CotizacionesDashboardScreenState
                         }
                       });
                     },
-                    title: Text(order.requesterName),
+                    title: Text(order.id),
                     subtitle: Text(order.areaName),
                   ),
                 if (bundle.orderIds.any((id) => !availableOrders.any((o) => o.id == id)))
@@ -617,7 +587,28 @@ class _CotizacionesDashboardScreenState
       ),
     );
 
+    final link = linkController.text.trim();
+    linkController.dispose();
+
     if (result != true) return;
+    if (selected.isEmpty) {
+      _showMessage('La agrupacion debe conservar al menos una orden.');
+      return;
+    }
+    if (!_isValidUrl(link)) {
+      _showMessage('Ingresa un link valido.');
+      return;
+    }
+    final duplicateMessage = _validateBundleUniqueness(
+      bundles: bundles,
+      label: bundle.supplier,
+      link: link,
+      editingBundleId: bundle.id,
+    );
+    if (duplicateMessage != null) {
+      _showMessage(duplicateMessage);
+      return;
+    }
 
     final availableIds = orders.map((o) => o.id).toSet();
     final toAdd = selected.difference(bundle.orderIds.toSet()).toList();
@@ -627,27 +618,62 @@ class _CotizacionesDashboardScreenState
 
     try {
       final repo = ref.read(purchaseOrderRepositoryProvider);
+      final normalizedLink = _normalizeLink(link);
+      var currentQuote = bundle;
+      if (normalizedLink != bundle.pdfUrl.trim()) {
+        await repo.updateSharedQuoteLink(quote: bundle, pdfUrl: normalizedLink);
+        currentQuote = SharedQuote(
+          id: bundle.id,
+          supplier: bundle.supplier,
+          orderIds: bundle.orderIds,
+          pdfUrl: normalizedLink,
+          approvedOrderIds: bundle.approvedOrderIds,
+          approvedAt: bundle.approvedAt,
+          rejectedOrderIds: bundle.rejectedOrderIds,
+          rejectionComment: bundle.rejectionComment,
+          rejectedAt: bundle.rejectedAt,
+          rejectedByName: bundle.rejectedByName,
+          rejectedByArea: bundle.rejectedByArea,
+          needsUpdate: false,
+          version: bundle.version + 1,
+        );
+      }
       if (toAdd.isNotEmpty) {
-        await repo.linkOrdersToSharedQuote(quote: bundle, orderIds: toAdd);
+        await repo.linkOrdersToSharedQuote(quote: currentQuote, orderIds: toAdd);
       }
       for (final orderId in toRemove) {
         final order = orders.firstWhere((o) => o.id == orderId);
-        await repo.unlinkOrderFromSharedQuote(order: order, quote: bundle);
+        await repo.unlinkOrderFromSharedQuote(order: order, quote: currentQuote);
+      }
+      if (mounted) {
+        setState(() => _editedBundleIds.add(bundle.id));
       }
       if (!mounted) return;
-      _showMessage('Cotizacion actualizada.');
+      _showMessage('Agrupacion actualizada.');
     } catch (error, stack) {
       if (!mounted) return;
-      _showMessage(reportError(error, stack, context: 'CotizacionesDashboard.manage'));
+      _showMessage(reportError(error, stack, context: 'CotizacionesDashboard.editBundle'));
     }
+  }
+
+  Future<void> _editOrderDataFromDashboard(String orderId) async {
+    final result = await guardedPush<Object?>(
+      context,
+      '/orders/cotizaciones/$orderId?fromDashboard=1',
+    );
+    if (!mounted) return;
+    if (result != null) {
+      setState(() => _editedDashboardOrderIds.add(orderId));
+    }
+    ref.invalidate(orderByIdStreamProvider(orderId));
   }
 
   Future<void> _deleteBundle(SharedQuote bundle, Map<String, PurchaseOrder> ordersById) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Eliminar ${_bundleLabel(bundle)}'),
-        content: const Text('Se desvincularan todas las ordenes de esta cotizacion.'),
+        title: Text('Eliminar agrupacion ${_bundleLabel(bundle)}'),
+        content: const Text('Se desvincularan todas las ordenes de esta agrupacion.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -672,7 +698,7 @@ class _CotizacionesDashboardScreenState
         }
       }
       if (!mounted) return;
-      _showMessage('Cotizacion eliminada.');
+      _showMessage('Agrupacion eliminada.');
     } catch (error, stack) {
       if (!mounted) return;
       _showMessage(reportError(error, stack, context: 'CotizacionesDashboard.delete'));
@@ -700,19 +726,47 @@ class _CotizacionesDashboardScreenState
     }
   }
 
-  Future<void> _confirmSendToDireccion(List<PurchaseOrder> orders) async {
-    if (orders.isEmpty) return;
-    if (_sendingToDireccion) return;
+  Future<void> _sendBundleToDireccion(
+    SharedQuote bundle,
+    Map<String, PurchaseOrder> ordersById,
+  ) async {
+    if (_bundleBusyIds.contains(bundle.id)) return;
 
-    final count = orders.length;
+    final orders = bundle.orderIds
+        .map((id) => ordersById[id])
+        .whereType<PurchaseOrder>()
+        .toList();
+    final readyOrders = _ordersReadyToSend(orders);
+    if (readyOrders.isEmpty) {
+      _showMessage('Esta agrupacion no tiene ordenes listas para enviar.');
+      return;
+    }
+
+    final actor = ref.read(currentUserProfileProvider).value;
+    if (actor == null) {
+      _showMessage('Perfil no disponible.');
+      return;
+    }
+
+    final count = readyOrders.length;
+    final processedName = actor.name.trim().isEmpty ? 'Tu nombre' : actor.name.trim();
+    final processedArea = actor.areaDisplay.trim().isEmpty
+        ? 'Tu area'
+        : actor.areaDisplay.trim();
+
+    if (!_bundleHasCorrectionsSinceRejection(bundle)) {
+      final resendWithoutCorrections = await _confirmSendWithoutCorrections(bundle);
+      if (resendWithoutCorrections != true) return;
+    }
 
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Enviar a Direccion General'),
+        title: Text('Enviar agrupacion ${_bundleLabel(bundle)}'),
         content: Text(
           'Se enviaran $count orden(es) con sus links de cotizacion. '
-          'Despues de enviar, ya no podras agrupar estas ordenes.',
+          'Despues de enviar, este grupo pasara a Direccion General.\n\n'
+          'En el PDF, la casilla PROCESÓ mostrara "$processedName" y el area "$processedArea".',
         ),
         actions: [
           TextButton(
@@ -729,16 +783,23 @@ class _CotizacionesDashboardScreenState
 
     if (confirmed != true) return;
 
-    final actor = ref.read(currentUserProfileProvider).value;
-    if (actor == null) {
-      _showMessage('Perfil no disponible.');
-      return;
-    }
-
-    setState(() => _sendingToDireccion = true);
+    setState(() => _bundleBusyIds.add(bundle.id));
     try {
       final repo = ref.read(purchaseOrderRepositoryProvider);
-      for (final order in orders) {
+      if (bundle.needsUpdate) {
+        final normalizedLink = _normalizeLink(bundle.pdfUrl);
+        if (!_isValidUrl(normalizedLink)) {
+          _showMessage(
+            'Esta agrupacion necesita un link de cotizacion valido antes de enviarse.',
+          );
+          return;
+        }
+        await repo.updateSharedQuoteLink(
+          quote: bundle,
+          pdfUrl: normalizedLink,
+        );
+      }
+      for (final order in readyOrders) {
         final links = order.cotizacionLinks
             .where((link) => link.url.trim().isNotEmpty)
             .toList();
@@ -749,15 +810,20 @@ class _CotizacionesDashboardScreenState
           actor: actor,
         );
       }
+      if (mounted) {
+        setState(() {
+          _editedDashboardOrderIds.removeAll(bundle.orderIds);
+          _editedBundleIds.remove(bundle.id);
+        });
+      }
       if (!mounted) return;
-      _showMessage('Ordenes enviadas a Direccion General.');
-      _clearSelection();
+      _showMessage('Agrupacion enviada a Direccion General.');
     } catch (error, stack) {
       if (!mounted) return;
-      _showMessage(reportError(error, stack, context: 'CotizacionesDashboard.send'));
+      _showMessage(reportError(error, stack, context: 'CotizacionesDashboard.sendBundle'));
     } finally {
       if (mounted) {
-        setState(() => _sendingToDireccion = false);
+        setState(() => _bundleBusyIds.remove(bundle.id));
       }
     }
   }
@@ -773,15 +839,35 @@ class _CotizacionesDashboardScreenState
         .whereType<PurchaseOrder>()
         .toList();
     if (orders.isEmpty) {
-      _showMessage('No hay órdenes disponibles en esta cotización.');
+      _showMessage('No hay Ã³rdenes disponibles en esta cotizaciÃ³n.');
       return;
     }
 
     final selectedOrderIds = await _confirmBundleApprovalSelection(
       bundle: bundle,
       orders: orders,
+      quotesById: quotesById,
     );
     if (selectedOrderIds == null || selectedOrderIds.isEmpty) return;
+    final blockedOrders = orders
+        .where(
+          (order) =>
+              selectedOrderIds.contains(order.id) &&
+              _hasRejectedSiblingQuote(
+                order: order,
+                currentQuoteId: bundle.id,
+                quotesById: quotesById,
+              ),
+        )
+        .toList(growable: false);
+    if (blockedOrders.isNotEmpty) {
+      final confirmed = await _confirmBlockedBundleApproval(
+        bundle: bundle,
+        blockedOrders: blockedOrders,
+        selectedCount: selectedOrderIds.length,
+      );
+      if (confirmed != true) return;
+    }
 
     final actor = ref.read(currentUserProfileProvider).value;
     if (actor == null) {
@@ -809,6 +895,7 @@ class _CotizacionesDashboardScreenState
 
       var moved = 0;
       var blocked = 0;
+      var blockedByRejectedGroup = 0;
       for (final order in orders) {
         if (!selectedOrderIds.contains(order.id)) continue;
         final quoteIds = order.sharedQuoteRefs
@@ -821,16 +908,34 @@ class _CotizacionesDashboardScreenState
             );
         if (!canAdvance) {
           blocked += 1;
+          if (_hasRejectedSiblingQuote(
+            order: order,
+            currentQuoteId: bundle.id,
+            quotesById: quotesById,
+          )) {
+            blockedByRejectedGroup += 1;
+          }
           continue;
         }
         await repo.markPaymentDone(order: order, actor: actor);
         moved += 1;
       }
+      if (moved > 0) {
+        final branding = ref.read(currentBrandingProvider);
+        prefetchOrderPdfsForOrders(
+          orders.where((order) => selectedOrderIds.contains(order.id)).toList(),
+          branding: branding,
+          limit: selectedOrderIds.length,
+        );
+      }
       if (!mounted) return;
       if (blocked > 0) {
+        final rejectedMessage = blockedByRejectedGroup > 0
+            ? ' $blockedByRejectedGroup orden(es) tienen otro grupo con link de cotizacion rechazado y no pueden avanzar hasta que ese grupo sea corregido y aprobado.'
+            : '';
         _showMessage(
           'Se aprobaron $moved orden(es). '
-          '$blocked orden(es) seguirán en Dirección General hasta aprobar sus otras cotizaciones.',
+          '$blocked orden(es) seguirán en Dirección General hasta aprobar sus otras cotizaciones.$rejectedMessage',
         );
       } else {
         _showMessage('Ordenes enviadas a pendientes de fecha estimada.');
@@ -848,6 +953,7 @@ class _CotizacionesDashboardScreenState
   Future<Set<String>?> _confirmBundleApprovalSelection({
     required SharedQuote bundle,
     required List<PurchaseOrder> orders,
+    required Map<String, SharedQuote> quotesById,
   }) async {
     final approvedSet = bundle.approvedOrderIds.toSet();
     final selected = orders
@@ -860,6 +966,17 @@ class _CotizacionesDashboardScreenState
       builder: (context) => StatefulBuilder(
         builder: (context, setStateDialog) {
           final canSubmit = selected.isNotEmpty;
+          final selectedWithRejectedSibling = orders
+              .where(
+                (order) =>
+                    selected.contains(order.id) &&
+                    _hasRejectedSiblingQuote(
+                      order: order,
+                      currentQuoteId: bundle.id,
+                      quotesById: quotesById,
+                    ),
+              )
+              .length;
           return AlertDialog(
             title: const Text('Enviar a pendientes de fecha estimada'),
             content: SizedBox(
@@ -871,6 +988,16 @@ class _CotizacionesDashboardScreenState
                     'Selecciona las órdenes que aprobarás de esta cotización.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
+                  if (selectedWithRejectedSibling > 0) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      '$selectedWithRejectedSibling orden(es) tienen otro grupo con link de cotizacion rechazado. Aunque apruebes este grupo, esas ordenes no avanzaran hasta que el otro grupo sea corregido y aprobado.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Colors.orange.shade900,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   Row(
                     children: [
@@ -921,8 +1048,8 @@ class _CotizacionesDashboardScreenState
                             title: Text('Orden ${order.id}'),
                             subtitle: Text(
                               '${order.requesterName} - ${order.areaName}'
-                              '${_primaryQuoteId(order) == bundle.id ? ' · Principal' : ''}'
-                              '${approvedSet.contains(order.id) ? ' · Ya aprobada' : ''}',
+                              '${approvedSet.contains(order.id) ? ' · Ya aprobada' : ''}'
+                              '${_hasRejectedSiblingQuote(order: order, currentQuoteId: bundle.id, quotesById: quotesById) ? ' · Tiene otro grupo rechazado' : ''}',
                             ),
                           ),
                       ],
@@ -949,6 +1076,96 @@ class _CotizacionesDashboardScreenState
     return result;
   }
 
+  bool _bundleHasCorrectionsSinceRejection(SharedQuote bundle) {
+    final rejectedAt = bundle.rejectedAt;
+    if (rejectedAt == null) return true;
+    if (_editedBundleIds.contains(bundle.id)) return true;
+    if (bundle.orderIds.any(_editedDashboardOrderIds.contains)) return true;
+
+    final updatedAt = bundle.updatedAt;
+    if (updatedAt == null) return false;
+    return updatedAt.isAfter(rejectedAt);
+  }
+
+  Future<bool?> _confirmSendWithoutCorrections(SharedQuote bundle) {
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Confirmar reenvio de ${_bundleLabel(bundle)}'),
+        content: const Text(
+          'Esta agrupacion fue regresada por Direccion General y no se detectaron correcciones desde ese rechazo.\n\n'
+          'Si la envias asi, es posible que Direccion General la vuelva a rechazar.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Enviar de todos modos'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool?> _confirmBlockedBundleApproval({
+    required SharedQuote bundle,
+    required List<PurchaseOrder> blockedOrders,
+    required int selectedCount,
+  }) async {
+    final blockedIds = blockedOrders.map((order) => order.id).join(', ');
+    final blockedCount = blockedOrders.length;
+    final unaffectedCount = selectedCount - blockedCount;
+
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Confirmar aprobación de ${_bundleLabel(bundle)}'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '$blockedCount orden(es) de este grupo tienen otra agrupación rechazada.',
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Si continúas, este grupo quedará aprobado, pero esas ordenes no pasarán a pendientes de fecha estimada hasta que su otra agrupación sea corregida y aprobada.',
+              ),
+              if (unaffectedCount > 0) ...[
+                const SizedBox(height: 8),
+                Text(
+                  '$unaffectedCount orden(es) sí podrán avanzar normalmente.',
+                ),
+              ],
+              const SizedBox(height: 12),
+              Text(
+                'Órdenes afectadas: $blockedIds',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Sí, aprobar'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _handleRejectBundle(
     SharedQuote bundle,
     Map<String, PurchaseOrder> ordersById,
@@ -959,7 +1176,7 @@ class _CotizacionesDashboardScreenState
         .whereType<PurchaseOrder>()
         .toList();
     if (orders.isEmpty) {
-      _showMessage('No hay órdenes disponibles en esta cotización.');
+      _showMessage('No hay órdenes disponibles en esta cotizaciÃ³n.');
       return;
     }
 
@@ -975,17 +1192,24 @@ class _CotizacionesDashboardScreenState
     setState(() => _bundleBusyIds.add(bundle.id));
     try {
       final repo = ref.read(purchaseOrderRepositoryProvider);
-      for (final order in orders) {
-        if (!rejection.orderIds.contains(order.id)) continue;
-        await repo.returnToCotizaciones(
-          order: order,
-          comment: rejection.comment,
-          items: order.items,
-          actor: actor,
+      await repo.rejectSharedQuoteFromDireccion(
+        quote: bundle,
+        orders: orders,
+        rejectedOrderIds: rejection.orderIds,
+        comment: rejection.comment,
+        actor: actor,
+      );
+      if (_isReadOnly) {
+        setState(() => _dismissedDireccionBundleIds.add(bundle.id));
+        unawaited(
+          Future<void>.delayed(const Duration(seconds: 3), () {
+            if (!mounted) return;
+            setState(() => _dismissedDireccionBundleIds.remove(bundle.id));
+          }),
         );
       }
       if (!mounted) return;
-      _showMessage('Órdenes regresadas a cotizaciones.');
+      _showMessage('Grupo regresado al dashboard de cotizaciones para edición.');
     } catch (error, stack) {
       if (!mounted) return;
       _showMessage(reportError(error, stack, context: 'DireccionBundle.reject'));
@@ -1128,11 +1352,13 @@ class _CotizacionesDashboardScreenState
   ) {
     if (_migrationInProgress || _migrationDone) return;
 
-    final legacyLinks = orders
-        .expand((order) => order.cotizacionLinks)
-        .where((link) => (link.quoteId ?? '').trim().isEmpty && link.url.trim().isNotEmpty)
-        .toList();
-    if (legacyLinks.isEmpty) {
+    final hasLegacyLinks = orders.any(
+      (order) => order.cotizacionLinks.any(
+        (link) =>
+            (link.quoteId ?? '').trim().isEmpty && link.url.trim().isNotEmpty,
+      ),
+    );
+    if (!hasLegacyLinks) {
       _migrationDone = true;
       return;
     }
@@ -1297,63 +1523,69 @@ class _OrderSelectionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final itemsTotal = order.items.length;
-    final itemsReady = order.items.where(_itemReady).length;
-    final linkCount = order.cotizacionLinks.where((link) => link.url.trim().isNotEmpty).length;
+    final metrics = _OrderQuoteMetrics.fromOrder(order);
 
     return Card(
-      child: InkWell(
-        onTap: onOpen,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (!readOnly)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8, top: 2),
-                      child: Checkbox(
-                        value: selected,
-                        onChanged: onToggle,
-                      ),
-                    ),
-                  Expanded(
-                    child: Wrap(
-                      spacing: 8,
-                      runSpacing: 4,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        _FolioPill(folio: order.id),
-                        _UrgencyPill(urgency: order.urgency),
-                        if (bundleCount > 0)
-                          _InfoPill(
-                            label: 'Cotizaciones $bundleCount',
-                            color: Colors.blueGrey.shade100,
-                            textColor: Colors.blueGrey.shade800,
-                          ),
-                      ],
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (!readOnly)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8, top: 2),
+                    child: Checkbox(
+                      value: selected,
+                      onChanged: onToggle,
                     ),
                   ),
-                ],
+                Expanded(
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      _FolioPill(folio: order.id),
+                      _UrgencyPill(urgency: order.urgency),
+                      if (bundleCount > 0)
+                        _InfoPill(
+                          label: 'Cotizaciones $bundleCount',
+                          color: Colors.blueGrey.shade100,
+                          textColor: Colors.blueGrey.shade800,
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text('Solicitante: ${order.requesterName}'),
+            Text('Área: ${order.areaName}'),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 12,
+              runSpacing: 4,
+              children: [
+                Text(
+                  'Árticulos completos: '
+                  '${metrics.itemsReady}/${metrics.itemsTotal}',
+                ),
+                Text('Links asignados: ${metrics.linkCount}'),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerRight,
+              child: OutlinedButton.icon(
+                onPressed: onOpen,
+                icon: const Icon(Icons.picture_as_pdf_outlined),
+                label: const Text('Ver PDF'),
               ),
-              const SizedBox(height: 8),
-              Text('Solicitante: ${order.requesterName}'),
-              Text('Área: ${order.areaName}'),
-              const SizedBox(height: 6),
-              Wrap(
-                spacing: 12,
-                runSpacing: 4,
-                children: [
-                  Text('Artículos completos: $itemsReady/$itemsTotal'),
-                  Text('Links asignados: $linkCount'),
-                ],
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -1450,180 +1682,79 @@ class _InfoPill extends StatelessWidget {
   }
 }
 
-class _OrderDetailsSheet extends StatelessWidget {
-  const _OrderDetailsSheet({required this.order});
+class _OrderQuoteMetrics {
+  const _OrderQuoteMetrics({
+    required this.signature,
+    required this.itemsTotal,
+    required this.itemsReady,
+    required this.linkCount,
+  });
 
-  final PurchaseOrder order;
+  final String signature;
+  final int itemsTotal;
+  final int itemsReady;
+  final int linkCount;
 
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final itemsTotal = order.items.length;
-    final itemsReady = order.items.where(_itemReady).length;
-    final linkCount = order.cotizacionLinks.where((link) => link.url.trim().isNotEmpty).length;
-    final comprasComment = (order.comprasComment ?? '').trim();
+  static _OrderQuoteMetrics fromOrder(PurchaseOrder order) {
+    final signature = _signatureFor(order);
+    final cached = _orderQuoteMetricsCache[order.id];
+    if (cached != null && cached.signature == signature) {
+      _orderQuoteMetricsCache.remove(order.id);
+      _orderQuoteMetricsCache[order.id] = cached;
+      return cached;
+    }
 
-    return DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: 0.85,
-      minChildSize: 0.5,
-      maxChildSize: 0.95,
-      builder: (context, scrollController) => Material(
-        color: theme.colorScheme.surface,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        child: Column(
-          children: [
-            const SizedBox(height: 8),
-            Container(
-              width: 44,
-              height: 4,
-              decoration: BoxDecoration(
-                color: theme.colorScheme.outlineVariant,
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Orden ${order.id}',
-                          style: theme.textTheme.titleLarge,
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '${order.requesterName} - ${order.areaName}',
-                          style: theme.textTheme.bodySmall,
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: 'Cerrar',
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close),
-                  ),
-                ],
-              ),
-            ),
-            const Divider(height: 1),
-            Expanded(
-              child: ListView(
-                controller: scrollController,
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-                children: [
-                  Text('Resumen', style: theme.textTheme.titleMedium),
-                  const SizedBox(height: 8),
-                  _InfoRow(
-                    label: 'Articulos',
-                    value: '$itemsReady/$itemsTotal completos',
-                  ),
-                  _InfoRow(label: 'Links', value: '$linkCount cotizacion(es)'),
-                  if (comprasComment.isNotEmpty)
-                    _InfoRow(label: 'Comentario', value: comprasComment),
-                  const SizedBox(height: 12),
-                  OutlinedButton.icon(
-                    onPressed: () =>
-                        guardedPush(context, '/orders/${order.id}/pdf'),
-                    icon: const Icon(Icons.picture_as_pdf_outlined),
-                    label: const Text('Ver PDF'),
-                  ),
-                  const SizedBox(height: 16),
-                  Text('Articulos', style: theme.textTheme.titleMedium),
-                  const SizedBox(height: 8),
-                  for (final item in order.items) ...[
-                    _OrderItemCard(item: item),
-                    const SizedBox(height: 8),
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
+    final computed = _OrderQuoteMetrics(
+      signature: signature,
+      itemsTotal: order.items.length,
+      itemsReady: order.items.where(_itemReady).length,
+      linkCount: order.cotizacionLinks
+          .where((link) => link.url.trim().isNotEmpty)
+          .length,
     );
+    _orderQuoteMetricsCache.remove(order.id);
+    _orderQuoteMetricsCache[order.id] = computed;
+    if (_orderQuoteMetricsCache.length > _maxOrderQuoteMetricsCacheEntries) {
+      _orderQuoteMetricsCache.remove(_orderQuoteMetricsCache.keys.first);
+    }
+    return computed;
+  }
+
+  static String _signatureFor(PurchaseOrder order) {
+    final buffer = StringBuffer()
+      ..write(order.updatedAt?.millisecondsSinceEpoch ?? 0)
+      ..write('|')
+      ..write(order.items.length)
+      ..write('|')
+      ..write(order.cotizacionLinks.length)
+      ..write('|');
+    for (final item in order.items) {
+      buffer
+        ..write(item.line)
+        ..write(':')
+        ..write(item.supplier ?? '')
+        ..write(':')
+        ..write(item.budget?.toString() ?? '')
+        ..write(':')
+        ..write(item.estimatedDate?.millisecondsSinceEpoch ?? '')
+        ..write(';');
+    }
+    for (final link in order.cotizacionLinks) {
+      buffer
+        ..write(link.quoteId ?? '')
+        ..write(':')
+        ..write(link.url)
+        ..write(';');
+    }
+    return buffer.toString();
   }
 }
 
-class _InfoRow extends StatelessWidget {
-  const _InfoRow({required this.label, required this.value});
+const int _maxOrderQuoteMetricsCacheEntries = 192;
+final LinkedHashMap<String, _OrderQuoteMetrics> _orderQuoteMetricsCache =
+    LinkedHashMap<String, _OrderQuoteMetrics>();
 
-  final String label;
-  final String value;
 
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 96,
-            child: Text(
-              label,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-          Expanded(child: Text(value)),
-        ],
-      ),
-    );
-  }
-}
-
-class _OrderItemCard extends StatelessWidget {
-  const _OrderItemCard({required this.item});
-
-  final PurchaseOrderItem item;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final supplier = (item.supplier ?? '').trim();
-    final part = item.partNumber.trim();
-    final quantity = _formatNum(item.quantity);
-    final budget = item.budget;
-
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: theme.colorScheme.outlineVariant),
-        color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.4),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text(
-                'Item ${item.line}',
-                style: theme.textTheme.titleSmall,
-              ),
-              const Spacer(),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(item.description, style: theme.textTheme.bodyMedium),
-          const SizedBox(height: 6),
-          Text('Cantidad: $quantity ${item.unit}'),
-          if (item.pieces > 0) Text('Piezas: ${item.pieces}'),
-          if (part.isNotEmpty) Text('No. parte: $part'),
-          if (supplier.isNotEmpty) Text('Proveedor: $supplier'),
-          if (budget != null) Text('Presupuesto: ${_formatNum(budget)}'),
-        ],
-      ),
-    );
-  }
-}
 
 class _BundlesSection extends StatelessWidget {
   const _BundlesSection({
@@ -1639,12 +1770,14 @@ class _BundlesSection extends StatelessWidget {
     required this.linkController,
     required this.onCreateBundle,
     required this.onRejectBundle,
+    required this.onSendToDireccion,
     required this.onSendToEta,
     required this.onEditBundle,
-    required this.onManageBundle,
     required this.onDeleteBundle,
     required this.onOpenLink,
     required this.onOpenOrder,
+    required this.onEditOrder,
+    required this.editedOrderIds,
   });
 
   final List<SharedQuote> bundles;
@@ -1659,12 +1792,14 @@ class _BundlesSection extends StatelessWidget {
   final TextEditingController linkController;
   final VoidCallback? onCreateBundle;
   final Future<void> Function(SharedQuote bundle)? onRejectBundle;
+  final Future<void> Function(SharedQuote bundle)? onSendToDireccion;
   final Future<void> Function(SharedQuote bundle)? onSendToEta;
   final Future<void> Function(SharedQuote bundle)? onEditBundle;
-  final Future<void> Function(SharedQuote bundle)? onManageBundle;
   final Future<void> Function(SharedQuote bundle)? onDeleteBundle;
   final Future<void> Function(String link) onOpenLink;
   final ValueChanged<String>? onOpenOrder;
+  final ValueChanged<String>? onEditOrder;
+  final Set<String> editedOrderIds;
 
   @override
   Widget build(BuildContext context) {
@@ -1696,7 +1831,7 @@ class _BundlesSection extends StatelessWidget {
                   TextField(
                     controller: labelController,
                     decoration: const InputDecoration(
-                      labelText: 'Etiqueta (opcional)',
+                      labelText: 'Etiqueta',
                       prefixIcon: Icon(Icons.label_outline),
                     ),
                     textInputAction: TextInputAction.next,
@@ -1737,75 +1872,20 @@ class _BundlesSection extends StatelessWidget {
               onOpenQuoteLink: onOpenQuoteLink,
               busy: busyBundleIds.contains(bundle.id),
               onReject: onRejectBundle == null ? null : () => onRejectBundle!(bundle),
+              onSendToDireccion: onSendToDireccion == null
+                  ? null
+                  : () => onSendToDireccion!(bundle),
               onSendToEta: onSendToEta == null ? null : () => onSendToEta!(bundle),
               onEdit: onEditBundle,
-              onManage: onManageBundle,
               onDelete: onDeleteBundle,
               onOpen: onOpenLink,
               onOpenOrder: onOpenOrder,
+              onEditOrder: onEditOrder,
+              editedOrderIds: editedOrderIds,
             ),
             const SizedBox(height: 12),
           ],
       ],
-    );
-  }
-}
-
-class _SendToDireccionSection extends StatelessWidget {
-  const _SendToDireccionSection({
-    required this.ordersCount,
-    required this.bundlesCount,
-    required this.isBusy,
-    required this.onSend,
-  });
-
-  final int ordersCount;
-  final int bundlesCount;
-  final bool isBusy;
-  final VoidCallback? onSend;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.send_outlined),
-                const SizedBox(width: 8),
-                Text(
-                  'Enviar a Direccion General',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              ordersCount == 0
-                  ? 'No hay ordenes con link de cotizacion listas para enviar.'
-                  : 'Listas para enviar: $ordersCount orden(es) en $bundlesCount cotizacion(es).',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: onSend,
-                child: isBusy
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: AppSplash(compact: true, size: 18),
-                      )
-                    : const Text('Enviar agrupaciones'),
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
@@ -1819,12 +1899,14 @@ class _BundleCard extends StatelessWidget {
     required this.onOpenQuoteLink,
     required this.busy,
     required this.onReject,
+    required this.onSendToDireccion,
     required this.onSendToEta,
     required this.onEdit,
-    required this.onManage,
     required this.onDelete,
     required this.onOpen,
     required this.onOpenOrder,
+    required this.onEditOrder,
+    required this.editedOrderIds,
   });
 
   final SharedQuote bundle;
@@ -1834,12 +1916,14 @@ class _BundleCard extends StatelessWidget {
   final Future<void> Function(String link) onOpenQuoteLink;
   final bool busy;
   final VoidCallback? onReject;
+  final VoidCallback? onSendToDireccion;
   final VoidCallback? onSendToEta;
   final Future<void> Function(SharedQuote bundle)? onEdit;
-  final Future<void> Function(SharedQuote bundle)? onManage;
   final Future<void> Function(SharedQuote bundle)? onDelete;
   final Future<void> Function(String link) onOpen;
   final ValueChanged<String>? onOpenOrder;
+  final ValueChanged<String>? onEditOrder;
+  final Set<String> editedOrderIds;
 
   @override
   Widget build(BuildContext context) {
@@ -1849,6 +1933,9 @@ class _BundleCard extends StatelessWidget {
         : bundle.orderIds;
     final orderCount = visibleOrderIds.length;
     final link = bundle.pdfUrl.trim();
+    final rejectedOrderIds = bundle.rejectedOrderIds.toSet();
+    final hasRejectedOrders = rejectedOrderIds.isNotEmpty;
+    final rejectionComment = (bundle.rejectionComment ?? '').trim();
 
     final approvedCount = bundle.approvedOrderIds.length;
     final totalCount = bundle.orderIds.length;
@@ -1862,7 +1949,26 @@ class _BundleCard extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: Text(label, style: Theme.of(context).textTheme.titleSmall),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(label, style: Theme.of(context).textTheme.titleSmall),
+                      if (!readOnly && hasRejectedOrders) ...[
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 6,
+                          children: [
+                            _InfoPill(
+                              label: 'Rechazada por DG',
+                              color: Colors.orange.shade100,
+                              textColor: Colors.orange.shade900,
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
                 if (readOnly)
                   Padding(
@@ -1882,21 +1988,8 @@ class _BundleCard extends StatelessWidget {
                       ),
                     ),
                   ),
-                if (link.isNotEmpty)
-                  IconButton(
-                    tooltip: 'Abrir link',
-                    icon: const Icon(Icons.open_in_new),
-                    onPressed: () => onOpen(link),
-                  ),
               ],
             ),
-            if (link.isNotEmpty)
-              Text(
-                link,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
             if (showOpenQuote && link.isNotEmpty) ...[
               const SizedBox(height: 6),
               OutlinedButton.icon(
@@ -1907,55 +2000,41 @@ class _BundleCard extends StatelessWidget {
             ],
             const SizedBox(height: 6),
             Text('Órdenes vinculadas: $orderCount'),
+            if (!readOnly && hasRejectedOrders) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Motivo del rechazo: ${rejectionComment.isEmpty ? 'Sin comentario registrado.' : rejectionComment}',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Colors.orange.shade900,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Órdenes afectadas: ${visibleOrderIds.where(rejectedOrderIds.contains).join(', ')}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
             if (orderCount > 0)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
-                child: readOnly && onOpenOrder != null
-                    ? Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Órdenes en esta cotización:',
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                          const SizedBox(height: 6),
-                          for (final orderId in visibleOrderIds) ...[
-                            _BundleOrderRow(
-                              orderId: orderId,
-                              order: ordersById[orderId],
-                              onOpen: onOpenOrder!,
-                              isPrimary: () {
-                                final order = ordersById[orderId];
-                                if (order == null) return false;
-                                final rawPrimary = order.primaryQuoteId?.trim() ?? '';
-                                final primaryId = rawPrimary.isNotEmpty
-                                    ? rawPrimary
-                                    : (order.sharedQuoteRefs.isNotEmpty
-                                        ? order.sharedQuoteRefs.first.quoteId
-                                        : '');
-                                return primaryId == bundle.id;
-                              }(),
-                              isApproved: bundle.approvedOrderIds.contains(orderId),
-                            ),
-                            const SizedBox(height: 6),
-                          ],
-                        ],
-                      )
-                    : Wrap(
-                        spacing: 6,
-                        runSpacing: 4,
-                        children: [
-                        for (final orderId in visibleOrderIds.take(6))
-                          Chip(
-                            label: Text(
-                              ordersById[orderId]?.requesterName ?? 'Orden $orderId',
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        if (orderCount > 6)
-                          Chip(label: Text('+${orderCount - 6} más')),
-                      ],
-                    ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 6),
+                    for (final orderId in visibleOrderIds) ...[
+                      _BundleOrderRow(
+                        orderId: orderId,
+                        order: ordersById[orderId],
+                        onOpen: onOpenOrder,
+                        onEdit: onEditOrder,
+                        isApproved: bundle.approvedOrderIds.contains(orderId),
+                        wasEdited: editedOrderIds.contains(orderId),
+                      ),
+                      const SizedBox(height: 6),
+                    ],
+                  ],
+                ),
               ),
             if (readOnly) ...[
               const SizedBox(height: 8),
@@ -1971,7 +2050,7 @@ class _BundleCard extends StatelessWidget {
                   FilledButton.icon(
                     onPressed: busy ? null : onSendToEta,
                     icon: const Icon(Icons.schedule_send),
-                    label: const Text('Aprobar órdenes del grupo'),
+                    label: const Text('Aprobar Órdenes del grupo'),
                   ),
                 ],
               ),
@@ -1980,20 +2059,22 @@ class _BundleCard extends StatelessWidget {
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
+                runSpacing: 8,
                 children: [
+                  FilledButton.icon(
+                    onPressed: busy ? null : onSendToDireccion,
+                    icon: const Icon(Icons.send_outlined),
+                    label: const Text('Enviar agrupacion'),
+                  ),
                   OutlinedButton.icon(
                     onPressed: onEdit == null ? null : () => onEdit!(bundle),
-                    icon: const Icon(Icons.edit_outlined),
-                    label: const Text('Editar link'),
+                    icon: const Icon(Icons.edit_note_outlined),
+                    label: const Text('Editar agrupacion'),
                   ),
                   OutlinedButton.icon(
-                    onPressed: onManage == null ? null : () => onManage!(bundle),
-                    icon: const Icon(Icons.group_add_outlined),
-                    label: const Text('Administrar Órdenes'),
-                  ),
-                  TextButton(
                     onPressed: onDelete == null ? null : () => onDelete!(bundle),
-                    child: const Text('Eliminar'),
+                    icon: const Icon(Icons.link_off_outlined),
+                    label: const Text('Eliminar agrupacion'),
                   ),
                 ],
               ),
@@ -2010,55 +2091,33 @@ class _BundleOrderRow extends StatelessWidget {
     required this.orderId,
     required this.order,
     required this.onOpen,
-    required this.isPrimary,
+    required this.onEdit,
     required this.isApproved,
+    required this.wasEdited,
   });
 
   final String orderId;
   final PurchaseOrder? order;
-  final ValueChanged<String> onOpen;
-  final bool isPrimary;
+  final ValueChanged<String>? onOpen;
+  final ValueChanged<String>? onEdit;
   final bool isApproved;
+  final bool wasEdited;
 
   @override
   Widget build(BuildContext context) {
-    final requester = (order?.requesterName ?? '').trim();
     final area = (order?.areaName ?? '').trim();
-    final title = requester.isNotEmpty ? requester : 'Orden $orderId';
-    final subtitleParts = <String>[];
-    if (area.isNotEmpty) subtitleParts.add(area);
-    if (requester.isNotEmpty) subtitleParts.add('Orden $orderId');
-    final subtitle = subtitleParts.join(' - ');
+    final title = 'Orden $orderId';
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.4),
+        color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final isNarrow = constraints.maxWidth < 360;
-          final primaryTag = isPrimary
-              ? Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 2,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.primaryContainer,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      'Principal',
-                      style: Theme.of(context).textTheme.labelSmall,
-                    ),
-                  ),
-                )
-              : const SizedBox.shrink();
           final approvedTag = isApproved
               ? Padding(
                   padding: const EdgeInsets.only(top: 4),
@@ -2081,30 +2140,63 @@ class _BundleOrderRow extends StatelessWidget {
                   ),
                 )
               : const SizedBox.shrink();
+          final editedTag = wasEdited
+              ? Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.shade100,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      'Editada',
+                      style: Theme.of(context)
+                          .textTheme
+                          .labelSmall
+                          ?.copyWith(color: Colors.amber.shade900),
+                    ),
+                  ),
+                )
+              : const SizedBox.shrink();
 
           final content = Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(title),
-              if (subtitle.isNotEmpty)
+              if (area.isNotEmpty)
                 Text(
-                  subtitle,
+                  area,
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
-              if (isPrimary || isApproved)
+              if (isApproved || wasEdited)
                 Wrap(
                   spacing: 6,
                   runSpacing: 4,
                   children: [
-                    if (isPrimary) primaryTag,
                     if (isApproved) approvedTag,
+                    if (wasEdited) editedTag,
                   ],
                 ),
             ],
           );
-          final button = OutlinedButton(
-            onPressed: () => onOpen(orderId),
-            child: const Text('Visualizar PDF'),
+          final actions = Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton(
+                onPressed: onOpen == null ? null : () => onOpen!(orderId),
+                child: const Text('Visualizar PDF'),
+              ),
+              if (onEdit != null)
+                OutlinedButton(
+                  onPressed: () => onEdit!(orderId),
+                  child: const Text('Editar datos'),
+                ),
+            ],
           );
 
           if (isNarrow) {
@@ -2113,7 +2205,7 @@ class _BundleOrderRow extends StatelessWidget {
               children: [
                 content,
                 const SizedBox(height: 6),
-                button,
+                actions,
               ],
             );
           }
@@ -2122,7 +2214,7 @@ class _BundleOrderRow extends StatelessWidget {
             children: [
               Expanded(child: content),
               const SizedBox(width: 8),
-              button,
+              Flexible(child: actions),
             ],
           );
         },
@@ -2142,50 +2234,20 @@ class _ErrorPanel extends StatelessWidget {
   }
 }
 
-bool _bundleMatchesSearch(
-  SharedQuote bundle,
-  Map<String, PurchaseOrder> ordersById,
-  String query,
-) {
-  final normalized = query.trim().toLowerCase();
-  if (normalized.isEmpty) return true;
+class _DashboardDerivedData {
+  const _DashboardDerivedData({
+    required this.visibleOrders,
+    required this.ordersById,
+    required this.visibleBundles,
+    required this.quotesById,
+    required this.bundleCountByOrder,
+  });
 
-  final buffer = StringBuffer();
-  void addValue(Object? value) {
-    if (value == null) return;
-    final text = value.toString().trim().toLowerCase();
-    if (text.isEmpty) return;
-    buffer.write(text);
-    buffer.write(' ');
-  }
-
-  addValue(bundle.id);
-  addValue(bundle.supplier);
-  addValue(_bundleLabel(bundle));
-  addValue(bundle.pdfUrl);
-  for (final orderId in bundle.orderIds) {
-    addValue(orderId);
-    final order = ordersById[orderId];
-    if (order == null) continue;
-    addValue(order.requesterName);
-    addValue(order.areaName);
-  }
-
-  final haystack = buffer.toString();
-  final tokens = normalized.split(RegExp(r'\s+')).where((token) => token.isNotEmpty);
-  for (final token in tokens) {
-    if (!haystack.contains(token)) return false;
-  }
-  return true;
-}
-
-String _primaryQuoteId(PurchaseOrder order) {
-  final rawPrimary = order.primaryQuoteId?.trim() ?? '';
-  if (rawPrimary.isNotEmpty) return rawPrimary;
-  if (order.sharedQuoteRefs.isNotEmpty) {
-    return order.sharedQuoteRefs.first.quoteId;
-  }
-  return '';
+  final List<PurchaseOrder> visibleOrders;
+  final Map<String, PurchaseOrder> ordersById;
+  final List<SharedQuote> visibleBundles;
+  final Map<String, SharedQuote> quotesById;
+  final Map<String, int> bundleCountByOrder;
 }
 
 Map<String, int> _bundleCountByOrder(List<SharedQuote> bundles) {
@@ -2215,10 +2277,6 @@ List<PurchaseOrder> _ordersReadyToSend(List<PurchaseOrder> orders) {
       .toList();
 }
 
-String _formatNum(num value) {
-  if (value % 1 == 0) return value.toInt().toString();
-  return value.toStringAsFixed(2);
-}
 
 bool _itemReady(PurchaseOrderItem item) {
   final supplier = (item.supplier ?? '').trim();
@@ -2236,12 +2294,43 @@ bool _hasQuoteLinks(PurchaseOrder order) {
   return order.cotizacionLinks.any((link) => link.url.trim().isNotEmpty);
 }
 
+bool _hasRejectedSiblingQuote({
+  required PurchaseOrder order,
+  required String currentQuoteId,
+  required Map<String, SharedQuote> quotesById,
+}) {
+  for (final ref in order.sharedQuoteRefs) {
+    final quoteId = ref.quoteId.trim();
+    if (quoteId.isEmpty || quoteId == currentQuoteId) continue;
+    final quote = quotesById[quoteId];
+    if (quote == null) continue;
+    if (quote.needsUpdate && quote.rejectedOrderIds.contains(order.id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+List<SharedQuote> _visibleComprasBundles({
+  required List<SharedQuote> bundles,
+  required Set<String> visibleOrderIds,
+  required Map<String, PurchaseOrder> ordersById,
+}) {
+  return bundles.where((bundle) {
+    final hasVisibleOrder = bundle.orderIds.any(visibleOrderIds.contains);
+    if (hasVisibleOrder) return true;
+    return bundle.needsUpdate &&
+        bundle.rejectedOrderIds.isNotEmpty &&
+        bundle.orderIds.any(ordersById.containsKey);
+  }).toList();
+}
+
 String _bundleLabel(SharedQuote bundle) {
   final label = bundle.supplier.trim();
   if (label.isNotEmpty) return label;
   final id = bundle.id.trim();
-  if (id.length <= 6) return 'Cotización $id';
-  return 'Cotización ${id.substring(0, 6)}';
+  if (id.length <= 6) return 'CotizaciÃ³n $id';
+  return 'CotizaciÃ³n ${id.substring(0, 6)}';
 }
 
 String _normalizeLink(String raw) {
@@ -2260,3 +2349,44 @@ bool _isValidUrl(String raw) {
       (uri.scheme == 'http' || uri.scheme == 'https') &&
       uri.host.isNotEmpty;
 }
+
+String? _validateBundleUniqueness({
+  required List<SharedQuote> bundles,
+  required String label,
+  required String link,
+  String? editingBundleId,
+}) {
+  final normalizedLabel = _normalizeBundleLabel(label);
+  if (normalizedLabel.isNotEmpty) {
+    final labelExists = bundles.any(
+      (bundle) =>
+          bundle.id != editingBundleId &&
+          _normalizeBundleLabel(bundle.supplier) == normalizedLabel,
+    );
+    if (labelExists) {
+      return 'Ya existe una etiqueta con ese nombre.';
+    }
+  }
+
+  final normalizedLink = _normalizeBundleLink(link);
+  final linkExists = bundles.any(
+    (bundle) =>
+        bundle.id != editingBundleId &&
+        _normalizeBundleLink(bundle.pdfUrl) == normalizedLink,
+  );
+  if (linkExists) {
+    return 'Ese link de cotizacion ya esta registrado.';
+  }
+
+  return null;
+}
+
+String _normalizeBundleLabel(String value) {
+  return value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+}
+
+String _normalizeBundleLink(String value) {
+  return _normalizeLink(value).trim().toLowerCase();
+}
+
+

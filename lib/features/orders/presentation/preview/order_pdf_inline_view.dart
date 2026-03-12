@@ -7,10 +7,13 @@ import 'package:pdfx/pdfx.dart';
 
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
+import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_document_opener_stub.dart'
+    if (dart.library.io)
+      'package:sistema_compras/features/orders/presentation/preview/order_pdf_document_opener_io.dart'
+    as pdf_document_opener;
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 
-const double _webRenderScale = 1.9;
-const int _webRenderQuality = 90;
+const double _webRenderScale = 2.2;
 
 class OrderPdfInlineView extends StatefulWidget {
   const OrderPdfInlineView({
@@ -41,10 +44,13 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
   PhotoViewController? _photoController;
   String? _signature;
   bool _isRouteSubscribed = false;
+  Stopwatch? _viewerLoadStopwatch;
+  bool _showViewer = false;
 
   @override
   void initState() {
     super.initState();
+    _showViewer = _hasImmediateCache();
     _queueBuild();
   }
 
@@ -67,8 +73,10 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
     final nextSignature = _signatureFor(widget.data);
     if (_signature != nextSignature ||
         oldWidget.skipCache != widget.skipCache ||
+        oldWidget.preferOrderCache != widget.preferOrderCache ||
         oldWidget.pdfBuilder != widget.pdfBuilder) {
       _disposeController();
+      _showViewer = _hasImmediateCache();
       _queueBuild();
     }
   }
@@ -91,6 +99,15 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
     });
   }
 
+  bool _hasImmediateCache() {
+    if (widget.skipCache) return false;
+    if (widget.preferOrderCache &&
+        getCachedOrderPdfForFolio(widget.data) != null) {
+      return true;
+    }
+    return widget.pdfBuilder == null && getCachedOrderPdf(widget.data) != null;
+  }
+
   void _queueBuild() {
     _signature = _signatureFor(widget.data);
     if (widget.preferOrderCache && !widget.skipCache) {
@@ -108,35 +125,43 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
       }
     }
     _bytesFuture = Future(() async {
+      final totalStopwatch = Stopwatch()..start();
       await WidgetsBinding.instance.endOfFrame;
+      _logPdfInlineTiming('waitEndOfFrame', totalStopwatch.elapsed);
+      final generateStopwatch = Stopwatch()..start();
       final builder = widget.pdfBuilder;
+      late final Uint8List bytes;
       if (builder != null) {
-        return builder(
+        bytes = await builder(
           widget.data,
-          useIsolate: !kIsWeb,
+          useIsolate: false,
+        );
+      } else if (widget.skipCache) {
+        bytes = await buildOrderPdfUncached(
+          widget.data,
+          useIsolate: false,
+        );
+      } else {
+        bytes = await buildOrderPdf(
+          widget.data,
+          useIsolate: false,
         );
       }
-      if (widget.skipCache) {
-        return buildOrderPdfUncached(
-          widget.data,
-          useIsolate: !kIsWeb,
-        );
-      }
-      return buildOrderPdf(
-        widget.data,
-        useIsolate: !kIsWeb,
-      );
+      _logPdfInlineTiming('bytesReady', generateStopwatch.elapsed);
+      _logPdfInlineTiming('totalFuture', totalStopwatch.elapsed);
+      return bytes;
     });
   }
 
   void _disposeController() {
     final controller = _controller;
-    if (controller == null) return;
-    controller.document.then((doc) => doc.close()).catchError((error, stack) {
-      logError(error, stack, context: 'OrderPdfInlineView.dispose');
-    });
-    controller.dispose();
-    _controller = null;
+    if (controller != null) {
+      controller.document.then((doc) => doc.close()).catchError((error, stack) {
+        logError(error, stack, context: 'OrderPdfInlineView.dispose');
+      });
+      controller.dispose();
+      _controller = null;
+    }
     final webController = _webController;
     if (webController != null) {
       webController.document.then((doc) => doc.close()).catchError((error, stack) {
@@ -151,6 +176,17 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
 
   @override
   Widget build(BuildContext context) {
+    if (!_showViewer && !kIsWeb) {
+      return _DeferredPdfPlaceholder(
+        data: widget.data,
+        bytesFuture: _bytesFuture,
+        onOpenViewer: () {
+          if (!mounted) return;
+          setState(() => _showViewer = true);
+        },
+      );
+    }
+
     return FocusTraversalGroup(
       policy: WidgetOrderTraversalPolicy(),
       descendantsAreFocusable: false,
@@ -175,8 +211,11 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
               return const Center(child: Text('No se pudo generar el PDF.'));
             }
             final bytesForPdf = kIsWeb ? Uint8List.fromList(bytes) : bytes;
+            _viewerLoadStopwatch = Stopwatch()..start();
             if (kIsWeb) {
-              _webController  = PdfController(document: _openDocument(bytesForPdf));
+              _webController = PdfController(
+                document: _openPdfDocument(bytesForPdf),
+              );
               _photoController  = PhotoViewController();
               return Stack(
                 children: [
@@ -194,6 +233,7 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
                     },
                     child: PdfView(
                       controller: _webController!,
+                      onDocumentLoaded: (_) => _logViewerLoaded('web'),
                       scrollDirection: Axis.vertical,
                       pageSnapping: false,
                       renderer: _renderWebPage,
@@ -233,7 +273,7 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
               );
             }
             _controller  = PdfControllerPinch(
-              document: _openDocument(bytesForPdf),
+              document: _openPdfDocument(bytesForPdf),
             );
             return Stack(
               children: [
@@ -241,13 +281,22 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
                   controller: _controller!,
                   minScale: 1.0,
                   maxScale: 6.0,
+                  onDocumentLoaded: (_) => _logViewerLoaded('pinch'),
                   onDocumentError: (error) {
-                    logError(error, StackTrace.current, context: 'OrderPdfInlineView.PdfViewPinch');
+                    logError(
+                      error,
+                      StackTrace.current,
+                      context: 'OrderPdfInlineView.PdfViewPinch',
+                    );
                   },
                   builders: PdfViewPinchBuilders<DefaultBuilderOptions>(
                     options: const DefaultBuilderOptions(),
                     errorBuilder: (context, error) {
-                      final message = reportError(error, StackTrace.current, context: 'PdfViewPinch');
+                      final message = reportError(
+                        error,
+                        StackTrace.current,
+                        context: 'PdfViewPinch',
+                      );
                       return Center(child: Text(message));
                     },
                   ),
@@ -294,9 +343,9 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
       center = controller.viewRect.center;
     } catch (_) {}
     final zoomed = Matrix4.identity()
-      ..translate(center.dx, center.dy)
-      ..scale(delta)
-      ..translate(-center.dx, -center.dy)
+      ..translateByDouble(center.dx, center.dy, 0, 1)
+      ..scaleByDouble(delta, delta, 1, 1)
+      ..translateByDouble(-center.dx, -center.dy, 0, 1)
       ..multiply(current);
     controller.value = zoomed;
   }
@@ -314,27 +363,169 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
     } catch (_) {}
     controller.value = Matrix4.identity();
   }
+
+  Future<PdfDocument> _openPdfDocument(Uint8List bytes) async {
+    final stopwatch = Stopwatch()..start();
+    final document = await pdf_document_opener.openPdfDocument(
+      bytes,
+      signature: _signature ?? 'pdf',
+    );
+    _logPdfInlineTiming('openDocument', stopwatch.elapsed);
+    return document;
+  }
+
+  void _logPdfInlineTiming(String stage, Duration elapsed) {
+    if (!kDebugMode) return;
+    debugPrint(
+      '[PDF] inline.$stage ${elapsed.inMilliseconds}ms key=${_signature ?? 'pdf'}',
+    );
+  }
+
+  void _logViewerLoaded(String mode) {
+    final stopwatch = _viewerLoadStopwatch;
+    if (stopwatch != null) {
+      _logPdfInlineTiming('viewerLoaded.$mode', stopwatch.elapsed);
+    }
+  }
 }
 
 Future<PdfPageImage?> _renderWebPage(PdfPage page) {
   return page.render(
     width: page.width * _webRenderScale,
     height: page.height * _webRenderScale,
-    format: PdfPageImageFormat.jpeg,
+    format: PdfPageImageFormat.png,
     backgroundColor: '#ffffff',
-    quality: _webRenderQuality,
   );
 }
 
-Future<PdfDocument> _openDocument(Uint8List bytes) async {
-  try {
-    return await PdfDocument.openData(bytes);
-  } catch (error, stack) {
-    logError(error, stack, context: 'OrderPdfInlineView.openDocument');
-    if (error is Exception) {
-      rethrow;
-    }
-    throw Exception(error.toString());
+class _DeferredPdfPlaceholder extends StatelessWidget {
+  const _DeferredPdfPlaceholder({
+    required this.data,
+    required this.bytesFuture,
+    required this.onOpenViewer,
+  });
+
+  final OrderPdfData data;
+  final Future<Uint8List> bytesFuture;
+  final VoidCallback onOpenViewer;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return FutureBuilder<Uint8List>(
+      future: bytesFuture,
+      builder: (context, snapshot) {
+        final isReady =
+            snapshot.connectionState == ConnectionState.done && snapshot.hasData;
+        final folio = data.folio?.trim();
+        final title = folio == null || folio.isEmpty
+            ? 'Vista previa de PDF'
+            : 'Vista previa de $folio';
+        final subtitle = snapshot.hasError
+            ? 'No se pudo preparar el PDF.'
+            : (isReady
+                ? 'El PDF ya esta listo para abrir.'
+                : 'Preparando PDF en segundo plano...');
+
+        return ColoredBox(
+          color: theme.colorScheme.surface,
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(title, style: theme.textTheme.titleLarge),
+                        const SizedBox(height: 8),
+                        Text(subtitle, style: theme.textTheme.bodyMedium),
+                        const SizedBox(height: 16),
+                        _PlaceholderLine(
+                          label: 'Solicitante',
+                          value: data.requesterName,
+                        ),
+                        _PlaceholderLine(
+                          label: 'Area',
+                          value: data.areaName,
+                        ),
+                        _PlaceholderLine(
+                          label: 'Urgencia',
+                          value: data.urgency.name,
+                        ),
+                        _PlaceholderLine(
+                          label: 'Items',
+                          value:
+                              '${data.items.length} articulo${data.items.length == 1 ? '' : 's'}',
+                        ),
+                        if (data.observations.trim().isNotEmpty)
+                          _PlaceholderLine(
+                            label: 'Observaciones',
+                            value: data.observations.trim(),
+                            maxLines: 3,
+                          ),
+                        const SizedBox(height: 16),
+                        if (!isReady && !snapshot.hasError) ...[
+                          const LinearProgressIndicator(),
+                          const SizedBox(height: 12),
+                        ],
+                        SizedBox(
+                          width: double.infinity,
+                          child: FilledButton.icon(
+                            onPressed: snapshot.hasError ? null : onOpenViewer,
+                            icon: const Icon(Icons.picture_as_pdf_outlined),
+                            label:
+                                Text(isReady ? 'Abrir PDF' : 'Abrir visor PDF'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _PlaceholderLine extends StatelessWidget {
+  const _PlaceholderLine({
+    required this.label,
+    required this.value,
+    this.maxLines = 1,
+  });
+
+  final String label;
+  final String value;
+  final int maxLines;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = value.trim();
+    if (text.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 110, child: Text(label)),
+          Expanded(
+            child: Text(
+              text,
+              maxLines: maxLines,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -459,6 +650,7 @@ String _signatureFor(OrderPdfData data) {
   addHash(data.urgency.name);
   addHash(data.createdAt.millisecondsSinceEpoch);
   addHash(data.updatedAt?.millisecondsSinceEpoch);
+  addHash(data.suppressCreatedTime);
   addHash(data.observations);
   addHash(data.supplier);
   addHash(data.internalOrder);
@@ -476,8 +668,12 @@ String _signatureFor(OrderPdfData data) {
   addHash(data.comprasReviewerArea);
   addHash(data.direccionGeneralName);
   addHash(data.direccionGeneralArea);
+  addHash(data.almacenName);
+  addHash(data.almacenArea);
+  addHash(data.almacenComment);
   addHash(data.requestedDeliveryDate?.millisecondsSinceEpoch);
   addHash(data.etaDate?.millisecondsSinceEpoch);
+  addHash(data.pendingResubmissionLabel);
   for (final date in data.resubmissionDates) {
     addHash(date.millisecondsSinceEpoch);
   }
@@ -495,6 +691,8 @@ String _signatureFor(OrderPdfData data) {
     addHash(item.estimatedDate?.millisecondsSinceEpoch);
     addHash(item.reviewFlagged);
     addHash(item.reviewComment);
+    addHash(item.receivedQuantity);
+    addHash(item.receivedComment);
   }
   return hash.toString();
 }

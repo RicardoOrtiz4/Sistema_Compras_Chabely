@@ -4,14 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sistema_compras/core/area_labels.dart';
-import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
-import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
-import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_pdf_preload_gate.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_search.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_status_duration.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
@@ -25,6 +23,10 @@ class RejectedOrdersScreen extends ConsumerStatefulWidget {
 }
 
 class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
+  List<PurchaseOrder>? _cachedSourceOrders;
+  String? _cachedVisibleKey;
+  List<PurchaseOrder>? _cachedVisibleOrders;
+
   late final TextEditingController _searchController;
   final OrderSearchCache _searchCache = OrderSearchCache();
   Timer? _searchDebounce;
@@ -48,12 +50,14 @@ class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 250), () {
       if (!mounted) return;
+      _searchDebounce = null;
       setState(() => _searchQuery = value);
     });
   }
 
   void _clearSearch() {
     _searchDebounce?.cancel();
+    _searchDebounce = null;
     _searchController.clear();
     setState(() => _searchQuery = '');
   }
@@ -64,21 +68,11 @@ class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final ordersAsync = ref.watch(rejectedOrdersPagedProvider(_limit));
+    final ordersAsync = ref.watch(rejectedOrdersProvider);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Ordenes rechazadas'),
-        actions: [
-          infoAction(
-            context,
-            title: 'Ordenes rechazadas',
-            message:
-                'Consulta las ordenes devueltas.\n'
-                'Abre el PDF para revisar el historial.\n'
-                'Usa el buscador para localizar folios.',
-          ),
-        ],
       ),
       body: ordersAsync.when(
         data: (orders) {
@@ -87,18 +81,11 @@ class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
           }
 
           _searchCache.retainFor(orders);
-          final filtered = orders
-              .where((order) => orderMatchesSearch(order, _searchQuery, cache: _searchCache))
-              .toList();
-          final canLoadMore = orders.length >= _limit;
-          final showLoadMore =
-              canLoadMore && filtered.length >= defaultOrderPageSize;
+          final filtered = _resolveVisibleOrders(orders);
+          final visibleOrders = filtered.take(_limit).toList(growable: false);
+          final showLoadMore = filtered.length > visibleOrders.length;
 
-          final branding = ref.read(currentBrandingProvider);
-          // Prefetch para que los thumbnails / PDFs carguen más rápido.
-          prefetchOrderPdfsForOrders(filtered, branding: branding);
-
-          return Column(
+          final content = Column(
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -127,7 +114,7 @@ class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
               ),
               const SizedBox(height: 12),
               Expanded(
-                child: filtered.isEmpty
+                child: visibleOrders.isEmpty
                     ? Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
@@ -144,10 +131,10 @@ class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
                       )
                     : ListView.separated(
                         padding: const EdgeInsets.all(16),
-                        itemCount: filtered.length + (showLoadMore ? 1 : 0),
+                        itemCount: visibleOrders.length + (showLoadMore ? 1 : 0),
                         separatorBuilder: (_, __) => const SizedBox(height: 12),
                         itemBuilder: (context, index) {
-                          if (index >= filtered.length) {
+                          if (index >= visibleOrders.length) {
                             return Center(
                               child: OutlinedButton.icon(
                                 onPressed: _loadMore,
@@ -156,12 +143,19 @@ class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
                               ),
                             );
                           }
-                          final order = filtered[index];
-                          return _RejectedOrderCard(order: order);
+                          final order = visibleOrders[index];
+                          return _RejectedOrderCard(
+                            order: order,
+                          );
                         },
                       ),
               ),
             ],
+          );
+          return OrderPdfPreloadGate(
+            orders: visibleOrders,
+            enabled: _searchDebounce == null && _searchQuery.trim().isEmpty,
+            child: content,
           );
         },
         loading: () => const AppSplash(),
@@ -173,24 +167,65 @@ class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
       ),
     );
   }
+
+  List<PurchaseOrder> _resolveVisibleOrders(List<PurchaseOrder> orders) {
+    final key = _visibleOrdersKey();
+    final cached = _cachedVisibleOrders;
+    if (cached != null &&
+        identical(_cachedSourceOrders, orders) &&
+        _cachedVisibleKey == key) {
+      return cached;
+    }
+
+    final trimmedQuery = _searchQuery.trim();
+    final resolved = trimmedQuery.isEmpty
+        ? orders
+        : orders
+              .where(
+                (order) => orderMatchesSearch(
+                  order,
+                  trimmedQuery,
+                  cache: _searchCache,
+                ),
+              )
+              .toList(growable: false);
+    _cachedSourceOrders = orders;
+    _cachedVisibleKey = key;
+    _cachedVisibleOrders = resolved;
+    return resolved;
+  }
+
+  String _visibleOrdersKey() => _searchQuery.trim().toLowerCase();
 }
 
 class _RejectedOrderCard extends ConsumerWidget {
-  const _RejectedOrderCard({required this.order});
+  const _RejectedOrderCard({
+    required this.order,
+  });
 
   final PurchaseOrder order;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final pdfRoute = '/orders/${order.id}/pdf';
-    final copyRoute =
-        '/orders/create?copyFromId=${Uri.encodeComponent(order.id)}';
 
     final reason = (order.lastReturnReason ?? '').trim();
-    final maxCorrectionsReached = order.returnCount >= _maxCorrections;
+    final lastReturn = ref.watch(orderEventsProvider(order.id)).maybeWhen(
+      data: (events) {
+        PurchaseOrderEvent? lastReturn;
+        for (final event in events) {
+          if (event.type == 'return') {
+            lastReturn = event;
+          }
+        }
+        return lastReturn;
+      },
+      orElse: () => null,
+    );
+    final rejectedBy = _rejectedByLabel(lastReturn?.byRole);
+    final rejectedFrom = _rejectedFromLabel(lastReturn?.fromStatus);
 
-    final eventsAsync = ref.watch(orderEventsProvider(order.id));
-    final rejectedBy = eventsAsync.maybeWhen(
+    /*
       data: (events) {
         PurchaseOrderEvent? lastReturn;
         for (final event in events) {
@@ -202,41 +237,38 @@ class _RejectedOrderCard extends ConsumerWidget {
       },
       orElse: () => 'Compras',
     );
+    */
 
     return Card(
-      child: InkWell(
-        onTap: () => guardedPush(context, pdfRoute),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [Chip(label: Text('Rechazada por $rejectedBy'))]),
+            const SizedBox(height: 8),
+            Text('Motivo: ${reason.isEmpty ? 'Sin comentario' : reason}'),
+            const SizedBox(height: 6),
+            OrderStatusDurationPill(
+              order: order,
+              label: 'Tiempo en $rejectedFrom',
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
                 children: [
-                  Chip(label: Text('Rechazada por $rejectedBy')),
+                  OutlinedButton.icon(
+                    onPressed: () => guardedPdfPush(context, pdfRoute),
+                    icon: const Icon(Icons.picture_as_pdf_outlined),
+                    label: const Text('Ver PDF'),
+                  ),
                 ],
               ),
-              const SizedBox(height: 8),
-              Text('Motivo: ${reason.isEmpty ? 'Sin comentario' : reason}'),
-              const SizedBox(height: 6),
-              OrderStatusDurationPill(order: order),
-              const SizedBox(height: 12),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Wrap(
-                  spacing: 8,
-                  children: [
-                    if (maxCorrectionsReached)
-                      OutlinedButton.icon(
-                        onPressed: () => guardedPush(context, copyRoute),
-                        icon: const Icon(Icons.content_copy_outlined),
-                        label: const Text('Volver a generar'),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -244,13 +276,10 @@ class _RejectedOrderCard extends ConsumerWidget {
 }
 
 String _rejectedByLabel(String? rawRole) {
-  final trimmed = (rawRole ?? '').trim();
-  if (trimmed.isEmpty) {
+  final normalized = normalizeAreaLabel((rawRole ?? '').trim());
+  if (normalized.isEmpty) {
     return 'Compras';
   }
-
-  final normalized = normalizeAreaLabel(trimmed);
-
   if (isComprasLabel(normalized)) {
     return 'Compras';
   }
@@ -261,4 +290,27 @@ String _rejectedByLabel(String? rawRole) {
   return normalized;
 }
 
-const int _maxCorrections = 3;
+String _rejectedFromLabel(PurchaseOrderStatus? status) {
+  switch (status) {
+    case PurchaseOrderStatus.pendingCompras:
+      return 'ordenes por confirmar';
+    case PurchaseOrderStatus.cotizaciones:
+      return 'cotizaciones';
+    case PurchaseOrderStatus.authorizedGerencia:
+      return 'Direccion General';
+    case PurchaseOrderStatus.paymentDone:
+      return 'pendientes de fecha estimada';
+    case PurchaseOrderStatus.contabilidad:
+      return 'contabilidad';
+    case PurchaseOrderStatus.almacen:
+      return 'almacen';
+    case PurchaseOrderStatus.orderPlaced:
+      return 'orden realizada';
+    case PurchaseOrderStatus.eta:
+      return 'orden finalizada';
+    case PurchaseOrderStatus.draft:
+    case null:
+      return 'correccion';
+  }
+}
+

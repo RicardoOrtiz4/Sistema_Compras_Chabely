@@ -1,3 +1,4 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,19 +10,36 @@ import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/optimistic_action.dart';
 import 'package:sistema_compras/core/providers.dart';
 import 'package:sistema_compras/core/services/notification_service.dart';
+import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
+import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
 
-class SistemaComprasApp extends ConsumerWidget {
+class SistemaComprasApp extends ConsumerStatefulWidget {
   const SistemaComprasApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    ref.watch(notificationServiceProvider);
-    ref.listen(authStateChangesProvider, (previous, next) {
+  ConsumerState<SistemaComprasApp> createState() => _SistemaComprasAppState();
+}
+
+class _SistemaComprasAppState extends ConsumerState<SistemaComprasApp> {
+  ProviderSubscription<AsyncValue<User?>>? _authSubscription;
+  ProviderSubscription<Company>? _companySubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    ref.read(notificationServiceProvider);
+    _authSubscription =
+        ref.listenManual<AsyncValue<User?>>(authStateChangesProvider, (
+      previous,
+      next,
+    ) {
       final previousUser = previous?.value;
       final nextUser = next.value;
       if (previousUser != null && nextUser == null) {
+        clearOrderSessionSnapshotCache();
         resetPdfCaches();
+        resetMappedOrderPdfDataCache();
       }
       final email = nextUser?.email;
       final detected = companyFromEmail(email);
@@ -29,6 +47,24 @@ class SistemaComprasApp extends ConsumerWidget {
         ref.read(currentCompanyProvider.notifier).state = detected;
       }
     });
+    _companySubscription =
+        ref.listenManual<Company>(currentCompanyProvider, (previous, next) {
+      if (previous == null || previous == next) return;
+      clearOrderSessionSnapshotCache();
+      resetPdfCaches();
+      resetMappedOrderPdfDataCache();
+    });
+  }
+
+  @override
+  void dispose() {
+    _authSubscription?.close();
+    _companySubscription?.close();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final router = ref.watch(appRouterProvider);
     final branding = ref.watch(currentBrandingProvider);
     return Shortcuts(

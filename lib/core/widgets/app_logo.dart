@@ -1,18 +1,19 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:sistema_compras/core/company_branding.dart';
-
-class AppLogo extends ConsumerWidget {
-  const AppLogo({super.key, this.size = 140});
+class AppLogo extends StatelessWidget {
+  const AppLogo({
+    super.key,
+    this.size = 140,
+    required this.logoAsset,
+  });
 
   final double size;
+  final String logoAsset;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final branding = ref.watch(currentBrandingProvider);
+  Widget build(BuildContext context) {
     return Image.asset(
-      branding.logoAsset,
+      logoAsset,
       width: size,
       height: size,
       fit: BoxFit.contain,

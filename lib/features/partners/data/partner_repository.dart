@@ -2,6 +2,7 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sistema_compras/core/company_branding.dart';
+import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/providers.dart';
 
 enum PartnerType { supplier, client }
@@ -165,6 +166,26 @@ final userClientsProvider = StreamProvider<List<PartnerEntry>>((ref) {
 
   final repository = ref.watch(partnerRepositoryProvider);
   return repository.watchPartners(uid: uid, type: PartnerType.client);
+});
+
+final userSupplierNamesProvider = Provider<List<String>>((ref) {
+  final suppliers = ref.watch(userSuppliersProvider).valueOrNull;
+  if (suppliers == null || suppliers.isEmpty) {
+    return const <String>[];
+  }
+  return List<String>.unmodifiable(
+    suppliers.map((entry) => entry.name),
+  );
+});
+
+final userClientNamesProvider = Provider<List<String>>((ref) {
+  final clients = ref.watch(userClientsProvider).valueOrNull;
+  if (clients == null || clients.isEmpty) {
+    return const <String>[];
+  }
+  return List<String>.unmodifiable(
+    clients.map((entry) => entry.name),
+  );
 });
 
 DateTime? _parseDateTime(dynamic value) {

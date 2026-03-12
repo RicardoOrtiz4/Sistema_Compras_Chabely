@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 
-class OrderPdfThumbnail extends ConsumerWidget {
+class OrderPdfThumbnail extends StatelessWidget {
   const OrderPdfThumbnail({
     required this.order,
     required this.onTap,
@@ -16,7 +15,7 @@ class OrderPdfThumbnail extends ConsumerWidget {
   final double height;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return InkWell(
       onTap: onTap,

@@ -8,6 +8,11 @@ class SharedQuote {
     this.updatedAt,
     this.approvedOrderIds = const [],
     this.approvedAt,
+    this.rejectedOrderIds = const [],
+    this.rejectionComment,
+    this.rejectedAt,
+    this.rejectedByName,
+    this.rejectedByArea,
     this.needsUpdate = false,
     this.version = 1,
   });
@@ -20,6 +25,11 @@ class SharedQuote {
   final DateTime? updatedAt;
   final List<String> approvedOrderIds;
   final DateTime? approvedAt;
+  final List<String> rejectedOrderIds;
+  final String? rejectionComment;
+  final DateTime? rejectedAt;
+  final String? rejectedByName;
+  final String? rejectedByArea;
   final bool needsUpdate;
   final int version;
 
@@ -33,6 +43,11 @@ class SharedQuote {
       updatedAt: _parseDateTime(data['updatedAt']),
       approvedOrderIds: _parseOrderIds(data['approvedOrderIds']),
       approvedAt: _parseDateTime(data['approvedAt']),
+      rejectedOrderIds: _parseOrderIds(data['rejectedOrderIds']),
+      rejectionComment: data['rejectionComment'] as String?,
+      rejectedAt: _parseDateTime(data['rejectedAt']),
+      rejectedByName: data['rejectedByName'] as String?,
+      rejectedByArea: data['rejectedByArea'] as String?,
       needsUpdate: _parseBool(data['needsUpdate']),
       version: (data['version'] as num?)?.toInt() ?? 1,
     );
@@ -51,6 +66,13 @@ class SharedQuote {
           ? null
           : {for (final id in approvedOrderIds) id: true},
       'approvedAt': approvedAt?.millisecondsSinceEpoch,
+      'rejectedOrderIds': rejectedOrderIds.isEmpty
+          ? null
+          : {for (final id in rejectedOrderIds) id: true},
+      'rejectionComment': rejectionComment,
+      'rejectedAt': rejectedAt?.millisecondsSinceEpoch,
+      'rejectedByName': rejectedByName,
+      'rejectedByArea': rejectedByArea,
     };
   }
 }

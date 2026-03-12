@@ -3,12 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/pdf_open_helper.dart';
 
-import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/features/screens.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
 import 'package:sistema_compras/core/providers.dart';
-import 'package:sistema_compras/core/widgets/preload_gate.dart';
-import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import '../features/orders/presentation/almacen/almacen_orders_screen.dart';
 import 'package:sistema_compras/features/partners/data/partner_repository.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
@@ -16,12 +13,28 @@ import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 final appRouterProvider = Provider<GoRouter>((ref) {
   final refreshNotifier = _RouterRefreshNotifier();
   ref.onDispose(refreshNotifier.dispose);
-  ref.listen(authStateChangesProvider, (_, __) {
-    refreshNotifier.trigger();
-  });
-  ref.listen(currentUserProfileProvider, (_, __) {
-    refreshNotifier.trigger();
-  });
+  ref.listen<_RouterAuthRefreshState>(
+    authStateChangesProvider.select(
+      (auth) => _RouterAuthRefreshState(
+        isLoading: auth.isLoading,
+        isLoggedIn: auth.value != null,
+      ),
+    ),
+    (_, __) {
+      refreshNotifier.trigger();
+    },
+  );
+  ref.listen<_RouterProfileRefreshState>(
+    currentUserProfileProvider.select(
+      (profile) => _RouterProfileRefreshState(
+        isLoading: profile.isLoading,
+        hasValue: profile.hasValue,
+      ),
+    ),
+    (_, __) {
+      refreshNotifier.trigger();
+    },
+  );
   final navObserver = NavigationUnlockObserver();
 
   return GoRouter(
@@ -83,67 +96,33 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/orders/history',
         name: 'orderHistory',
-        builder: (context, state) => PreloadGate(
-          loaders: (ref) => [
-            ref.watch(currentUserProfileProvider),
-            ref.watch(userOrdersPagedProvider(defaultOrderPageSize)),
-          ],
-          child: const OrderHistoryScreen(),
-        ),
+        builder: (context, state) => const OrderHistoryScreen(),
       ),
       GoRoute(
         path: '/orders/history/all',
         name: 'orderHistoryAll',
-        builder: (context, state) => PreloadGate(
-          loaders: (ref) => [
-            ref.watch(currentUserProfileProvider),
-            ref.watch(allOrdersPagedProvider(defaultOrderPageSize)),
-          ],
-          child: const OrderHistoryAllScreen(),
-        ),
+        builder: (context, state) => const OrderHistoryAllScreen(),
       ),
       GoRoute(
         path: '/reports',
         name: 'reports',
-        builder: (context, state) => PreloadGate(
-          loaders: (ref) => [
-            ref.watch(currentUserProfileProvider),
-            ref.watch(allOrdersProvider),
-          ],
-          child: const ReportsScreen(),
-        ),
+        builder: (context, state) => const ReportsScreen(),
       ),
       GoRoute(
         path: '/orders/pending',
         name: 'pendingOrders',
-        builder: (context, state) => PreloadGate(
-          loaders: (ref) => [
-            ref.watch(currentUserProfileProvider),
-            ref.watch(pendingComprasOrdersPagedProvider(defaultOrderPageSize)),
-          ],
-          child: const PendingOrdersScreen(),
-        ),
+        builder: (context, state) => const PendingOrdersScreen(),
       ),
       GoRoute(
         path: '/orders/cotizaciones',
         name: 'cotizacionesOrders',
-        builder: (context, state) => PreloadGate(
-          loaders: (ref) => [
-            ref.watch(currentUserProfileProvider),
-            ref.watch(cotizacionesOrdersPagedProvider(defaultOrderPageSize)),
-          ],
-          child: const CotizacionesOrdersScreen(),
-        ),
+        builder: (context, state) => const CotizacionesOrdersScreen(),
       ),
       GoRoute(
         path: '/orders/cotizaciones/dashboard',
         name: 'cotizacionesDashboard',
-        builder: (context, state) => PreloadGate(
-          loaders: (ref) => [
-            ref.watch(currentUserProfileProvider),
-            ref.watch(cotizacionesOrdersPagedProvider(defaultOrderPageSize)),
-          ],
-          child: const CotizacionesOrdersScreen(initialTab: 1),
+        builder: (context, state) => const CotizacionesDashboardScreen(
+          mode: CotizacionesDashboardMode.compras,
         ),
       ),
       GoRoute(
@@ -151,43 +130,30 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         name: 'cotizacionOrderReview',
         builder: (context, state) {
           final orderId = state.pathParameters['orderId']!;
-          return PreloadGate(
-            loaders: (ref) => [
-              ref.watch(orderByIdStreamProvider(orderId)),
-            ],
-            child: CotizacionOrderReviewScreen(orderId: orderId),
+          final fromDashboard =
+              state.uri.queryParameters['fromDashboard'] == '1';
+          return CotizacionOrderReviewScreen(
+            orderId: orderId,
+            fromDashboard: fromDashboard,
           );
         },
       ),
       GoRoute(
         path: '/orders/eta',
         name: 'pendingEtaOrders',
-        builder: (context, state) => PreloadGate(
-          loaders: (ref) => [
-            ref.watch(currentUserProfileProvider),
-            ref.watch(pendingEtaOrdersPagedProvider(defaultOrderPageSize)),
-          ],
-          child: const PendingEtaOrdersScreen(),
-        ),
+        builder: (context, state) => const PendingEtaOrdersScreen(),
       ),
       GoRoute(
         path: '/orders/direccion',
         name: 'direccionOrders',
-        builder: (context, state) => PreloadGate(
-          loaders: (ref) => [
-            ref.watch(currentUserProfileProvider),
-            ref.watch(pendingDireccionOrdersProvider),
-            ref.watch(sharedQuotesProvider),
-          ],
-          child: const DireccionOrdersScreen(),
-        ),
+        builder: (context, state) => const DireccionOrdersScreen(),
       ),
       GoRoute(
         path: '/orders/direccion/dashboard',
         name: 'direccionDashboard',
         builder: (context, state) => CotizacionesDashboardScreen(
           mode: CotizacionesDashboardMode.direccion,
-          onOpenOrder: (orderId) => guardedPush(context, '/orders/$orderId/pdf'),
+          onOpenOrder: (orderId) => guardedPdfPush(context, '/orders/$orderId/pdf'),
         ),
       ),
       GoRoute(
@@ -195,13 +161,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         name: 'direccionOrderReview',
         builder: (context, state) {
           final orderId = state.pathParameters['orderId']!;
-          return PreloadGate(
-            loaders: (ref) => [
-              ref.watch(orderByIdStreamProvider(orderId)),
-              ref.watch(orderEventsProvider(orderId)),
-            ],
-            child: DireccionOrderReviewScreen(orderId: orderId),
-          );
+          return DireccionOrderReviewScreen(orderId: orderId);
         },
       ),
       GoRoute(
@@ -209,13 +169,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         name: 'pendingOrderReview',
         builder: (context, state) {
           final orderId = state.pathParameters['orderId']!;
-          return PreloadGate(
-            loaders: (ref) => [
-              ref.watch(orderByIdStreamProvider(orderId)),
-              ref.watch(orderEventsProvider(orderId)),
-            ],
-            child: PendingOrderReviewScreen(orderId: orderId),
-          );
+          return PendingOrderReviewScreen(orderId: orderId);
         },
       ),
       GoRoute(
@@ -223,71 +177,38 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         name: 'pendingOrderApprove',
         builder: (context, state) {
           final orderId = state.pathParameters['orderId']!;
-          return PreloadGate(
-            loaders: (ref) => [
-              ref.watch(orderByIdStreamProvider(orderId)),
-            ],
-            child: PendingOrderApprovalScreen(orderId: orderId),
-          );
+          return PendingOrderApprovalScreen(orderId: orderId);
         },
       ),
       GoRoute(
         path: '/orders/rejected',
         name: 'rejectedOrders',
-        builder: (context, state) => PreloadGate(
-          loaders: (ref) => [
-            ref.watch(currentUserProfileProvider),
-            ref.watch(rejectedOrdersPagedProvider(defaultOrderPageSize)),
-          ],
-          child: const RejectedOrdersScreen(),
-        ),
+        builder: (context, state) => const RejectedOrdersScreen(),
       ),
       GoRoute(
         path: '/orders/contabilidad',
         name: 'contabilidadOrders',
-        builder: (context, state) => PreloadGate(
-          loaders: (ref) => [
-            ref.watch(currentUserProfileProvider),
-            ref.watch(contabilidadOrdersPagedProvider(defaultOrderPageSize)),
-          ],
-          child: const ContabilidadOrdersScreen(),
-        ),
+        builder: (context, state) => const ContabilidadOrdersScreen(),
       ),
       GoRoute(
         path: '/orders/contabilidad/:orderId',
         name: 'contabilidadOrderReview',
         builder: (context, state) {
           final orderId = state.pathParameters['orderId']!;
-          return PreloadGate(
-            loaders: (ref) => [
-              ref.watch(orderByIdStreamProvider(orderId)),
-            ],
-            child: ContabilidadOrderReviewScreen(orderId: orderId),
-          );
+          return ContabilidadOrderReviewScreen(orderId: orderId);
         },
       ),
       GoRoute(
         path: '/orders/almacen',
         name: 'almacenOrders',
-        builder: (context, state) => PreloadGate(
-          loaders: (ref) => [
-            ref.watch(currentUserProfileProvider),
-            ref.watch(almacenOrdersPagedProvider(defaultOrderPageSize)),
-          ],
-          child: const AlmacenOrdersScreen(),
-        ),
+        builder: (context, state) => const AlmacenOrdersScreen(),
       ),
       GoRoute(
         path: '/orders/almacen/:orderId',
         name: 'almacenOrderReview',
         builder: (context, state) {
           final orderId = state.pathParameters['orderId']!;
-          return PreloadGate(
-            loaders: (ref) => [
-              ref.watch(orderByIdStreamProvider(orderId)),
-            ],
-            child: AlmacenOrderReviewScreen(orderId: orderId),
-          );
+          return AlmacenOrderReviewScreen(orderId: orderId);
         },
       ),
       GoRoute(
@@ -295,12 +216,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         name: 'orderPdfView',
         builder: (context, state) {
           final orderId = state.pathParameters['orderId']!;
-          return PreloadGate(
-            loaders: (ref) => [
-              ref.watch(orderByIdStreamProvider(orderId)),
-            ],
-            child: OrderPdfViewScreen(orderId: orderId),
-          );
+          return OrderPdfViewScreen(orderId: orderId);
         },
       ),
       GoRoute(
@@ -308,12 +224,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         name: 'orderDetail',
         builder: (context, state) {
           final orderId = state.pathParameters['orderId']!;
-          return PreloadGate(
-            loaders: (ref) => [
-              ref.watch(orderByIdStreamProvider(orderId)),
-            ],
-            child: OrderDetailScreen(orderId: orderId),
-          );
+          return OrderDetailScreen(orderId: orderId);
         },
       ),
     ],
@@ -344,4 +255,44 @@ class _RouterRefreshNotifier extends ChangeNotifier {
   void trigger() {
     notifyListeners();
   }
+}
+
+class _RouterAuthRefreshState {
+  const _RouterAuthRefreshState({
+    required this.isLoading,
+    required this.isLoggedIn,
+  });
+
+  final bool isLoading;
+  final bool isLoggedIn;
+
+  @override
+  bool operator ==(Object other) {
+    return other is _RouterAuthRefreshState &&
+        other.isLoading == isLoading &&
+        other.isLoggedIn == isLoggedIn;
+  }
+
+  @override
+  int get hashCode => Object.hash(isLoading, isLoggedIn);
+}
+
+class _RouterProfileRefreshState {
+  const _RouterProfileRefreshState({
+    required this.isLoading,
+    required this.hasValue,
+  });
+
+  final bool isLoading;
+  final bool hasValue;
+
+  @override
+  bool operator ==(Object other) {
+    return other is _RouterProfileRefreshState &&
+        other.isLoading == isLoading &&
+        other.hasValue == hasValue;
+  }
+
+  @override
+  int get hashCode => Object.hash(isLoading, hasValue);
 }

@@ -59,8 +59,12 @@ class _ItemReviewSheetState extends State<_ItemReviewSheet> {
   late final List<PurchaseOrderItem> _items;
   late final List<bool> _flags;
   late final List<String> _comments;
+  late final List<String> _searchTexts;
+  late List<int> _filteredIndexes;
   final Map<int, TextEditingController> _controllers = {};
   final TextEditingController _searchController = TextEditingController();
+  int _flaggedCount = 0;
+  String _searchQuery = '';
   String? _errorText;
 
   @override
@@ -69,6 +73,9 @@ class _ItemReviewSheetState extends State<_ItemReviewSheet> {
     _items = widget.order.items;
     _flags = [for (final item in _items) item.reviewFlagged];
     _comments = [for (final item in _items) (item.reviewComment ?? '')];
+    _searchTexts = [for (final item in _items) _buildItemSearchText(item)];
+    _flaggedCount = _flags.where((value) => value).length;
+    _filteredIndexes = List<int>.generate(_items.length, (index) => index);
   }
 
   @override
@@ -88,15 +95,6 @@ class _ItemReviewSheetState extends State<_ItemReviewSheet> {
       minChildSize: 0.45,
       maxChildSize: 0.95,
       builder: (context, scrollController) {
-        final query = _searchController.text.trim().toLowerCase();
-
-        final filteredIndexes = <int>[];
-        for (var i = 0; i < _items.length; i++) {
-          if (_matchesQuery(_items[i], query)) {
-            filteredIndexes.add(i);
-          }
-        }
-
         return Padding(
           padding: EdgeInsets.fromLTRB(
             16,
@@ -132,20 +130,20 @@ class _ItemReviewSheetState extends State<_ItemReviewSheet> {
               TextField(
                 controller: _searchController,
                 decoration: const InputDecoration(
-                  labelText: 'Buscar artÃ­culo',
+                  labelText: 'Buscar artí­culo',
                   prefixIcon: Icon(Icons.search),
                 ),
-                onChanged: (_) => setState(() {}),
+                onChanged: _updateSearch,
               ),
               const SizedBox(height: 8),
               const _ReviewHeaderRow(),
               Expanded(
                 child: ListView.separated(
                   controller: scrollController,
-                  itemCount: filteredIndexes.length,
+                  itemCount: _filteredIndexes.length,
                   separatorBuilder: (_, __) => const SizedBox(height: 8),
                   itemBuilder: (context, index) {
-                    final itemIndex = filteredIndexes[index];
+                    final itemIndex = _filteredIndexes[index];
                     final item = _items[itemIndex];
 
                     final controller = _controllers.putIfAbsent(
@@ -177,7 +175,9 @@ class _ItemReviewSheetState extends State<_ItemReviewSheet> {
                               value: flagged,
                               onChanged: (value) {
                                 final newValue = value ?? false;
+                                if (newValue == _flags[itemIndex]) return;
                                 setState(() {
+                                  _flaggedCount += newValue ? 1 : -1;
                                   _flags[itemIndex] = newValue;
                                   if (!newValue) {
                                     _comments[itemIndex] = '';
@@ -246,8 +246,7 @@ class _ItemReviewSheetState extends State<_ItemReviewSheet> {
                   Expanded(
                     child: FilledButton(
                       onPressed: () {
-                        final flaggedCount = _flags.where((v) => v).length;
-                        if (flaggedCount == 0) {
+                        if (_flaggedCount == 0) {
                           setState(() {
                             _errorText = 'Selecciona al menos un artÃ­culo.';
                           });
@@ -304,6 +303,25 @@ class _ItemReviewSheetState extends State<_ItemReviewSheet> {
       },
     );
   }
+
+  void _updateSearch(String value) {
+    final normalized = value.trim().toLowerCase();
+    if (normalized == _searchQuery) return;
+    setState(() {
+      _searchQuery = normalized;
+      if (_searchQuery.isEmpty) {
+        _filteredIndexes = List<int>.generate(_items.length, (index) => index);
+        return;
+      }
+      final matches = <int>[];
+      for (var index = 0; index < _items.length; index++) {
+        if (_searchTexts[index].contains(_searchQuery)) {
+          matches.add(index);
+        }
+      }
+      _filteredIndexes = matches;
+    });
+  }
 }
 
 class _ReviewHeaderRow extends StatelessWidget {
@@ -326,14 +344,11 @@ class _ReviewHeaderRow extends StatelessWidget {
   }
 }
 
-bool _matchesQuery(PurchaseOrderItem item, String query) {
-  if (query.isEmpty) return true;
 
-  final text = [
+String _buildItemSearchText(PurchaseOrderItem item) {
+  return [
     item.line.toString(),
     item.partNumber,
     item.description,
   ].where((value) => value.trim().isNotEmpty).join(' ').toLowerCase();
-
-  return text.contains(query);
 }

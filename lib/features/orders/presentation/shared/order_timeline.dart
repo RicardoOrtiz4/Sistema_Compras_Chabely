@@ -13,10 +13,13 @@ class OrderTimeline extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final statuses = List<PurchaseOrderStatus>.from(defaultStatusFlow);
+    final eventsByStatus = <PurchaseOrderStatus, PurchaseOrderEvent>{};
     var currentIndex = -1;
     for (final event in events) {
       final normalized = _normalizeStatus(event.toStatus);
-      final index = statuses.indexWhere((status) => status == normalized);
+      if (normalized == null) continue;
+      eventsByStatus.putIfAbsent(normalized, () => event);
+      final index = statuses.indexOf(normalized);
       if (index > currentIndex) {
         currentIndex = index;
       }
@@ -33,19 +36,10 @@ class OrderTimeline extends StatelessWidget {
             status: statuses[i],
             isCompleted: currentIndex >= 0 && i <= currentIndex,
             isLast: i == statuses.length - 1,
-            event: _eventForStatus(statuses[i]),
+            event: eventsByStatus[statuses[i]],
           ),
       ],
     );
-  }
-
-  PurchaseOrderEvent? _eventForStatus(PurchaseOrderStatus status) {
-    for (final event in events) {
-      if (_normalizeStatus(event.toStatus) == status) {
-        return event;
-      }
-    }
-    return null;
   }
 
   PurchaseOrderStatus? _normalizeStatus(PurchaseOrderStatus? status) {

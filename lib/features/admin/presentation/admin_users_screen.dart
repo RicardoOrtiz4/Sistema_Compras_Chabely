@@ -4,7 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
-import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/auth/domain/app_user.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 
@@ -23,17 +22,6 @@ class AdminUsersScreen extends ConsumerWidget {
       return Scaffold(
         appBar: AppBar(
           title: const Text('Administrar usuarios'),
-          actions: [
-            infoAction(
-              context,
-              title: 'Administrar usuarios',
-              message:
-                  'Gestiona cuentas, roles y areas.\n'
-                  'Crear agrega un usuario nuevo.\n'
-                  'Editar cambia rol y area.\n'
-                  'Eliminar quita el acceso.',
-            ),
-          ],
         ),
         body: const Center(
           child: Text('No tienes permisos para ver esta pantalla.'),
@@ -46,17 +34,6 @@ class AdminUsersScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Administrar usuarios'),
-        actions: [
-          infoAction(
-            context,
-            title: 'Administrar usuarios',
-            message:
-                'Gestiona cuentas, roles y areas.\n'
-                'Crear agrega un usuario nuevo.\n'
-                'Editar cambia rol y area.\n'
-                'Eliminar quita el acceso.',
-          ),
-        ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _showCreateDialog(context, ref),

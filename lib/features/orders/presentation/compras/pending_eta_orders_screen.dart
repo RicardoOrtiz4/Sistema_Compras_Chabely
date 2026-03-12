@@ -3,18 +3,18 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
-import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
-import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_card_pills.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_pdf_preload_gate.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_search.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_status_duration.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_summary_lines.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
 
@@ -26,7 +26,12 @@ class PendingEtaOrdersScreen extends ConsumerStatefulWidget {
       _PendingEtaOrdersScreenState();
 }
 
-class _PendingEtaOrdersScreenState extends ConsumerState<PendingEtaOrdersScreen> {
+class _PendingEtaOrdersScreenState
+    extends ConsumerState<PendingEtaOrdersScreen> {
+  List<PurchaseOrder>? _cachedSourceOrders;
+  String? _cachedVisibleKey;
+  List<PurchaseOrder>? _cachedVisibleOrders;
+
   late final TextEditingController _searchController;
   final OrderSearchCache _searchCache = OrderSearchCache();
   Timer? _searchDebounce;
@@ -51,12 +56,14 @@ class _PendingEtaOrdersScreenState extends ConsumerState<PendingEtaOrdersScreen>
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 250), () {
       if (!mounted) return;
+      _searchDebounce = null;
       setState(() => _searchQuery = value);
     });
   }
 
   void _clearSearch() {
     _searchDebounce?.cancel();
+    _searchDebounce = null;
     _searchController.clear();
     setState(() => _searchQuery = '');
   }
@@ -67,21 +74,11 @@ class _PendingEtaOrdersScreenState extends ConsumerState<PendingEtaOrdersScreen>
 
   @override
   Widget build(BuildContext context) {
-    final ordersAsync = ref.watch(pendingEtaOrdersPagedProvider(_limit));
+    final ordersAsync = ref.watch(pendingEtaOrdersProvider);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Pendientes de fecha estimada'),
-        actions: [
-          infoAction(
-            context,
-            title: 'Pendientes de fecha estimada',
-            message:
-                'Asigna fecha estimada de entrega por orden.\n'
-                'Usa el buscador para localizar folios.\n'
-                'Guardar avanza la orden al siguiente paso.',
-          ),
-        ],
       ),
       body: ordersAsync.when(
         data: (orders) {
@@ -90,17 +87,11 @@ class _PendingEtaOrdersScreenState extends ConsumerState<PendingEtaOrdersScreen>
           }
 
           _searchCache.retainFor(orders);
-          final filtered = orders
-              .where((order) => orderMatchesSearch(order, _searchQuery, cache: _searchCache))
-              .toList();
-          final canLoadMore = orders.length >= _limit;
-          final showLoadMore =
-              canLoadMore && filtered.length >= defaultOrderPageSize;
+          final filtered = _resolveVisibleOrders(orders);
+          final visibleOrders = filtered.take(_limit).toList(growable: false);
+          final showLoadMore = filtered.length > visibleOrders.length;
 
-          final branding = ref.read(currentBrandingProvider);
-          prefetchOrderPdfsForOrders(filtered, branding: branding);
-
-          return Column(
+          final content = Column(
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -122,7 +113,7 @@ class _PendingEtaOrdersScreenState extends ConsumerState<PendingEtaOrdersScreen>
               ),
               const SizedBox(height: 12),
               Expanded(
-                child: filtered.isEmpty
+                child: visibleOrders.isEmpty
                     ? Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
@@ -139,10 +130,10 @@ class _PendingEtaOrdersScreenState extends ConsumerState<PendingEtaOrdersScreen>
                       )
                     : ListView.separated(
                         padding: const EdgeInsets.all(16),
-                        itemCount: filtered.length + (showLoadMore ? 1 : 0),
+                        itemCount: visibleOrders.length + (showLoadMore ? 1 : 0),
                         separatorBuilder: (_, __) => const SizedBox(height: 12),
                         itemBuilder: (context, index) {
-                          if (index >= filtered.length) {
+                          if (index >= visibleOrders.length) {
                             return Center(
                               child: OutlinedButton.icon(
                                 onPressed: _loadMore,
@@ -151,18 +142,24 @@ class _PendingEtaOrdersScreenState extends ConsumerState<PendingEtaOrdersScreen>
                               ),
                             );
                           }
-                          final order = filtered[index];
+                          final order = visibleOrders[index];
                           final busy = _busyOrders.contains(order.id);
                           return _PendingEtaOrderCard(
                             order: order,
                             busy: busy,
-                            onViewPdf: () => guardedPush(context, '/orders/${order.id}/pdf'),
+                            onViewPdf: () =>
+                                guardedPdfPush(context, '/orders/${order.id}/pdf'),
                             onSetEta: () => _handleSetEta(order),
                           );
                         },
                       ),
               ),
             ],
+          );
+          return OrderPdfPreloadGate(
+            orders: visibleOrders,
+            enabled: _searchDebounce == null && _searchQuery.trim().isEmpty,
+            child: content,
           );
         },
         loading: () => const AppSplash(),
@@ -183,7 +180,9 @@ class _PendingEtaOrdersScreenState extends ConsumerState<PendingEtaOrdersScreen>
       context: context,
       firstDate: DateTime.now().subtract(const Duration(days: 1)),
       lastDate: DateTime.now().add(const Duration(days: 365)),
-      initialDate: initialDate.isAfter(DateTime.now()) ? initialDate : DateTime.now(),
+      initialDate: initialDate.isAfter(DateTime.now())
+          ? initialDate
+          : DateTime.now(),
     );
 
     if (picked == null) return;
@@ -206,8 +205,14 @@ class _PendingEtaOrdersScreenState extends ConsumerState<PendingEtaOrdersScreen>
       );
     } catch (error, stack) {
       if (!mounted) return;
-      final message = reportError(error, stack, context: 'PendingEtaOrdersScreen.setEta');
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+      final message = reportError(
+        error,
+        stack,
+        context: 'PendingEtaOrdersScreen.setEta',
+      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     } finally {
       if (mounted) {
         _setBusy(order.id, false);
@@ -236,6 +241,35 @@ class _PendingEtaOrdersScreenState extends ConsumerState<PendingEtaOrdersScreen>
       }
     });
   }
+
+  List<PurchaseOrder> _resolveVisibleOrders(List<PurchaseOrder> orders) {
+    final key = _visibleOrdersKey();
+    final cached = _cachedVisibleOrders;
+    if (cached != null &&
+        identical(_cachedSourceOrders, orders) &&
+        _cachedVisibleKey == key) {
+      return cached;
+    }
+
+    final trimmedQuery = _searchQuery.trim();
+    final resolved = trimmedQuery.isEmpty
+        ? orders
+        : orders
+              .where(
+                (order) => orderMatchesSearch(
+                  order,
+                  trimmedQuery,
+                  cache: _searchCache,
+                ),
+              )
+              .toList(growable: false);
+    _cachedSourceOrders = orders;
+    _cachedVisibleKey = key;
+    _cachedVisibleOrders = resolved;
+    return resolved;
+  }
+
+  String _visibleOrdersKey() => _searchQuery.trim().toLowerCase();
 }
 
 class _PendingEtaOrderCard extends StatelessWidget {
@@ -262,23 +296,33 @@ class _PendingEtaOrderCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                OrderFolioPill(folio: order.id),
+                OrderUrgencyPill(urgency: order.urgency),
+              ],
+            ),
+            const SizedBox(height: 8),
             Text('Solicitante: ${order.requesterName}'),
             Text('Área: ${order.areaName}'),
-            Text('Urgencia: ${order.urgency.label}'),
-            Text('Creada: $createdLabel'),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: Text('Creada: $createdLabel')),
+                OrderStatusDurationPill(
+                  order: order,
+                  label: 'Tiempo desde Dirección General',
+                ),
+              ],
+            ),
             const SizedBox(height: 8),
-
-            // ✅ Reemplazo del widget corrupto:
             _OrderSummary(order: order),
-            const SizedBox(height: 6),
-            OrderStatusDurationPill(order: order),
 
             if (requestedDate != null)
               Text('Fecha solicitada: ${requestedDate.toShortDate()}'),
-
-            if (order.direccionGeneralName != null &&
-                order.direccionGeneralName!.trim().isNotEmpty)
-              Text('Autorizó: ${order.direccionGeneralName}'),
 
             const SizedBox(height: 12),
             LayoutBuilder(
@@ -305,11 +349,7 @@ class _PendingEtaOrderCard extends StatelessWidget {
                 if (isNarrow) {
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      viewPdf,
-                      const SizedBox(height: 8),
-                      etaButton,
-                    ],
+                    children: [viewPdf, const SizedBox(height: 8), etaButton],
                   );
                 }
 
@@ -347,18 +387,6 @@ class _OrderSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final supplier = (order.supplier ?? '').trim();
-    final internalOrder = (order.internalOrder ?? '').trim();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Estado: ${order.status.label}'),
-        if (supplier.isNotEmpty) Text('Proveedor: $supplier'),
-        if (internalOrder.isNotEmpty) Text('OC interna: $internalOrder'),
-        if (order.budget != null) Text('Presupuesto: ${order.budget}'),
-      ],
-    );
+    return OrderSummaryLines(order: order, emptyLabel: '');
   }
 }
-

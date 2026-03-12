@@ -5,6 +5,7 @@ import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/providers.dart';
 import 'package:sistema_compras/features/auth/domain/app_user.dart';
+import 'package:sistema_compras/features/orders/domain/order_dashboard_counts.dart';
 import 'package:sistema_compras/features/orders/domain/order_folio.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/domain/shared_quote.dart';
@@ -17,68 +18,50 @@ class PurchaseOrderRepository {
 
   DatabaseReference get _ordersRef => _database.ref('purchaseOrders');
   DatabaseReference get _sharedQuotesRef => _database.ref('sharedQuotes');
+  DatabaseReference get _orderCountersRef => _database.ref('purchaseOrderCounters');
+
+  PurchaseOrder? _parseOrderEntry(String id, Object? raw) {
+    if (raw is! Map) return null;
+    return PurchaseOrder.fromMap(
+      id,
+      Map<String, dynamic>.from(raw),
+    );
+  }
+
+  List<PurchaseOrder> _parseOrdersMap(Object? value) {
+    if (value is! Map) return const <PurchaseOrder>[];
+
+    final orders = <PurchaseOrder>[];
+    value.forEach((key, raw) {
+      final order = _parseOrderEntry(key.toString(), raw);
+      if (order != null) {
+        orders.add(order);
+      }
+    });
+
+    orders.sort((a, b) {
+      final aTime = (a.updatedAt ?? a.createdAt)?.millisecondsSinceEpoch ?? 0;
+      final bTime = (b.updatedAt ?? b.createdAt)?.millisecondsSinceEpoch ?? 0;
+      return bTime.compareTo(aTime);
+    });
+
+    return orders;
+  }
 
   Stream<List<PurchaseOrder>> watchOrdersForUser(String uid, {int? limit}) {
     Query query = _ordersRef.orderByChild('requesterId').equalTo(uid);
     if (limit != null && limit > 0) {
       query = query.limitToLast(limit);
     }
-    return query.onValue.map((event) {
-      final value = event.snapshot.value;
-      if (value is! Map) return <PurchaseOrder>[];
-
-      final orders = <PurchaseOrder>[];
-      value.forEach((key, raw) {
-        if (raw is Map) {
-          orders.add(
-            PurchaseOrder.fromMap(
-              key.toString(),
-              Map<String, dynamic>.from(raw),
-            ),
-          );
-        }
-      });
-
-      // Más recientes primero
-      orders.sort((a, b) {
-        final aTime = (a.updatedAt ?? a.createdAt)?.millisecondsSinceEpoch ?? 0;
-        final bTime = (b.updatedAt ?? b.createdAt)?.millisecondsSinceEpoch ?? 0;
-        return bTime.compareTo(aTime);
-      });
-
-      return orders;
-    });
+    return query.onValue.map((event) => _parseOrdersMap(event.snapshot.value));
   }
 
   Stream<List<PurchaseOrder>> watchAllOrders({int? limit}) {
     Query query = _ordersRef;
     if (limit != null && limit > 0) {
-      query = _ordersRef.orderByChild('updatedAt').limitToLast(limit);
+      query = query.limitToLast(limit);
     }
-    return query.onValue.map((event) {
-      final value = event.snapshot.value;
-      if (value is! Map) return <PurchaseOrder>[];
-
-      final orders = <PurchaseOrder>[];
-      value.forEach((key, raw) {
-        if (raw is Map) {
-          orders.add(
-            PurchaseOrder.fromMap(
-              key.toString(),
-              Map<String, dynamic>.from(raw),
-            ),
-          );
-        }
-      });
-
-      orders.sort((a, b) {
-        final aTime = (a.updatedAt ?? a.createdAt)?.millisecondsSinceEpoch ?? 0;
-        final bTime = (b.updatedAt ?? b.createdAt)?.millisecondsSinceEpoch ?? 0;
-        return bTime.compareTo(aTime);
-      });
-
-      return orders;
-    });
+    return query.onValue.map((event) => _parseOrdersMap(event.snapshot.value));
   }
 
   Stream<List<PurchaseOrderEvent>> watchEvents(String orderId) {
@@ -117,47 +100,30 @@ class PurchaseOrderRepository {
     if (limit != null && limit > 0) {
       query = query.limitToLast(limit);
     }
-    return query.onValue.map((event) {
-      final value = event.snapshot.value;
-      if (value is! Map) return <PurchaseOrder>[];
-
-      final orders = <PurchaseOrder>[];
-      value.forEach((key, raw) {
-        if (raw is Map) {
-          orders.add(
-            PurchaseOrder.fromMap(
-              key.toString(),
-              Map<String, dynamic>.from(raw),
-            ),
-          );
-        }
-      });
-
-      orders.sort((a, b) {
-        final aTime = (a.updatedAt ?? a.createdAt)?.millisecondsSinceEpoch ?? 0;
-        final bTime = (b.updatedAt ?? b.createdAt)?.millisecondsSinceEpoch ?? 0;
-        return bTime.compareTo(aTime);
-      });
-
-      return orders;
-    });
+    return query.onValue.map((event) => _parseOrdersMap(event.snapshot.value));
   }
 
   Stream<PurchaseOrder?> watchOrderById(String orderId) {
     return _ordersRef.child(orderId).onValue.map((event) {
+      return _parseOrderEntry(orderId, event.snapshot.value);
+    });
+  }
+
+  Stream<OrderDashboardCounts?> watchDashboardCounts({required String? userId}) {
+    return _orderCountersRef.onValue.map((event) {
       final value = event.snapshot.value;
       if (value is! Map) return null;
-      return PurchaseOrder.fromMap(orderId, Map<String, dynamic>.from(value));
+      return OrderDashboardCounts.fromMap(
+        Map<String, dynamic>.from(value),
+        userId: userId,
+      );
     });
   }
 
   Future<PurchaseOrder?> fetchOrderById(String orderId) async {
     final snapshot = await _ordersRef.child(orderId).get();
-    if (!snapshot.exists || snapshot.value is! Map) return null;
-    return PurchaseOrder.fromMap(
-      orderId,
-      Map<String, dynamic>.from(snapshot.value as Map),
-    );
+    if (!snapshot.exists) return null;
+    return _parseOrderEntry(orderId, snapshot.value);
   }
 
   Future<String> submitOrder({
@@ -443,6 +409,8 @@ class PurchaseOrderRepository {
     final trimmedName = actor.name.trim();
     final trimmedArea = actor.areaDisplay.trim();
     final trimmedComment = comment?.trim() ?? '';
+    final differenceSummary = _almacenDifferenceSummary(items);
+    final hasDifferences = differenceSummary.isNotEmpty;
     final timingUpdate = _statusTimingUpdate(order);
 
     await orderRef.update({
@@ -451,11 +419,18 @@ class PurchaseOrderRepository {
       'almacenName': trimmedName.isEmpty ? null : trimmedName,
       'almacenArea': trimmedArea.isEmpty ? null : trimmedArea,
       'almacenComment': trimmedComment.isEmpty ? null : trimmedComment,
+      'almacenHasDifferences': hasDifferences,
+      'almacenDifferenceSummary': hasDifferences ? differenceSummary : null,
       'almacenReceivedAt': ServerValue.timestamp,
+      'completedAt': ServerValue.timestamp,
       'updatedAt': ServerValue.timestamp,
       ...timingUpdate,
     });
 
+    final eventComment = _joinEventComments(
+      trimmedComment.isEmpty ? null : trimmedComment,
+      hasDifferences ? differenceSummary : null,
+    );
     await _appendEvent(
       orderRef,
       fromStatus: order.status,
@@ -463,6 +438,49 @@ class PurchaseOrderRepository {
       byUserId: actor.id,
       byRole: _actorRoleLabel(actor),
       type: 'advance',
+      itemsSnapshot: items,
+      comment: eventComment,
+    );
+  }
+
+  Future<void> returnToContabilidad({
+    required PurchaseOrder order,
+    required AppUser actor,
+  }) async {
+    final orderRef = _ordersRef.child(order.id);
+    final timingUpdate = _statusTimingUpdate(order);
+    final clearedItems = order.items
+        .map(
+          (item) => item.copyWith(
+            clearReceivedQuantity: true,
+            clearReceivedComment: true,
+          ),
+        )
+        .toList(growable: false);
+
+    await orderRef.update({
+      'status': PurchaseOrderStatus.contabilidad.name,
+      'items': clearedItems.map((item) => item.toMap()).toList(),
+      'almacenName': null,
+      'almacenArea': null,
+      'almacenComment': null,
+      'almacenHasDifferences': false,
+      'almacenDifferenceSummary': null,
+      'almacenReceivedAt': null,
+      'completedAt': null,
+      'updatedAt': ServerValue.timestamp,
+      ...timingUpdate,
+    });
+
+    await _appendEvent(
+      orderRef,
+      fromStatus: order.status,
+      toStatus: PurchaseOrderStatus.contabilidad,
+      byUserId: actor.id,
+      byRole: _actorRoleLabel(actor),
+      type: 'return',
+      itemsSnapshot: clearedItems,
+      comment: 'Regresada de almacen a contabilidad.',
     );
   }
 
@@ -484,6 +502,8 @@ class PurchaseOrderRepository {
     await orderRef.update({
       'status': PurchaseOrderStatus.pendingCompras.name,
       'direccionComment': trimmed.isEmpty ? null : trimmed,
+      'processedByName': null,
+      'processedByArea': null,
       'direccionGeneralName': null,
       'direccionGeneralArea': null,
       'direccionReturnCount': nextDireccionReturnCount,
@@ -521,6 +541,8 @@ class PurchaseOrderRepository {
       'purchaseOrders/${order.id}/status': PurchaseOrderStatus.cotizaciones.name,
       'purchaseOrders/${order.id}/direccionComment':
           trimmed.isEmpty ? null : trimmed,
+      'purchaseOrders/${order.id}/processedByName': null,
+      'purchaseOrders/${order.id}/processedByArea': null,
       'purchaseOrders/${order.id}/direccionGeneralName': null,
       'purchaseOrders/${order.id}/direccionGeneralArea': null,
       'purchaseOrders/${order.id}/direccionReturnCount': nextDireccionReturnCount,
@@ -556,6 +578,43 @@ class PurchaseOrderRepository {
     await _markSharedQuotesNeedsUpdate(order);
   }
 
+  Future<void> rejectSharedQuoteFromDireccion({
+    required SharedQuote quote,
+    required List<PurchaseOrder> orders,
+    required Set<String> rejectedOrderIds,
+    required String comment,
+    required AppUser actor,
+  }) async {
+    final validOrderIds = orders.map((order) => order.id.trim()).where((id) => id.isNotEmpty).toSet();
+    final targetOrderIds = rejectedOrderIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty && validOrderIds.contains(id))
+        .toSet();
+    if (targetOrderIds.isEmpty) return;
+
+    final trimmedComment = comment.trim();
+    final trimmedName = actor.name.trim();
+    final trimmedArea = actor.areaDisplay.trim();
+    final approvedSet = quote.approvedOrderIds.map((id) => id.trim()).where((id) => id.isNotEmpty).toSet();
+    approvedSet.removeAll(targetOrderIds);
+
+    await _sharedQuotesRef.child(quote.id).update({
+      'approvedOrderIds': approvedSet.isEmpty
+          ? null
+          : {for (final id in approvedSet) id: true},
+      'approvedAt': null,
+      'approvedByName': null,
+      'approvedByArea': null,
+      'rejectedOrderIds': {for (final id in targetOrderIds) id: true},
+      'rejectionComment': trimmedComment.isEmpty ? null : trimmedComment,
+      'rejectedAt': ServerValue.timestamp,
+      'rejectedByName': trimmedName.isEmpty ? null : trimmedName,
+      'rejectedByArea': trimmedArea.isEmpty ? null : trimmedArea,
+      'needsUpdate': true,
+      'updatedAt': ServerValue.timestamp,
+    });
+  }
+
   Future<void> approveSharedQuoteFromDireccion({
     required SharedQuote quote,
     required AppUser actor,
@@ -567,6 +626,11 @@ class PurchaseOrderRepository {
       ...quote.approvedOrderIds.map((id) => id.trim()).where((id) => id.isNotEmpty),
       ...approvedOrderIds.map((id) => id.trim()).where((id) => id.isNotEmpty),
     };
+    final remainingRejected = quote.rejectedOrderIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .where((id) => !approvedOrderIds.contains(id))
+        .toSet();
     final totalIds = quote.orderIds.map((id) => id.trim()).where((id) => id.isNotEmpty);
     final allApproved = totalIds.every(mergedApproved.contains);
 
@@ -577,6 +641,13 @@ class PurchaseOrderRepository {
       'approvedAt': allApproved ? ServerValue.timestamp : null,
       'approvedByName': allApproved && trimmedName.isNotEmpty ? trimmedName : null,
       'approvedByArea': allApproved && trimmedArea.isNotEmpty ? trimmedArea : null,
+      'rejectedOrderIds': remainingRejected.isEmpty
+          ? null
+          : {for (final id in remainingRejected) id: true},
+      'rejectionComment': remainingRejected.isEmpty ? null : quote.rejectionComment,
+      'rejectedAt': remainingRejected.isEmpty ? null : quote.rejectedAt?.millisecondsSinceEpoch,
+      'rejectedByName': remainingRejected.isEmpty ? null : quote.rejectedByName,
+      'rejectedByArea': remainingRejected.isEmpty ? null : quote.rejectedByArea,
       'updatedAt': ServerValue.timestamp,
     });
   }
@@ -665,6 +736,7 @@ class PurchaseOrderRepository {
     for (final orderId in orderIds) {
       updates['sharedQuotes/${quote.id}/orderIds/$orderId'] = true;
     }
+    updates['sharedQuotes/${quote.id}/updatedAt'] = ServerValue.timestamp;
     await _database.ref().update(updates);
 
     for (final orderId in orderIds) {
@@ -695,6 +767,9 @@ class PurchaseOrderRepository {
     });
 
     await _sharedQuotesRef.child(quote.id).child('orderIds').child(order.id).remove();
+    await _sharedQuotesRef.child(quote.id).update({
+      'updatedAt': ServerValue.timestamp,
+    });
 
     final refreshed = await fetchSharedQuoteById(quote.id);
     if (refreshed != null && refreshed.orderIds.isEmpty) {
@@ -728,6 +803,11 @@ class PurchaseOrderRepository {
       pdfUrl: cleaned,
       approvedOrderIds: quote.approvedOrderIds,
       approvedAt: quote.approvedAt,
+      rejectedOrderIds: quote.rejectedOrderIds,
+      rejectionComment: quote.rejectionComment,
+      rejectedAt: quote.rejectedAt,
+      rejectedByName: quote.rejectedByName,
+      rejectedByArea: quote.rejectedByArea,
       needsUpdate: false,
       version: nextVersion,
     );
@@ -856,12 +936,16 @@ class PurchaseOrderRepository {
 
     final orderRef = _ordersRef.child(order.id);
     final timingUpdate = _statusTimingUpdate(order);
+    final trimmedName = actor.name.trim();
+    final trimmedArea = actor.areaDisplay.trim();
 
     await orderRef.update({
       'status': PurchaseOrderStatus.authorizedGerencia.name,
       'cotizacionLinks': cleanedLinks.map((link) => link.toMap()).toList(),
       'cotizacionPdfUrls': cleanedLinks.map((link) => link.url).toList(),
       'cotizacionPdfUrl': cleanedLinks.first.url,
+      'processedByName': trimmedName.isEmpty ? null : trimmedName,
+      'processedByArea': trimmedArea.isEmpty ? null : trimmedArea,
       'updatedAt': ServerValue.timestamp,
       ...timingUpdate,
     });
@@ -1002,6 +1086,41 @@ Map<String, Object?> _statusTimingUpdate(PurchaseOrder order) {
     'statusDurations': durations,
     'statusEnteredAt': now.millisecondsSinceEpoch,
   };
+}
+
+String _almacenDifferenceSummary(List<PurchaseOrderItem> items) {
+  final lines = <String>[];
+  for (final item in items) {
+    final received = item.receivedQuantity;
+    if (received == null) continue;
+
+    final delta = received - item.quantity;
+    if (delta == 0) continue;
+
+    final changeLabel = delta > 0 ? '+${_formatDiffNum(delta)}' : _formatDiffNum(delta);
+    final comment = (item.receivedComment ?? '').trim();
+    final description = item.description.trim().isEmpty ? 'Item ${item.line}' : item.description.trim();
+    final suffix = comment.isEmpty ? '' : ' ($comment)';
+    lines.add(
+      'Item ${item.line} - $description: solicitado ${_formatDiffNum(item.quantity)} ${item.unit}, recibido ${_formatDiffNum(received)} ${item.unit}, diferencia $changeLabel$suffix',
+    );
+  }
+  return lines.join('\n');
+}
+
+String? _joinEventComments(String? primary, String? secondary) {
+  final first = primary?.trim() ?? '';
+  final second = secondary?.trim() ?? '';
+  if (first.isEmpty && second.isEmpty) return null;
+  if (first.isEmpty) return second;
+  if (second.isEmpty) return first;
+  return '$first\n\n$second';
+}
+
+String _formatDiffNum(num value) {
+  final asInt = value.toInt();
+  if (value == asInt) return asInt.toString();
+  return value.toString();
 }
 
 const _maxCorrections = 3;

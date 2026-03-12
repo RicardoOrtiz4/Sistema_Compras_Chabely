@@ -1,24 +1,17 @@
-[2026-03-05T12:55:19.907] ERROR [OrderPdfInlineView]: TooManyPagesException message=Instance of 'TooManyPagesException'
-js_primitives.dart:28 [2026-03-05T12:55:19.918] dart-sdk/lib/_internal/js_dev_runtime/private/ddc_runtime/errors.dart 274:3                 throw_
-js_primitives.dart:28 package:pdf/src/widgets/multi_page.dart 260:11                                              <fn>
-js_primitives.dart:28 package:pdf/src/widgets/multi_page.dart 263:16                                              generate
-js_primitives.dart:28 package:pdf/src/widgets/document.dart 117:9                                                 addPage
-js_primitives.dart:28 package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart 259:6   <fn>
-js_primitives.dart:28 dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 623:19                         <fn>
-js_primitives.dart:28 dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 648:23                         <fn>
-js_primitives.dart:28 dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 542:3                          _asyncStartSync
-js_primitives.dart:28 package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart 244:19  _buildOrderPdfWithAssets
-js_primitives.dart:28 package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart 183:10  <fn>
-js_primitives.dart:28 dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 623:19                         <fn>
-js_primitives.dart:28 dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 648:23                         <fn>
-js_primitives.dart:28 dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 594:19                         <fn>
-js_primitives.dart:28 dart-sdk/lib/async/zone.dart 1849:54                                                        runUnary
-js_primitives.dart:28 dart-sdk/lib/async/future_impl.dart 222:18                                                  handleValue
-js_primitives.dart:28 dart-sdk/lib/async/future_impl.dart 948:44                                                  handleValueCallback
-js_primitives.dart:28 dart-sdk/lib/async/future_impl.dart 977:13                                                  _propagateToListeners
-js_primitives.dart:28 dart-sdk/lib/async/future_impl.dart 543:9                                                   <fn>
-js_primitives.dart:28 dart-sdk/lib/async/schedule_microtask.dart 40:34                                            _microtaskLoop
-js_primitives.dart:28 dart-sdk/lib/async/schedule_microtask.dart 49:5                                             _startMicrotaskLoop
-js_primitives.dart:28 dart-sdk/lib/_internal/js_dev_runtime/private/ddc_runtime/operations.dart 118:77            tear
-js_primitives.dart:28 dart-sdk/lib/_internal/js_dev_runtime/patch/async_patch.dart 188:69                         <fn>
-js_primitives.dart:28 
+ [PDF] inline.waitEndOfFrame 273ms
+key=6.206401529600577e+64
+[2026-03-10T15:33:12.467] [PDF] buildOrderPdfLocal.assets 533ms
+key=draft-1
+[2026-03-10T15:33:12.500] [PDF] buildOrderPdf.compose 29ms key=draft-1
+[2026-03-10T15:33:26.313] [PDF] buildOrderPdf.save 13811ms key=draft-1
+[2026-03-10T15:33:26.313] [PDF] buildOrderPdfLocal.total 14379ms
+key=draft-1
+[2026-03-10T15:33:26.314] [PDF] buildOrderPdf.generate 14381ms
+key=draft-1 isolate=false
+[2026-03-10T15:33:26.332] [PDF] inline.bytesReady 14408ms
+key=6.206401529600577e+64
+[2026-03-10T15:33:26.333] [PDF] inline.totalFuture 14686ms
+key=6.206401529600577e+64
+[2026-03-10T15:33:27.296] [PDF] inline.openDocument 899ms
+key=6.206401529600577e+64
+[2026-03-10T15:33:27.297] [PDF] inline.viewerLoaded.web 903ms

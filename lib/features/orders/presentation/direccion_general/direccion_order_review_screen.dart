@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:sistema_compras/core/company_branding.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/optimistic_action.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
-import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
@@ -33,16 +33,6 @@ class _DireccionOrderReviewScreenState extends ConsumerState<DireccionOrderRevie
     return Scaffold(
       appBar: AppBar(
         title: const Text('Dirección General'),
-        actions: [
-          infoAction(
-            context,
-            title: 'Dirección General',
-            message:
-                'Consulta los links de cotizacion.\n'
-                'Revisa el PDF y el historial.\n'
-                'Autoriza o rechaza la orden.',
-          ),
-        ],
       ),
       body: orderAsync.when(
         data: (order) {
@@ -51,7 +41,6 @@ class _DireccionOrderReviewScreenState extends ConsumerState<DireccionOrderRevie
           }
           final maxCorrectionsReached = order.returnCount >= _maxCorrections;
           final cotizacionLinks = _cotizacionLinks(order);
-          final eventsAsync = ref.watch(orderEventsProvider(order.id));
           return Column(
             children: [
               Expanded(
@@ -105,22 +94,11 @@ class _DireccionOrderReviewScreenState extends ConsumerState<DireccionOrderRevie
                         'Máximo de correcciones alcanzado. Solicita una nueva requisición.',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
-                    eventsAsync.when(
-                      data: (events) => OrderRejectionHistory(
-                        order: order,
-                        events: events,
-                        hideLatestResubmission: true,
-                      ),
-                      loading: () => const SizedBox.shrink(),
-                      error: (error, stack) => Text(
-                        'Error en historial de rechazos: ${reportError(error, stack, context: 'DireccionOrderReviewScreen.rejections')}',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ),
+                    _DireccionRejectionHistorySection(order: order),
                     const SizedBox(height: 8),
                     OutlinedButton.icon(
                       onPressed: () async {
-                        await guardedPush(context, '/orders/${order.id}/pdf');
+                        await guardedPdfPush(context, '/orders/${order.id}/pdf');
                         if (mounted) {
                           setState(() => _hasPreviewedPdf = true);
                         }
@@ -189,6 +167,7 @@ class _DireccionOrderReviewScreenState extends ConsumerState<DireccionOrderRevie
 
   Future<void> _handlePaymentDone(PurchaseOrder order) async {
     final confirmed = await _confirmPaymentDone(order.id);
+    if (!mounted) return;
     if (!confirmed!) return;
     setState(() => _isBusy = true);
     final actor = ref.read(currentUserProfileProvider).value;
@@ -235,6 +214,7 @@ class _DireccionOrderReviewScreenState extends ConsumerState<DireccionOrderRevie
       title: 'Regresar orden ${order.id}',
       confirmLabel: 'Regresar',
     );
+    if (!mounted) return;
     if (review == null) return;
     setState(() => _isBusy = true);
     final actor = ref.read(currentUserProfileProvider).value;
@@ -268,12 +248,21 @@ class _DireccionOrderReviewScreenState extends ConsumerState<DireccionOrderRevie
   }
 
   Future<bool?> _confirmPaymentDone(String orderId) async {
+    final actor = ref.read(currentUserProfileProvider).value;
+    final approverName = actor == null || actor.name.trim().isEmpty
+        ? 'Tu nombre'
+        : actor.name.trim();
+    final approverArea = actor == null || actor.areaDisplay.trim().isEmpty
+        ? 'Tu area'
+        : actor.areaDisplay.trim();
+
     final result = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text('Autorizar orden $orderId'),
-        content: const Text(
-          'Al autorizar, la orden regresara a Compras para fecha estimada.',
+        content: Text(
+          'Al autorizar, la orden regresara a Compras para fecha estimada.\n\n'
+          'En el PDF, la casilla AUTORIZO mostrara "$approverName" y el area "$approverArea".',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
@@ -303,6 +292,31 @@ class _DireccionOrderReviewScreenState extends ConsumerState<DireccionOrderRevie
     }
   }
 
+}
+
+class _DireccionRejectionHistorySection extends ConsumerWidget {
+  const _DireccionRejectionHistorySection({required this.order});
+
+  final PurchaseOrder order;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final eventsAsync = ref.watch(orderEventsProvider(order.id));
+    final branding = ref.watch(currentBrandingProvider);
+    return eventsAsync.when(
+      data: (events) => OrderRejectionHistory(
+        branding: branding,
+        order: order,
+        events: events,
+        hideLatestResubmission: true,
+      ),
+      loading: () => const SizedBox.shrink(),
+      error: (error, stack) => Text(
+        'Error en historial de rechazos: ${reportError(error, stack, context: 'DireccionOrderReviewScreen.rejections')}',
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
+    );
+  }
 }
 
 const _maxCorrections = 3;

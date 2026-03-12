@@ -1,0 +1,287 @@
+OPTIMIZACION PENDIENTE PARA DEJAR LA APP MUY FLUIDA
+Fecha de referencia: 2026-03-09
+
+Contexto actual
+- Ya se quitaron varias cargas pesadas del arranque y del flujo de creación de requisiciones.
+- El PDF ya no se genera mientras se captura una requisición; ahora se construye al abrir "Revisar PDF".
+- El splash/cargando ya es ligero.
+- Existe precarga suave de PDFs en segundo plano.
+- Existe caché local de snapshots de listas y conteos usando shared_preferences.
+- Home ya no levanta tantos datos globales como antes y se eliminó el recordatorio automático que metía trabajo al entrar.
+
+Objetivo pendiente
+- Hacer que la app se sienta inmediata al abrir Home, al entrar a cualquier módulo y al abrir PDFs.
+- Reducir reconstrucciones innecesarias, consultas redundantes y trabajo pesado en build/navegación.
+- Dejar una base más escalable para crecer sin volver a trabarse.
+
+1. Arranque general de la app
+Estado actual:
+- El arranque mejoró, pero todavía puede haber trabajo innecesario antes de que el usuario interactúe.
+
+Pendiente:
+- Revisar qué providers se inicializan indirectamente en el arranque aunque la pantalla todavía no los necesite.
+- Asegurar que Home pinte primero estructura visual y badges vacíos, y que el dato llegue después sin bloquear.
+- Revisar si hay inicializaciones tempranas de branding, assets o repositorios que puedan diferirse.
+- Confirmar que ningún provider pesado se esté activando desde imports, listeners o side effects de widgets raíz.
+
+Acciones sugeridas:
+- Auditar `main.dart`, `app.dart`, `router.dart` y `home_screen.dart`.
+- Mover cualquier warmup no crítico a post-frame o a carga bajo demanda.
+- Mantener solo lo indispensable para autenticación, perfil y layout inicial.
+
+2. Home todavía puede adelgazar más
+Estado actual:
+- Home ya no observa listas completas para badges.
+- El recordatorio automático se eliminó.
+
+Pendiente:
+- Revisar si las tarjetas del Home siguen provocando demasiados watch/rebuilds cuando cambian varios conteos.
+- Evaluar si conviene que cada tarjeta use un widget aún más aislado y const donde aplique.
+- Revisar si la resolución de permisos/rol/empresa en Home puede simplificarse para no recalcular tanto.
+
+Acciones sugeridas:
+- Medir cuántas veces se reconstruye cada card al entrar a Home.
+- Separar por completo layout estático y badge dinámico.
+- Si hace falta, crear un modelo liviano solo para Home con datos mínimos ya mapeados.
+
+3. PreloadGate y pantallas de carga
+Estado actual:
+- El gate ya da una ventana corta para que entre snapshot local antes de mostrar splash.
+- Sigue mostrando cargando antes de abrir módulos cuando sí hace falta.
+
+Pendiente:
+- Afinar los tiempos para que no aparezca splash innecesario si el snapshot local ya existe.
+- Evitar parpadeos entre splash -> screen -> recarga.
+- Unificar criterio entre módulos para que todos carguen igual.
+
+Acciones sugeridas:
+- Revisar `core/widgets/preload_gate.dart`.
+- Ajustar la ventana de gracia por tipo de pantalla si hace falta.
+- Mostrar snapshot local inmediatamente y refrescar detrás sin tapar otra vez la UI.
+
+4. Caché local de listas
+Estado actual:
+- Ya hay caché persistente para varias listas y conteos.
+- Se guarda por usuario y por contexto de rol/área.
+
+Pendiente:
+- Revisar expiración real de snapshots para no reutilizar datos demasiado viejos.
+- Agregar invalidación más clara cuando cambia empresa, rol efectivo o filtros críticos.
+- Evaluar si shared_preferences sigue siendo suficiente o si conviene migrar snapshots grandes a almacenamiento local más adecuado.
+
+Acciones sugeridas:
+- Auditar `order_local_snapshot_store.dart` y `order_providers.dart`.
+- Definir TTL por tipo de dato:
+  - conteos: muy corto
+  - listas operativas: corto/medio
+  - historial: más tolerante
+- Guardar también metadatos:
+  - fecha de snapshot
+  - empresa activa
+  - usuario
+  - rol/área
+- Si el volumen crece, migrar snapshots grandes a Hive/Isar/sqflite en vez de shared_preferences.
+
+5. Consultas y providers de órdenes
+Estado actual:
+- Se mejoró bastante con caché de sesión y snapshots persistidos.
+- Aun así, varios módulos siguen dependiendo de listas completas por estado.
+
+Pendiente:
+- Separar más claramente providers de:
+  - conteo
+  - lista
+  - detalle
+  - búsqueda/filtrado local
+- Evitar recalcular filtros y ordenamientos grandes cada vez que rebuilda la pantalla.
+- Revisar módulos donde todavía se descargan más órdenes de las necesarias.
+
+Acciones sugeridas:
+- Revisar `order_providers.dart` completo.
+- Crear helpers de selección más finos para que un cambio no reconstruya toda la vista.
+- Mantener el stream base y derivar vistas memoizadas o encapsuladas por módulo.
+- Evitar usar listas completas solo para obtener un numerito o una subsección pequeña.
+
+6. Firestore/Realtime Database: costo local de lectura
+Estado actual:
+- La ruta sin costo extra evita Cloud Functions para counters globales.
+- El costo restante está en que varios conteos todavía pueden caer en listas completas del cliente.
+
+Pendiente:
+- Revisar si algunas consultas traen más campos o más registros de los necesarios.
+- Ver si hay módulos donde conviene paginar más agresivamente.
+- Reducir listeners en tiempo real cuando no sean estrictamente necesarios.
+
+Acciones sugeridas:
+- Auditar queries del repositorio de órdenes.
+- Confirmar que cada módulo solo escuche su conjunto mínimo.
+- Donde sea aceptable, usar carga puntual + refresh manual o diferido en vez de stream permanente.
+- Si más adelante se acepta costo backend, reactivar counters agregados centralizados.
+
+7. Cotizaciones y pantallas grandes
+Estado actual:
+- El dashboard de cotizaciones ya carga lazy.
+
+Pendiente:
+- Revisar que tabs no estén manteniendo trabajo pesado oculto.
+- Asegurar que shared quotes y agrupaciones complejas solo se calculen al abrir el dashboard real.
+- Reducir ordenamientos y agrupaciones en memoria si el dataset crece.
+
+Acciones sugeridas:
+- Auditar `cotizaciones_orders_screen.dart` y `cotizaciones_dashboard_screen.dart`.
+- Separar más fuerte:
+  - tab de pendientes
+  - tab dashboard
+  - búsquedas
+  - agrupaciones
+- Cachear el último resultado visible del dashboard para reabrir instantáneo.
+
+8. Historial
+Estado actual:
+- Ya usa gate suave para prefetch y no precarga PDFs de forma tan agresiva.
+
+Pendiente:
+- Revisar filtros y ordenamientos del historial, porque suelen crecer mucho con el tiempo.
+- Evaluar paginación real o carga incremental si el historial es largo.
+
+Acciones sugeridas:
+- Auditar `order_history_screen.dart` y `order_history_all_screen.dart`.
+- Si el historial sigue creciendo, pasar a estrategia paginada.
+- Persistir últimos filtros usados para reabrir más rápido.
+
+9. PDFs: todavía hay margen
+Estado actual:
+- Solo se genera PDF al abrirlo o por prefetch suave.
+- El prefetch ya prioriza uno visible y descarta intención vieja por grupo/generación.
+
+Pendiente:
+- Asegurar que nunca se dispare prefetch si el usuario está escribiendo o filtrando activamente.
+- Revisar tamaño del caché de bytes PDF y política de limpieza.
+- Ver si conviene cachear también metadatos o resultados intermedios del mapeo.
+- Revisar si el branding o assets del PDF se recomponen más veces de las necesarias.
+
+Acciones sugeridas:
+- Auditar `order_pdf_builder.dart`, `order_pdf_mapper.dart` y `order_pdf_preload_gate.dart`.
+- Saltar prefetch cuando:
+  - hay búsqueda activa
+  - la lista está cambiando rápido
+  - la pantalla pierde foco
+- Limitar con más precisión el tamaño del caché por sesión.
+- Medir el costo de generar primer PDF vs PDFs subsecuentes.
+
+10. Detalle de orden y aperturas repetidas
+Estado actual:
+- La caché por sesión ayuda, pero aún puede haber trabajo repetido al volver a abrir detalles.
+
+Pendiente:
+- Cachear localmente los detalles recientes si se vuelven a abrir seguido.
+- Evitar volver a mapear o recomponer información si el detalle no cambió.
+
+Acciones sugeridas:
+- Crear caché ligera por `orderId` para detalle o vista previa.
+- Invalidar esa caché cuando cambie `updatedAt` o equivalente.
+
+11. Renderizado de listas y cards
+Estado actual:
+- Mejor que antes, pero no está auditado a fondo.
+
+Pendiente:
+- Confirmar que los widgets de cards no tengan lógica pesada en `build`.
+- Revisar sombras, composiciones, imágenes y layouts que puedan costar demasiado.
+- Ver si hay `setState` o watch de más a nivel de pantalla.
+
+Acciones sugeridas:
+- Auditar cards principales de:
+  - pendientes
+  - cotizaciones
+  - dirección
+  - ETA
+  - contabilidad
+  - almacén
+  - rechazadas
+- Extraer subwidgets const donde ayude.
+- Evitar mapeos, formateos o cálculos repetitivos dentro del build.
+
+12. Limpieza de código obsoleto
+Estado actual:
+- Ya se borró parte de la lógica vieja, pero todavía puede haber restos.
+
+Pendiente:
+- Eliminar warmups, helpers, imports y wrappers que ya no aporten.
+- Detectar providers duplicados o caminos viejos de precarga.
+- Revisar si quedaron rutas antiguas de PDF o loaders redundantes.
+
+Acciones sugeridas:
+- Hacer una pasada de limpieza sobre:
+  - `home_screen.dart`
+  - `router.dart`
+  - `order_providers.dart`
+  - `preview/`
+  - `shared/`
+- Borrar comentarios o ramas temporales que ya no se usarán.
+
+13. Escalabilidad futura
+Estado actual:
+- La base es más limpia que antes, pero sigue muy apoyada en listas del cliente.
+
+Pendiente:
+- Preparar una ruta más escalable si el volumen de órdenes crece mucho.
+- Definir desde ahora qué parte debe seguir siendo local y qué parte eventualmente debe ir a backend.
+
+Recomendación a futuro:
+- Si el volumen crece bastante o hay muchos usuarios concurrentes:
+  - counters agregados centralizados
+  - snapshots más robustos en base local
+  - paginación real por módulo
+  - menos streams globales
+
+14. Verificación manual pendiente
+No se hizo todavía:
+- Prueba manual completa de arranque en frío.
+- Prueba manual de navegación rápida entre módulos.
+- Prueba manual de cambio de empresa/rol/usuario con caché persistente.
+- Prueba manual de apertura repetida de PDF.
+- Prueba manual de búsqueda mientras hay prefetch de PDF.
+- Prueba manual de retorno a Home desde varios módulos.
+
+Casos a revisar manualmente después:
+- Entrar a Home por primera vez en sesión nueva.
+- Entrar a cada módulo desde Home.
+- Regresar y volver a entrar al mismo módulo.
+- Abrir el primer PDF visible.
+- Abrir otro PDF del mismo módulo.
+- Cambiar de empresa si aplica.
+- Cerrar y reabrir la app para validar snapshot persistido.
+
+15. Dependencias y tareas operativas pendientes
+- Confirmar que `shared_preferences` ya quedó resuelto correctamente en el proyecto.
+- Revisar que no haya warnings de imports viejos o clases ya eliminadas.
+- Si se decide volver al camino backend en el futuro, quedaron funciones para counters en `functions/src/index.ts`, pero hoy no son parte del camino elegido.
+
+Orden recomendado para retomar este trabajo después
+1. Afinar `PreloadGate` para priorizar snapshot local sin parpadeos.
+2. Auditar y adelgazar `order_providers.dart` para bajar rebuilds y trabajo repetido.
+3. Optimizar historial y cotizaciones dashboard si siguen sintiéndose pesados.
+4. Endurecer todavía más reglas de prefetch de PDF según foco/búsqueda.
+5. Limpiar código obsoleto.
+6. Hacer ronda manual completa de validación de rendimiento.
+
+Archivos clave para continuar
+- `lib/main.dart`
+- `lib/app/router.dart`
+- `lib/core/widgets/preload_gate.dart`
+- `lib/features/home/presentation/home_screen.dart`
+- `lib/features/orders/application/order_providers.dart`
+- `lib/features/orders/data/order_local_snapshot_store.dart`
+- `lib/features/orders/data/purchase_order_repository.dart`
+- `lib/features/orders/presentation/shared/order_pdf_preload_gate.dart`
+- `lib/features/orders/presentation/preview/order_pdf_builder.dart`
+- `lib/features/orders/presentation/preview/order_pdf_mapper.dart`
+- `lib/features/orders/presentation/compras/cotizaciones_orders_screen.dart`
+- `lib/features/orders/presentation/compras/cotizaciones_dashboard_screen.dart`
+- `lib/features/orders/presentation/history/order_history_screen.dart`
+- `lib/features/orders/presentation/history/order_history_all_screen.dart`
+
+Resumen corto
+- Lo más importante que falta ya no es "poner más loaders".
+- Lo pendiente real es: reducir trabajo invisible, estabilizar snapshots locales, bajar rebuilds, afinar navegación y hacer que PDF/background jamás estorben la UI.

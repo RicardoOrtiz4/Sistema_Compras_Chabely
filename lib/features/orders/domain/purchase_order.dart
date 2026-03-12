@@ -50,6 +50,8 @@ class PurchaseOrderItem {
     bool clearReviewComment = false,
     num? receivedQuantity,
     String? receivedComment,
+    bool clearReceivedQuantity = false,
+    bool clearReceivedComment = false,
   }) {
     return PurchaseOrderItem(
       line: line ?? this.line,
@@ -64,8 +66,8 @@ class PurchaseOrderItem {
       estimatedDate: estimatedDate ?? this.estimatedDate,
       reviewFlagged: reviewFlagged ?? this.reviewFlagged,
       reviewComment: clearReviewComment ? null : (reviewComment ?? this.reviewComment),
-      receivedQuantity: receivedQuantity ?? this.receivedQuantity,
-      receivedComment: receivedComment ?? this.receivedComment,
+      receivedQuantity: clearReceivedQuantity ? null : (receivedQuantity ?? this.receivedQuantity),
+      receivedComment: clearReceivedComment ? null : (receivedComment ?? this.receivedComment),
     );
   }
 
@@ -227,6 +229,8 @@ class PurchaseOrder {
     this.comprasComment,
     this.comprasReviewerName,
     this.comprasReviewerArea,
+    this.processedByName,
+    this.processedByArea,
     this.direccionGeneralName,
     this.direccionGeneralArea,
     this.direccionComment,
@@ -251,7 +255,10 @@ class PurchaseOrder {
     this.almacenName,
     this.almacenArea,
     this.almacenComment,
+    this.almacenHasDifferences = false,
+    this.almacenDifferenceSummary,
     this.almacenReceivedAt,
+    this.completedAt,
     this.isDraft = false,
   });
 
@@ -275,6 +282,8 @@ class PurchaseOrder {
   final String? comprasComment;
   final String? comprasReviewerName;
   final String? comprasReviewerArea;
+  final String? processedByName;
+  final String? processedByArea;
   final String? direccionGeneralName;
   final String? direccionGeneralArea;
   final String? direccionComment;
@@ -299,7 +308,10 @@ class PurchaseOrder {
   final String? almacenName;
   final String? almacenArea;
   final String? almacenComment;
+  final bool almacenHasDifferences;
+  final String? almacenDifferenceSummary;
   final DateTime? almacenReceivedAt;
+  final DateTime? completedAt;
   final bool isDraft;
 
   bool get canEdit => isDraft || status == PurchaseOrderStatus.draft;
@@ -325,6 +337,8 @@ class PurchaseOrder {
       'comprasComment': comprasComment,
       'comprasReviewerName': comprasReviewerName,
       'comprasReviewerArea': comprasReviewerArea,
+      'processedByName': processedByName,
+      'processedByArea': processedByArea,
       'direccionGeneralName': direccionGeneralName,
       'direccionGeneralArea': direccionGeneralArea,
       'direccionComment': direccionComment,
@@ -356,7 +370,10 @@ class PurchaseOrder {
       'almacenName': almacenName,
       'almacenArea': almacenArea,
       'almacenComment': almacenComment,
+      'almacenHasDifferences': almacenHasDifferences,
+      'almacenDifferenceSummary': almacenDifferenceSummary,
       'almacenReceivedAt': almacenReceivedAt?.millisecondsSinceEpoch,
+      'completedAt': completedAt?.millisecondsSinceEpoch,
       'isDraft': isDraft,
     };
   }
@@ -417,6 +434,8 @@ class PurchaseOrder {
       comprasComment: data['comprasComment'] as String?,
       comprasReviewerName: data['comprasReviewerName'] as String?,
       comprasReviewerArea: data['comprasReviewerArea'] as String?,
+      processedByName: data['processedByName'] as String?,
+      processedByArea: data['processedByArea'] as String?,
       direccionGeneralName: data['direccionGeneralName'] as String?,
       direccionGeneralArea: data['direccionGeneralArea'] as String?,
       direccionComment: data['direccionComment'] as String?,
@@ -443,7 +462,10 @@ class PurchaseOrder {
       almacenName: data['almacenName'] as String?,
       almacenArea: data['almacenArea'] as String?,
       almacenComment: data['almacenComment'] as String?,
+      almacenHasDifferences: _parseBool(data['almacenHasDifferences']),
+      almacenDifferenceSummary: data['almacenDifferenceSummary'] as String?,
       almacenReceivedAt: _parseDateTime(data['almacenReceivedAt']),
+      completedAt: _parseDateTime(data['completedAt']),
       isDraft: (data['isDraft'] as bool?) ?? false,
     );
   }

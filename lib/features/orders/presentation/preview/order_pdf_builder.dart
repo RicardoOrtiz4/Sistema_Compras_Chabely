@@ -31,11 +31,18 @@ class OrderPdfData {
     this.comprasComment,
     this.comprasReviewerName,
     this.comprasReviewerArea,
+    this.processedByName,
+    this.processedByArea,
     this.direccionGeneralName,
     this.direccionGeneralArea,
+    this.almacenName,
+    this.almacenArea,
+    this.almacenComment,
     this.requestedDeliveryDate,
     this.etaDate,
     this.resubmissionDates = const [],
+    this.pendingResubmissionLabel,
+    this.suppressCreatedTime = false,
     this.cacheSalt,
   });
 
@@ -60,20 +67,27 @@ class OrderPdfData {
   final String? comprasComment;
   final String? comprasReviewerName;
   final String? comprasReviewerArea;
+  final String? processedByName;
+  final String? processedByArea;
 
   final String? direccionGeneralName;
   final String? direccionGeneralArea;
+  final String? almacenName;
+  final String? almacenArea;
+  final String? almacenComment;
 
   final DateTime? requestedDeliveryDate;
   final DateTime? etaDate;
 
   final List<DateTime> resubmissionDates;
+  final String? pendingResubmissionLabel;
+  final bool suppressCreatedTime;
 
   // Used to bust PDF caches without affecting visual content.
   final String? cacheSalt;
 }
 
-const int defaultPdfPrefetchLimit = 10;
+const int defaultPdfPrefetchLimit = 3;
 
 void warmUpPdfAssets(CompanyBranding branding) {
   _loadLogo(branding);
@@ -85,7 +99,10 @@ void warmUpPdfEngine(CompanyBranding branding) {
 
   Future(() async {
     try {
-      await _loadLogo(branding);
+      await _warmPdfTemplate(branding, useIsolate: false);
+      if (!kIsWeb) {
+        await _warmPdfTemplate(branding, useIsolate: true);
+      }
     } catch (error, stack) {
       logError(error, stack, context: 'warmUpPdfEngine');
     }
@@ -95,13 +112,27 @@ void warmUpPdfEngine(CompanyBranding branding) {
 void resetPdfCaches() {
   _pdfCache.clear();
   _orderPdfStickyCache.clear();
+  _pdfCacheBytes = 0;
+  _stickyPdfCacheBytes = 0;
   _logoImageFutures.clear();
   _logoBytesFutures.clear();
   _pdfFontFutures.clear();
   _pdfFontBytesFutures.clear();
   _pdfFontsFuture = null;
+  _pdfBuildFutures.clear();
   _warmedBrandings.clear();
   _pdfInFlight.clear();
+  _pdfTemplateWarmFutures.clear();
+  _pdfPrefetchGenerations.clear();
+  _pdfPrefetchQueue.clear();
+  _queuedPdfPrefetchKeys.clear();
+  _pdfPrefetchRunnerActive = false;
+}
+
+int bumpPdfPrefetchGroup(String groupKey) {
+  final next = (_pdfPrefetchGenerations[groupKey] ?? 0) + 1;
+  _pdfPrefetchGenerations[groupKey] = next;
+  return next;
 }
 
 Future<Uint8List> buildOrderPdf(
@@ -110,23 +141,43 @@ Future<Uint8List> buildOrderPdf(
   bool useIsolate = false,
 }) async {
   final cacheKey = _pdfCacheKey(data, format);
-  final cached = _pdfCache[cacheKey];
+  final cached = _getPdfCacheEntry(cacheKey);
   if (cached != null) {
     _storeOrderPdfForFolio(data, cached, format: format);
     return kIsWeb ? Uint8List.fromList(cached) : cached;
   }
 
-  final bytes = useIsolate
-      ? await _buildOrderPdfIsolated(data, format)
-      : await _buildOrderPdfLocal(data, format);
-
-  _pdfCache[cacheKey] = kIsWeb ? Uint8List.fromList(bytes) : bytes;
-  if (_pdfCache.length > _maxPdfCacheEntries) {
-    _pdfCache.remove(_pdfCache.keys.first);
+  final inFlight = _pdfBuildFutures[cacheKey];
+  if (inFlight != null) {
+    final shared = await inFlight;
+    _storeOrderPdfForFolio(data, shared, format: format);
+    return kIsWeb ? Uint8List.fromList(shared) : shared;
   }
-  _storeOrderPdfForFolio(data, bytes, format: format);
 
-  return bytes;
+  final future = Future<Uint8List>(() async {
+    final totalStopwatch = Stopwatch()..start();
+    final bytes = useIsolate
+        ? await _buildOrderPdfIsolated(data, format)
+        : await _buildOrderPdfLocal(data, format);
+    _logPdfTiming(
+      'buildOrderPdf.generate',
+      totalStopwatch.elapsed,
+      data,
+      useIsolate: useIsolate,
+    );
+
+    final cachedBytes = _putPdfCacheEntry(cacheKey, bytes);
+    _storeOrderPdfForFolio(data, cachedBytes, format: format);
+
+    return cachedBytes;
+  });
+  _pdfBuildFutures[cacheKey] = future;
+  try {
+    final bytes = await future;
+    return kIsWeb ? Uint8List.fromList(bytes) : bytes;
+  } finally {
+    _pdfBuildFutures.remove(cacheKey);
+  }
 }
 
 Future<Uint8List> buildOrderPdfUncached(
@@ -154,44 +205,78 @@ Future<Uint8List> buildCotizacionPdf(
 void prefetchOrderPdfs(
   List<OrderPdfData> dataList, {
   int limit = defaultPdfPrefetchLimit,
+  String? groupKey,
+  int? generation,
 }) {
   if (dataList.isEmpty || limit <= 0) return;
 
   final entries = dataList.take(limit).toList(growable: false);
   if (entries.isEmpty) return;
 
-  Future(() async {
-    for (final data in entries) {
-      final cacheKey = _pdfCacheKey(data, null);
-      if (_pdfCache.containsKey(cacheKey) || _pdfInFlight.contains(cacheKey)) {
-        continue;
-      }
-      _pdfInFlight.add(cacheKey);
-      try {
-        await buildOrderPdf(data, useIsolate: !kIsWeb);
-      } catch (error, stack) {
-        logError(error, stack, context: 'prefetchOrderPdfs');
-      } finally {
-        _pdfInFlight.remove(cacheKey);
-      }
+  warmUpPdfEngine(entries.first.branding);
+  for (final data in entries) {
+    final cacheKey = _pdfCacheKey(data, null);
+    if (_pdfCache.containsKey(cacheKey) ||
+        _pdfInFlight.contains(cacheKey) ||
+        _queuedPdfPrefetchKeys.contains(cacheKey)) {
+      continue;
     }
-  });
+    _queuedPdfPrefetchKeys.add(cacheKey);
+    _pdfPrefetchQueue.add(
+      _PdfPrefetchTask(
+        data: data,
+        cacheKey: cacheKey,
+        useIsolate: !kIsWeb,
+        groupKey: groupKey,
+        generation: groupKey == null ? null : (generation ?? _pdfPrefetchGenerations[groupKey]),
+      ),
+    );
+  }
+  _drainPdfPrefetchQueue();
+}
+
+Future<void> cacheOrderPdfs(
+  List<OrderPdfData> dataList, {
+  int limit = defaultPdfPrefetchLimit,
+  bool useIsolate = false,
+}) async {
+  if (dataList.isEmpty || limit <= 0) return;
+
+  final entries = dataList.take(limit).toList(growable: false);
+  if (entries.isEmpty) return;
+
+  warmUpPdfEngine(entries.first.branding);
+  for (final data in entries) {
+    try {
+      await buildOrderPdf(
+        data,
+        useIsolate: useIsolate,
+      );
+    } catch (error, stack) {
+      logError(error, stack, context: 'cacheOrderPdfs');
+    }
+  }
 }
 
 Future<Uint8List> _buildOrderPdfLocal(
   OrderPdfData data,
   PdfPageFormat? format,
 ) async {
+  final totalStopwatch = Stopwatch()..start();
+  final assetsStopwatch = Stopwatch()..start();
   final logo = await _loadLogo(data.branding);
   final fonts = await _loadPdfFonts();
+  _logPdfTiming('buildOrderPdfLocal.assets', assetsStopwatch.elapsed, data);
   final sanitized = _sanitizePdfData(data);
-  return _buildOrderPdfWithAssets(
+  final bytes = await _buildOrderPdfWithAssets(
     sanitized,
     format,
     logo,
     fonts.base,
     fonts.bold,
   );
+  _logPdfTiming('buildOrderPdfLocal.total', totalStopwatch.elapsed, data);
+  return bytes;
 }
 
 Future<Uint8List> _buildOrderPdfIsolated(
@@ -253,7 +338,9 @@ Future<Uint8List> _buildOrderPdfWithAssets(
   pw.Font baseFont,
   pw.Font boldFont,
 ) async {
+  final composeStopwatch = Stopwatch()..start();
   final doc = pw.Document(
+    compress: _shouldCompressPdfStreams,
     theme: pw.ThemeData.withFont(base: baseFont, bold: boldFont),
   );
 
@@ -261,44 +348,63 @@ Future<Uint8List> _buildOrderPdfWithAssets(
   final dateFormat = _dateFormat;
   final timeFormat = _timeFormat;
 
-  doc.addPage(
-    pw.MultiPage(
-      pageFormat: pageFormat,
-      margin: const pw.EdgeInsets.all(20),
-      maxPages: _estimateMaxPages(data),
-      header: (context) {
-        final pageNumber = _safePageNumber(context);
-        final pageCount = _safePageCount(context);
-        if (pageNumber != null && pageNumber != 1) {
-          return pw.SizedBox.shrink();
-        }
-        return _buildHeader(
+  if (_shouldUseSinglePageOrderLayout(data)) {
+    doc.addPage(
+      pw.Page(
+        pageFormat: pageFormat,
+        margin: const pw.EdgeInsets.all(20),
+        build: (context) => _buildSinglePageOrderLayout(
+          data,
           logo,
-          data.branding,
-          pageNumber: pageNumber,
-          pageCount: pageCount,
-        );
-      },
-      footer: (context) {
-        return pw.Column(
-          crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-          children: [
-            _buildSignatureRow(data),
-          ],
-        );
-      },
-      build: (context) => [
-        pw.SizedBox(height: 8),
-        _buildMetaSection(data, dateFormat, timeFormat),
-        pw.SizedBox(height: 8),
-        ..._buildItemsTables(data, dateFormat),
-        pw.SizedBox(height: 8),
-        ..._buildFooterSections(data),
-      ],
-    ),
-  );
+          dateFormat,
+          timeFormat,
+        ),
+      ),
+    );
+  } else {
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: pageFormat,
+        margin: const pw.EdgeInsets.all(20),
+        maxPages: _estimateMaxPages(data),
+        header: (context) {
+          final pageNumber = _safePageNumber(context);
+          final pageCount = _safePageCount(context);
+          if (pageNumber != null && pageNumber != 1) {
+            return pw.SizedBox.shrink();
+          }
+          return _buildHeader(
+            logo,
+            data.branding,
+            pageNumber: pageNumber,
+            pageCount: pageCount,
+          );
+        },
+        footer: (context) {
+          return pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+            children: [
+              _buildApprovalSignatureRow(data),
+            ],
+          );
+        },
+        build: (context) => [
+          pw.SizedBox(height: 8),
+          _buildMetaSection(data, dateFormat, timeFormat),
+          pw.SizedBox(height: 8),
+          ..._buildItemsTables(data, dateFormat),
+          pw.SizedBox(height: 8),
+          ..._buildFooterSections(data),
+        ],
+      ),
+    );
+  }
 
-  return doc.save();
+  _logPdfTiming('buildOrderPdf.compose', composeStopwatch.elapsed, data);
+  final saveStopwatch = Stopwatch()..start();
+  final bytes = await doc.save();
+  _logPdfTiming('buildOrderPdf.save', saveStopwatch.elapsed, data);
+  return bytes;
 }
 
 Future<Uint8List> _buildCotizacionPdfWithAssets(
@@ -309,6 +415,7 @@ Future<Uint8List> _buildCotizacionPdfWithAssets(
   pw.Font boldFont,
 ) async {
   final doc = pw.Document(
+    compress: _shouldCompressPdfStreams,
     theme: pw.ThemeData.withFont(base: baseFont, bold: boldFont),
   );
 
@@ -316,41 +423,55 @@ Future<Uint8List> _buildCotizacionPdfWithAssets(
   final dateFormat = _dateFormat;
   final timeFormat = _timeFormat;
 
-  doc.addPage(
-    pw.MultiPage(
-      pageFormat: pageFormat,
-      margin: const pw.EdgeInsets.all(20),
-      maxPages: _estimateMaxPages(data),
-      header: (context) {
-        final pageNumber = _safePageNumber(context);
-        final pageCount = _safePageCount(context);
-        if (pageNumber != null && pageNumber != 1) {
-          return pw.SizedBox.shrink();
-        }
-        return _buildHeader(
+  if (_shouldUseSinglePageCotizacionLayout(data)) {
+    doc.addPage(
+      pw.Page(
+        pageFormat: pageFormat,
+        margin: const pw.EdgeInsets.all(20),
+        build: (context) => _buildSinglePageCotizacionLayout(
+          data,
           logo,
-          data.branding,
-          pageNumber: pageNumber,
-          pageCount: pageCount,
-        );
-      },
-      build: (context) {
-        _buildNotesSectionWidgets(data);
-        return [
-          pw.SizedBox(height: 8),
-          _sectionTitle('DATOS DE REQUISICION'),
-          _buildMetaSection(data, dateFormat, timeFormat),
-          pw.SizedBox(height: 8),
-          _sectionTitle('ARTICULOS'),
-          ..._buildItemsTables(data, dateFormat),
-
-          pw.SizedBox(height: 12),
-          _sectionTitle('FIRMAS'),
-          _buildSignatureRow(data),
-        ];
-      },
-    ),
-  );
+          dateFormat,
+          timeFormat,
+        ),
+      ),
+    );
+  } else {
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: pageFormat,
+        margin: const pw.EdgeInsets.all(20),
+        maxPages: _estimateMaxPages(data),
+        header: (context) {
+          final pageNumber = _safePageNumber(context);
+          final pageCount = _safePageCount(context);
+          if (pageNumber != null && pageNumber != 1) {
+            return pw.SizedBox.shrink();
+          }
+          return _buildHeader(
+            logo,
+            data.branding,
+            pageNumber: pageNumber,
+            pageCount: pageCount,
+          );
+        },
+        build: (context) {
+          _buildNotesSectionWidgets(data);
+          return [
+            pw.SizedBox(height: 8),
+            _sectionTitle('DATOS DE REQUISICION'),
+            _buildMetaSection(data, dateFormat, timeFormat),
+            pw.SizedBox(height: 8),
+            _sectionTitle('ARTICULOS'),
+            ..._buildItemsTables(data, dateFormat),
+            pw.SizedBox(height: 12),
+            _sectionTitle('FIRMAS'),
+            _buildApprovalSignatureRow(data),
+          ];
+        },
+      ),
+    );
+  }
 
   return doc.save();
 }
@@ -420,6 +541,8 @@ class _PdfFonts {
   final pw.Font base;
   final pw.Font bold;
 }
+
+const bool _shouldCompressPdfStreams = !kIsWeb;
 
 pw.Widget _buildHeader(
   pw.MemoryImage logo,
@@ -529,6 +652,92 @@ pw.Widget _buildHeader(
   );
 }
 
+pw.Widget _buildSinglePageOrderLayout(
+  OrderPdfData data,
+  pw.MemoryImage logo,
+  DateFormat dateFormat,
+  DateFormat timeFormat,
+) {
+  final bodyWidgets = <pw.Widget>[
+    _buildHeader(logo, data.branding, pageNumber: 1, pageCount: 1),
+    pw.SizedBox(height: 8),
+    _buildMetaSection(data, dateFormat, timeFormat),
+    pw.SizedBox(height: 8),
+    ..._buildItemsTables(data, dateFormat),
+  ];
+
+  final footerSections = _buildFooterSections(data);
+  if (footerSections.isNotEmpty) {
+    bodyWidgets.add(pw.SizedBox(height: 8));
+    bodyWidgets.addAll(footerSections);
+  }
+
+  bodyWidgets.addAll([
+    pw.Spacer(),
+    _buildApprovalSignatureRow(data),
+  ]);
+
+  return pw.Column(
+    crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+    children: bodyWidgets,
+  );
+}
+
+pw.Widget _buildSinglePageCotizacionLayout(
+  OrderPdfData data,
+  pw.MemoryImage logo,
+  DateFormat dateFormat,
+  DateFormat timeFormat,
+) {
+  return pw.Column(
+    crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+    children: [
+      _buildHeader(logo, data.branding, pageNumber: 1, pageCount: 1),
+      pw.SizedBox(height: 8),
+      _sectionTitle('DATOS DE REQUISICION'),
+      _buildMetaSection(data, dateFormat, timeFormat),
+      pw.SizedBox(height: 8),
+      _sectionTitle('ARTICULOS'),
+      ..._buildItemsTables(data, dateFormat),
+      pw.Spacer(),
+      pw.SizedBox(height: 12),
+      _sectionTitle('FIRMAS'),
+      _buildApprovalSignatureRow(data),
+    ],
+  );
+}
+
+bool _shouldUseSinglePageOrderLayout(OrderPdfData data) {
+  if (data.items.length > 3) return false;
+  if ((data.observations.trim()).length > 180) return false;
+  if (((data.comprasComment ?? '').trim()).length > 180) return false;
+  if (data.items.any((item) {
+    return item.description.trim().length > 90 ||
+        item.partNumber.trim().length > 45 ||
+        (item.reviewComment ?? '').trim().length > 90 ||
+        (item.receivedComment ?? '').trim().length > 90;
+  })) {
+    return false;
+  }
+  final warehouseDiffs = data.items.where((item) {
+    final received = item.receivedQuantity;
+    return received != null && received != item.quantity;
+  });
+  if (warehouseDiffs.length > 2) return false;
+  return true;
+}
+
+bool _shouldUseSinglePageCotizacionLayout(OrderPdfData data) {
+  if (!_shouldUseSinglePageOrderLayout(data)) return false;
+  if (data.items.any((item) {
+    final supplier = (item.supplier ?? '').trim();
+    return supplier.length > 50;
+  })) {
+    return false;
+  }
+  return true;
+}
+
 pw.Widget _sectionTitle(String text) {
   return pw.Container(
     width: double.infinity,
@@ -555,10 +764,8 @@ pw.Widget _buildMetaSection(
   final hasFolio = _hasText(data.folio);
   final hasInternalOrder = _hasText(data.internalOrder);
 
-  final resubmissionLabel = _resubmissionLabel(data.resubmissionDates);
-  final modification = _modificationDate(data);
-  final showModificationTime =
-      modification != null && data.resubmissionDates.isEmpty;
+  final resubmissionLabel = _pendingResubmissionLabel(data);
+  final modification = _visibleModificationDate(data);
 
   return pw.Container(
     decoration: pw.BoxDecoration(border: border),
@@ -588,7 +795,7 @@ pw.Widget _buildMetaSection(
                 padding: const pw.EdgeInsets.all(6),
                 child: pw.Row(
                   children: [
-                    pw.Text('PROCESO: ', style: labelStyle),
+                    pw.Text('PROCESÓ: ', style: labelStyle),
                     pw.Expanded(
                       child: pw.Text(data.areaName, style: valueStyle),
                     ),
@@ -685,26 +892,28 @@ pw.Widget _buildMetaSection(
                 child: pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
-                    pw.Text(
-                      'FECHA DE CREACIÓN: ${dateFormat.format(data.createdAt)}',
-                      style: valueStyle,
-                    ),
-                    pw.SizedBox(height: 2),
-                    pw.Text(
-                      'HORA: ${timeFormat.format(data.createdAt)}',
-                      style: valueStyle,
+                    pw.RichText(
+                      text: pw.TextSpan(
+                        children: [
+                          pw.TextSpan(
+                            text: 'FECHA DE CREACIÓN: ',
+                            style: labelStyle,
+                          ),
+                          pw.TextSpan(
+                            text: data.suppressCreatedTime
+                                ? dateFormat.format(data.createdAt)
+                                : '${dateFormat.format(data.createdAt)} ${timeFormat.format(data.createdAt)}',
+                            style: valueStyle,
+                          ),
+                        ],
+                      ),
                     ),
                     if (modification != null) ...[
                       pw.SizedBox(height: 2),
                       pw.Text(
-                        'FECHA DE MODIFICACIÓN: ${dateFormat.format(modification)}',
+                        'FECHA DE MODIFICACION: ${dateFormat.format(modification)}',
                         style: valueStyle,
                       ),
-                      if (showModificationTime)
-                        pw.Text(
-                          'HORA DE MODIFICACIÓN: ${timeFormat.format(modification)}',
-                          style: valueStyle,
-                        ),
                     ],
                     if (resubmissionLabel != null) ...[
                       pw.SizedBox(height: 2),
@@ -722,7 +931,11 @@ pw.Widget _buildMetaSection(
                       for (var i = 0; i < data.resubmissionDates.length; i++)
                         pw.Text(
                           'REENVÍO ${i + 1}: ${_formatResubmissionStampPdf(data.resubmissionDates[i], data.createdAt, dateFormat, timeFormat)}',
-                          style: pw.TextStyle(fontSize: 7, color: PdfColors.grey700),
+                          style: pw.TextStyle(
+                            fontSize: 7,
+                            color: PdfColors.grey700,
+                            fontStyle: pw.FontStyle.italic,
+                          ),
                         ),
                     ],
                   ],
@@ -1027,11 +1240,11 @@ String _acerproRefLine(CompanyBranding branding) {
   return '$ref $rev';
 }
 
-String? _resubmissionLabel(List<DateTime> dates) {
-  final count = dates.length;
-  if (count <= 0) return null;
-  if (count == 1) return 'PRIMER REENVÍO';
-  return 'REENVIADA $count VECES';
+
+String? _pendingResubmissionLabel(OrderPdfData data) {
+  final label = data.pendingResubmissionLabel?.trim();
+  if (label == null || label.isEmpty) return null;
+  return label;
 }
 
 String _formatResubmissionStampPdf(
@@ -1052,6 +1265,16 @@ String _autorizaName(OrderPdfData data) {
   return (data.comprasReviewerName ?? '').trim();
 }
 
+String _procesoName(OrderPdfData data) {
+  final processed = (data.processedByName ?? '').trim();
+  return processed;
+}
+
+String? _procesoArea(OrderPdfData data) {
+  final processedArea = (data.processedByArea ?? '').trim();
+  return processedArea.isEmpty ? null : processedArea;
+}
+
 String? _autorizaArea(OrderPdfData data) {
   final direccionArea = (data.direccionGeneralArea ?? '').trim();
   if (direccionArea.isNotEmpty) return direccionArea;
@@ -1067,6 +1290,16 @@ DateTime? _modificationDate(OrderPdfData data) {
     return null;
   }
   return updatedAt;
+}
+
+DateTime? _visibleModificationDate(OrderPdfData data) {
+  if (_pendingResubmissionLabel(data) != null) {
+    return null;
+  }
+  if (data.resubmissionDates.isNotEmpty) {
+    return null;
+  }
+  return _modificationDate(data);
 }
 
 bool _isSameDate(DateTime a, DateTime b) {
@@ -1163,7 +1396,7 @@ List<String> _splitText(String text, int maxChars) {
   return chunks;
 }
 
-pw.Widget _buildSignatureRow(OrderPdfData data) {
+pw.Widget _buildApprovalSignatureRow(OrderPdfData data) {
   final signatures = <pw.Widget>[
     _signatureBox(
       label: 'SOLICITÓ',
@@ -1171,14 +1404,20 @@ pw.Widget _buildSignatureRow(OrderPdfData data) {
     ),
     _signatureBox(
       label: 'PROCESÓ',
-      name: '',
-      area: null,
+      name: _procesoName(data),
+      area: _procesoArea(data),
       areaInTitle: true,
     ),
     _signatureBox(
       label: 'AUTORIZÓ',
       name: _autorizaName(data),
       area: _autorizaArea(data),
+      areaInTitle: true,
+    ),
+    _signatureBox(
+      label: 'RECIBIÓ',
+      name: (data.almacenName ?? '').trim(),
+      area: data.almacenArea,
       areaInTitle: true,
     ),
   ];
@@ -1192,6 +1431,7 @@ pw.Widget _buildSignatureRow(OrderPdfData data) {
     ],
   );
 }
+
 
 
 List<pw.Widget> _buildFooterSections(OrderPdfData data) {
@@ -1225,7 +1465,238 @@ List<pw.Widget> _buildFooterSections(OrderPdfData data) {
     );
   }
 
+  final warehouseSections = _buildWarehouseReceptionSection(data);
+  if (warehouseSections.isNotEmpty) {
+    if (sections.isNotEmpty) {
+      sections.add(pw.SizedBox(height: 6));
+    }
+    sections.addAll(warehouseSections);
+  }
+
   return sections;
+}
+
+void _logPdfTiming(
+  String stage,
+  Duration elapsed,
+  OrderPdfData data, {
+  bool? useIsolate,
+}) {
+  if (!kDebugMode) return;
+  final folio = data.folio?.trim();
+  final label = (folio != null && folio.isNotEmpty)
+      ? folio
+      : 'draft-${data.items.length}';
+  final isolateLabel = useIsolate == null ? '' : ' isolate=$useIsolate';
+  debugPrint('[PDF] $stage ${elapsed.inMilliseconds}ms key=$label$isolateLabel');
+}
+
+List<pw.Widget> _buildWarehouseReceptionSection(OrderPdfData data) {
+  final receivedItems = data.items
+      .where((item) => item.receivedQuantity != null)
+      .toList(growable: false);
+  if (receivedItems.isEmpty) return const [];
+
+  final diffs = receivedItems
+      .map(_WarehousePdfDiff.fromItem)
+      .whereType<_WarehousePdfDiff>()
+      .toList(growable: false);
+
+  final widgets = <pw.Widget>[
+    pw.Container(
+      width: double.infinity,
+      color: PdfColors.grey300,
+      padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: pw.Text(
+        'RECEPCION EN ALMACEN',
+        style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
+      ),
+    ),
+  ];
+
+  final warehouseLines = <String>[];
+  final warehouseName = (data.almacenName ?? '').trim();
+  if (warehouseName.isNotEmpty) {
+    final area = (data.almacenArea ?? '').trim();
+    warehouseLines.add(
+      area.isEmpty ? 'Registrado por: $warehouseName' : 'Registrado por: $warehouseName ($area)',
+    );
+  }
+  final warehouseComment = (data.almacenComment ?? '').trim();
+  if (warehouseComment.isNotEmpty) {
+    warehouseLines.add('Nota: $warehouseComment');
+  }
+  if (diffs.isNotEmpty) {
+    warehouseLines.add('Nota de descuadre: la recepcion no coincide con lo solicitado.');
+  }
+
+  if (warehouseLines.isNotEmpty) {
+    widgets.add(
+      pw.Padding(
+        padding: const pw.EdgeInsets.fromLTRB(6, 4, 6, 2),
+        child: pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            for (final line in warehouseLines)
+              pw.Padding(
+                padding: const pw.EdgeInsets.only(bottom: 2),
+                child: pw.Text(line, style: const pw.TextStyle(fontSize: 8)),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  if (diffs.isEmpty) {
+    widgets.add(
+      pw.Padding(
+        padding: const pw.EdgeInsets.fromLTRB(6, 4, 6, 4),
+        child: pw.Text(
+          'Recepcion completa sin descuadre.',
+          style: const pw.TextStyle(fontSize: 8),
+        ),
+      ),
+    );
+    return widgets;
+  }
+
+  widgets.add(
+    pw.Container(
+      width: double.infinity,
+      margin: const pw.EdgeInsets.fromLTRB(6, 4, 6, 6),
+      padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: pw.BoxDecoration(
+        color: PdfColors.red100,
+        border: pw.Border.all(color: PdfColors.red700, width: 0.8),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            'DESCUADRE DETECTADO EN RECEPCION',
+            style: pw.TextStyle(
+              fontSize: 8,
+              fontWeight: pw.FontWeight.bold,
+              color: PdfColors.red900,
+            ),
+          ),
+          pw.SizedBox(height: 2),
+          pw.Text(
+            'La orden fue finalizada con diferencias entre lo solicitado y lo recibido.',
+            style: pw.TextStyle(fontSize: 7, color: PdfColors.red900),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  widgets.add(
+    pw.Table(
+      border: pw.TableBorder.all(color: PdfColors.grey500, width: 0.6),
+      columnWidths: const {
+        0: pw.FlexColumnWidth(4),
+        1: pw.FlexColumnWidth(1.4),
+        2: pw.FlexColumnWidth(1.4),
+        3: pw.FlexColumnWidth(1.4),
+      },
+      children: [
+        pw.TableRow(
+          decoration: const pw.BoxDecoration(color: PdfColors.grey200),
+          children: [
+            _warehouseHeaderCell('ARTICULO'),
+            _warehouseHeaderCell('SOLICITADO'),
+            _warehouseHeaderCell('RECIBIDO'),
+            _warehouseHeaderCell('DIF.'),
+          ],
+        ),
+        for (final diff in diffs)
+          pw.TableRow(
+            children: [
+              _warehouseBodyCell(diff.title, alignment: pw.Alignment.centerLeft),
+              _warehouseBodyCell(diff.requestedLabel),
+              _warehouseBodyCell(diff.receivedLabel),
+              _warehouseBodyCell(diff.deltaLabel),
+            ],
+          ),
+      ],
+    ),
+  );
+
+  return widgets;
+}
+
+pw.Widget _warehouseHeaderCell(String text) {
+  return pw.Padding(
+    padding: const pw.EdgeInsets.all(4),
+    child: pw.Text(
+      text,
+      textAlign: pw.TextAlign.center,
+      style: pw.TextStyle(fontSize: 7, fontWeight: pw.FontWeight.bold),
+    ),
+  );
+}
+
+pw.Widget _warehouseBodyCell(
+  String text, {
+  pw.Alignment alignment = pw.Alignment.center,
+}) {
+  return pw.Container(
+    alignment: alignment,
+    padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+    child: pw.Text(
+      text.isEmpty ? '-' : text,
+      style: const pw.TextStyle(fontSize: 7),
+    ),
+  );
+}
+
+class _WarehousePdfDiff {
+  const _WarehousePdfDiff({
+    required this.title,
+    required this.requestedLabel,
+    required this.receivedLabel,
+    required this.deltaLabel,
+  });
+
+  final String title;
+  final String requestedLabel;
+  final String receivedLabel;
+  final String deltaLabel;
+
+  static _WarehousePdfDiff? fromItem(OrderItemDraft item) {
+    final received = item.receivedQuantity;
+    if (received == null) return null;
+
+    final delta = received - item.quantity;
+    if (delta == 0) return null;
+
+    final description = item.description.trim().isEmpty
+        ? 'Item ${item.line}'
+        : 'Item ${item.line}: ${item.description.trim()}';
+    final unit = item.unit.trim();
+
+    String withUnit(num value) {
+      final base = _formatPdfWarehouseNumber(value);
+      return unit.isEmpty ? base : '$base $unit';
+    }
+
+    final deltaBase = _formatPdfWarehouseNumber(delta);
+    final deltaLabel = delta > 0 ? '+$deltaBase${unit.isEmpty ? '' : ' $unit'}' : withUnit(delta);
+
+    return _WarehousePdfDiff(
+      title: description,
+      requestedLabel: withUnit(item.quantity),
+      receivedLabel: withUnit(received),
+      deltaLabel: deltaLabel,
+    );
+  }
+}
+
+String _formatPdfWarehouseNumber(num value) {
+  final asInt = value.toInt();
+  if (value == asInt) return asInt.toString();
+  return value.toString();
 }
 
 Map<String, num> _normalizedBudgets(Map<String, num> raw) {
@@ -1352,6 +1823,7 @@ pw.Widget _signatureBox({
 
 String _pdfCacheKey(OrderPdfData data, PdfPageFormat? format) {
   final buffer = StringBuffer();
+  final visibleModificationDate = _visibleModificationDate(data);
 
   if (format != null) {
     buffer
@@ -1382,7 +1854,9 @@ String _pdfCacheKey(OrderPdfData data, PdfPageFormat? format) {
     ..write(';created:')
     ..write(data.createdAt.millisecondsSinceEpoch)
     ..write(';updated:')
-    ..write(data.updatedAt?.millisecondsSinceEpoch.toString() ?? '')
+    ..write(visibleModificationDate?.millisecondsSinceEpoch.toString() ?? '')
+    ..write(';suppressCreatedTime:')
+    ..write(data.suppressCreatedTime ? '1' : '0')
     ..write(';obs:')
     ..write(data.observations)
     ..write(';supplier:')
@@ -1412,14 +1886,26 @@ String _pdfCacheKey(OrderPdfData data, PdfPageFormat? format) {
     ..write(data.comprasReviewerName ?? '')
     ..write('|')
     ..write(data.comprasReviewerArea ?? '')
+    ..write(';proc:')
+    ..write(data.processedByName ?? '')
+    ..write('|')
+    ..write(data.processedByArea ?? '')
     ..write(';dg:')
     ..write(data.direccionGeneralName ?? '')
     ..write('|')
     ..write(data.direccionGeneralArea ?? '')
+    ..write(';alm:')
+    ..write(data.almacenName ?? '')
+    ..write('|')
+    ..write(data.almacenArea ?? '')
+    ..write('|')
+    ..write(data.almacenComment ?? '')
     ..write(';reqDate:')
     ..write(data.requestedDeliveryDate?.millisecondsSinceEpoch.toString() ?? '')
     ..write(';eta:')
     ..write(data.etaDate?.millisecondsSinceEpoch.toString() ?? '')
+    ..write(';pendingResub:')
+    ..write(data.pendingResubmissionLabel ?? '')
     ..write(';resub:');
 
   for (final date in data.resubmissionDates) {
@@ -1452,6 +1938,10 @@ String _pdfCacheKey(OrderPdfData data, PdfPageFormat? format) {
       ..write(item.reviewFlagged ? '1' : '0')
       ..write('|')
       ..write(item.reviewComment ?? '')
+      ..write('|')
+      ..write(item.receivedQuantity?.toString() ?? '')
+      ..write('|')
+      ..write(item.receivedComment ?? '')
       ..write(';');
   }
 
@@ -1459,14 +1949,26 @@ String _pdfCacheKey(OrderPdfData data, PdfPageFormat? format) {
 }
 
 const int _maxPdfCacheEntries = 24;
+const int _maxPdfCacheBytes = 24 * 1024 * 1024;
+const int _maxStickyPdfCacheBytes = 12 * 1024 * 1024;
 final LinkedHashMap<String, Uint8List> _pdfCache =
     LinkedHashMap<String, Uint8List>();
 final LinkedHashMap<String, _StickyPdfEntry> _orderPdfStickyCache =
     LinkedHashMap<String, _StickyPdfEntry>();
+final Map<String, Future<Uint8List>> _pdfBuildFutures =
+    <String, Future<Uint8List>>{};
 final Set<String> _pdfInFlight = <String>{};
+final Map<String, Future<void>> _pdfTemplateWarmFutures =
+    <String, Future<void>>{};
+final Map<String, int> _pdfPrefetchGenerations = <String, int>{};
+final Queue<_PdfPrefetchTask> _pdfPrefetchQueue = Queue<_PdfPrefetchTask>();
+final Set<String> _queuedPdfPrefetchKeys = <String>{};
 final DateFormat _dateFormat = DateFormat('dd/MM/yyyy');
 final DateFormat _timeFormat = DateFormat('HH:mm');
 final Set<String> _warmedBrandings = <String>{};
+int _pdfCacheBytes = 0;
+int _stickyPdfCacheBytes = 0;
+bool _pdfPrefetchRunnerActive = false;
 
 PdfColor _pdfColor(Color color) => PdfColor.fromInt(color.toARGB32());
 
@@ -1480,8 +1982,80 @@ class _StickyPdfEntry {
   final Uint8List bytes;
 }
 
-ByteData _byteDataFromList(Uint8List bytes) {
-  return ByteData.view(bytes.buffer, bytes.offsetInBytes, bytes.lengthInBytes);
+class _PdfPrefetchTask {
+  const _PdfPrefetchTask({
+    required this.data,
+    required this.cacheKey,
+    required this.useIsolate,
+    this.groupKey,
+    this.generation,
+  });
+
+  final OrderPdfData data;
+  final String cacheKey;
+  final bool useIsolate;
+  final String? groupKey;
+  final int? generation;
+}
+
+Uint8List _storePdfBytes(Uint8List bytes) {
+  return kIsWeb ? Uint8List.fromList(bytes) : bytes;
+}
+
+Uint8List? _getPdfCacheEntry(String cacheKey) {
+  final cached = _pdfCache.remove(cacheKey);
+  if (cached == null) return null;
+  _pdfCache[cacheKey] = cached;
+  return cached;
+}
+
+Uint8List _putPdfCacheEntry(String cacheKey, Uint8List bytes) {
+  final stored = _storePdfBytes(bytes);
+  final replaced = _pdfCache.remove(cacheKey);
+  if (replaced != null) {
+    _pdfCacheBytes -= replaced.lengthInBytes;
+  }
+  _pdfCache[cacheKey] = stored;
+  _pdfCacheBytes += stored.lengthInBytes;
+  _trimPdfCache();
+  return stored;
+}
+
+void _trimPdfCache() {
+  while (_pdfCache.isNotEmpty &&
+      (_pdfCache.length > _maxPdfCacheEntries ||
+          _pdfCacheBytes > _maxPdfCacheBytes)) {
+    final oldestKey = _pdfCache.keys.first;
+    final removed = _pdfCache.remove(oldestKey);
+    if (removed != null) {
+      _pdfCacheBytes -= removed.lengthInBytes;
+    }
+  }
+}
+
+_StickyPdfEntry? _getStickyPdfEntry(String folio) {
+  final cached = _orderPdfStickyCache.remove(folio);
+  if (cached == null) return null;
+  _orderPdfStickyCache[folio] = cached;
+  return cached;
+}
+
+void _putStickyPdfEntry(String folio, _StickyPdfEntry entry) {
+  final replaced = _orderPdfStickyCache.remove(folio);
+  if (replaced != null) {
+    _stickyPdfCacheBytes -= replaced.bytes.lengthInBytes;
+  }
+  _orderPdfStickyCache[folio] = entry;
+  _stickyPdfCacheBytes += entry.bytes.lengthInBytes;
+  while (_orderPdfStickyCache.isNotEmpty &&
+      (_orderPdfStickyCache.length > _maxPdfCacheEntries ||
+          _stickyPdfCacheBytes > _maxStickyPdfCacheBytes)) {
+    final oldestKey = _orderPdfStickyCache.keys.first;
+    final removed = _orderPdfStickyCache.remove(oldestKey);
+    if (removed != null) {
+      _stickyPdfCacheBytes -= removed.bytes.lengthInBytes;
+    }
+  }
 }
 
 int? _safePageNumber(pw.Context context) {
@@ -1511,6 +2085,120 @@ int _estimateMaxPages(OrderPdfData data) {
   return desired;
 }
 
+Future<void> _warmPdfTemplate(
+  CompanyBranding branding, {
+  PdfPageFormat? format,
+  required bool useIsolate,
+}) {
+  final key = _pdfTemplateKey(branding, format, useIsolate: useIsolate);
+  return _pdfTemplateWarmFutures.putIfAbsent(key, () async {
+    try {
+      await _loadLogo(branding);
+      await _loadLogoBytes(branding);
+      await _loadPdfFonts();
+      await _loadPdfFontBytes(_pdfBaseFontAsset);
+      await _loadPdfFontBytes(_pdfBoldFontAsset);
+
+      final templateData = _buildPdfWarmupData(branding);
+      if (useIsolate) {
+        await _buildOrderPdfIsolated(templateData, format);
+        return;
+      }
+      await _buildOrderPdfLocal(templateData, format);
+    } catch (_) {
+      _pdfTemplateWarmFutures.remove(key);
+      rethrow;
+    }
+  });
+}
+
+String _pdfTemplateKey(
+  CompanyBranding branding,
+  PdfPageFormat? format, {
+  required bool useIsolate,
+}) {
+  final buffer = StringBuffer()
+    ..write(branding.id)
+    ..write('|')
+    ..write(useIsolate ? 'iso' : 'local');
+  if (format != null) {
+    buffer
+      ..write('|')
+      ..write(format.width.toStringAsFixed(2))
+      ..write('x')
+      ..write(format.height.toStringAsFixed(2));
+  }
+  return buffer.toString();
+}
+
+OrderPdfData _buildPdfWarmupData(CompanyBranding branding) {
+  final now = DateTime(2026, 1, 1, 8);
+  return OrderPdfData(
+    branding: branding,
+    folio: '__warmup__${branding.id}',
+    requesterName: 'CACHE',
+    requesterArea: 'CACHE',
+    areaName: 'CACHE',
+    urgency: PurchaseOrderUrgency.media,
+    items: const [
+      OrderItemDraft(
+        line: 1,
+        pieces: 1,
+        partNumber: 'CACHE-001',
+        description: 'Warmup session template',
+        quantity: 1,
+        unit: 'PZA',
+      ),
+    ],
+    createdAt: now,
+    observations: 'Warmup session template',
+    requestedDeliveryDate: now.add(const Duration(days: 7)),
+    cacheSalt: '__pdf-template-warmup__',
+  );
+}
+
+void _drainPdfPrefetchQueue() {
+  if (_pdfPrefetchRunnerActive) return;
+  _pdfPrefetchRunnerActive = true;
+
+  Future(() async {
+    try {
+      while (_pdfPrefetchQueue.isNotEmpty) {
+        final task = _pdfPrefetchQueue.removeFirst();
+        _queuedPdfPrefetchKeys.remove(task.cacheKey);
+        if (_isStalePrefetchTask(task)) {
+          continue;
+        }
+        if (_pdfCache.containsKey(task.cacheKey) ||
+            _pdfInFlight.contains(task.cacheKey)) {
+          continue;
+        }
+        _pdfInFlight.add(task.cacheKey);
+        try {
+          await buildOrderPdf(task.data, useIsolate: task.useIsolate);
+        } catch (error, stack) {
+          logError(error, stack, context: 'prefetchOrderPdfs');
+        } finally {
+          _pdfInFlight.remove(task.cacheKey);
+        }
+      }
+    } finally {
+      _pdfPrefetchRunnerActive = false;
+      if (_pdfPrefetchQueue.isNotEmpty) {
+        _drainPdfPrefetchQueue();
+      }
+    }
+  });
+}
+
+bool _isStalePrefetchTask(_PdfPrefetchTask task) {
+  final groupKey = task.groupKey;
+  if (groupKey == null) return false;
+  final generation = task.generation;
+  if (generation == null) return false;
+  return (_pdfPrefetchGenerations[groupKey] ?? 0) != generation;
+}
+
 OrderPdfData _sanitizePdfData(OrderPdfData data) {
   return OrderPdfData(
     branding: data.branding,
@@ -1530,11 +2218,20 @@ OrderPdfData _sanitizePdfData(OrderPdfData data) {
     comprasComment: _sanitizePdfOptional(data.comprasComment),
     comprasReviewerName: _sanitizePdfOptional(data.comprasReviewerName),
     comprasReviewerArea: _sanitizePdfOptional(data.comprasReviewerArea),
+    processedByName: _sanitizePdfOptional(data.processedByName),
+    processedByArea: _sanitizePdfOptional(data.processedByArea),
     direccionGeneralName: _sanitizePdfOptional(data.direccionGeneralName),
     direccionGeneralArea: _sanitizePdfOptional(data.direccionGeneralArea),
+    almacenName: _sanitizePdfOptional(data.almacenName),
+    almacenArea: _sanitizePdfOptional(data.almacenArea),
+    almacenComment: _sanitizePdfOptional(data.almacenComment),
     requestedDeliveryDate: data.requestedDeliveryDate,
     etaDate: data.etaDate,
     resubmissionDates: data.resubmissionDates,
+    pendingResubmissionLabel: _sanitizePdfOptional(
+      data.pendingResubmissionLabel,
+    ),
+    suppressCreatedTime: data.suppressCreatedTime,
     cacheSalt: data.cacheSalt,
   );
 }
@@ -1553,6 +2250,8 @@ OrderItemDraft _sanitizePdfItem(OrderItemDraft item) {
     estimatedDate: item.estimatedDate,
     reviewFlagged: item.reviewFlagged,
     reviewComment: _sanitizePdfOptional(item.reviewComment),
+    receivedQuantity: item.receivedQuantity,
+    receivedComment: _sanitizePdfOptional(item.receivedComment),
   );
 }
 
@@ -1613,7 +2312,7 @@ Uint8List? getCachedOrderPdf(
   PdfPageFormat? format,
 }) {
   final cacheKey = _pdfCacheKey(data, format);
-  final cached = _pdfCache[cacheKey];
+  final cached = _getPdfCacheEntry(cacheKey);
   if (cached == null) return null;
   return kIsWeb ? Uint8List.fromList(cached) : cached;
 }
@@ -1624,7 +2323,7 @@ Uint8List? getCachedOrderPdfForFolio(
 }) {
   final folio = data.folio?.trim();
   if (folio == null || folio.isEmpty) return null;
-  final cached = _orderPdfStickyCache[folio];
+  final cached = _getStickyPdfEntry(folio);
   if (cached == null) return null;
   final expectedKey = _pdfCacheKey(data, format);
   if (cached.cacheKey != expectedKey) return null;
@@ -1639,14 +2338,13 @@ void _storeOrderPdfForFolio(
   final folio = data.folio?.trim();
   if (folio == null || folio.isEmpty) return;
   final cacheKey = _pdfCacheKey(data, format);
-  _orderPdfStickyCache.remove(folio);
-  _orderPdfStickyCache[folio] = _StickyPdfEntry(
+  _putStickyPdfEntry(
+    folio,
+    _StickyPdfEntry(
     cacheKey: cacheKey,
     bytes: kIsWeb ? Uint8List.fromList(bytes) : bytes,
+    ),
   );
-  if (_orderPdfStickyCache.length > _maxPdfCacheEntries) {
-    _orderPdfStickyCache.remove(_orderPdfStickyCache.keys.first);
-  }
 }
 
 Map<String, dynamic> _serializePdfPayload(
@@ -1684,11 +2382,14 @@ Map<String, dynamic> _serializePdfPayload(
             'estimatedDate': item.estimatedDate?.millisecondsSinceEpoch,
             'reviewFlagged': item.reviewFlagged,
             'reviewComment': item.reviewComment,
+            'receivedQuantity': item.receivedQuantity,
+            'receivedComment': item.receivedComment,
           },
         )
         .toList(),
     'createdAt': data.createdAt.millisecondsSinceEpoch,
     'updatedAt': data.updatedAt?.millisecondsSinceEpoch,
+    'suppressCreatedTime': data.suppressCreatedTime,
     'observations': data.observations,
     'folio': data.folio,
     'supplier': data.supplier,
@@ -1698,10 +2399,16 @@ Map<String, dynamic> _serializePdfPayload(
     'comprasComment': data.comprasComment,
     'comprasReviewerName': data.comprasReviewerName,
     'comprasReviewerArea': data.comprasReviewerArea,
+    'processedByName': data.processedByName,
+    'processedByArea': data.processedByArea,
     'direccionGeneralName': data.direccionGeneralName,
     'direccionGeneralArea': data.direccionGeneralArea,
+    'almacenName': data.almacenName,
+    'almacenArea': data.almacenArea,
+    'almacenComment': data.almacenComment,
     'requestedDeliveryDate': data.requestedDeliveryDate?.millisecondsSinceEpoch,
     'etaDate': data.etaDate?.millisecondsSinceEpoch,
+    'pendingResubmissionLabel': data.pendingResubmissionLabel,
     'resubmissionDates': data.resubmissionDates
         .map((date) => date.millisecondsSinceEpoch)
         .toList(),
@@ -1722,8 +2429,8 @@ Future<Uint8List> _buildOrderPdfInIsolate(Map<String, dynamic> payload) async {
   final logo = pw.MemoryImage(logoBytes);
   final baseFontBytes = payload['baseFontBytes'] as Uint8List;
   final boldFontBytes = payload['boldFontBytes'] as Uint8List;
-  final baseFont = pw.Font.ttf(_byteDataFromList(baseFontBytes));
-  final boldFont = pw.Font.ttf(_byteDataFromList(boldFontBytes));
+  final baseFont = pw.Font.ttf(ByteData.view(baseFontBytes.buffer));
+  final boldFont = pw.Font.ttf(ByteData.view(boldFontBytes.buffer));
 
   final formatWidth = payload['formatWidth'] as double?;
   final formatHeight = payload['formatHeight'] as double?;
@@ -1732,7 +2439,13 @@ Future<Uint8List> _buildOrderPdfInIsolate(Map<String, dynamic> payload) async {
       : null;
 
   final data = _deserializeOrderPdfData(payload, branding);
-  return _buildOrderPdfWithAssets(data, format, logo, baseFont, boldFont);
+  return _buildOrderPdfWithAssets(
+    data,
+    format,
+    logo,
+    baseFont,
+    boldFont,
+  );
 }
 
 Future<Uint8List> _buildCotizacionPdfInIsolate(
@@ -1749,8 +2462,8 @@ Future<Uint8List> _buildCotizacionPdfInIsolate(
   final logo = pw.MemoryImage(logoBytes);
   final baseFontBytes = payload['baseFontBytes'] as Uint8List;
   final boldFontBytes = payload['boldFontBytes'] as Uint8List;
-  final baseFont = pw.Font.ttf(_byteDataFromList(baseFontBytes));
-  final boldFont = pw.Font.ttf(_byteDataFromList(boldFontBytes));
+  final baseFont = pw.Font.ttf(ByteData.view(baseFontBytes.buffer));
+  final boldFont = pw.Font.ttf(ByteData.view(boldFontBytes.buffer));
 
   final formatWidth = payload['formatWidth'] as double?;
   final formatHeight = payload['formatHeight'] as double?;
@@ -1759,7 +2472,13 @@ Future<Uint8List> _buildCotizacionPdfInIsolate(
       : null;
 
   final data = _deserializeOrderPdfData(payload, branding);
-  return _buildCotizacionPdfWithAssets(data, format, logo, baseFont, boldFont);
+  return _buildCotizacionPdfWithAssets(
+    data,
+    format,
+    logo,
+    baseFont,
+    boldFont,
+  );
 }
 
 OrderPdfData _deserializeOrderPdfData(
@@ -1786,6 +2505,8 @@ OrderPdfData _deserializeOrderPdfData(
             estimatedDate: _parseMillis(raw['estimatedDate']),
             reviewFlagged: (raw['reviewFlagged'] as bool?) ?? false,
             reviewComment: raw['reviewComment'] as String?,
+            receivedQuantity: raw['receivedQuantity'] as num?,
+            receivedComment: raw['receivedComment'] as String?,
           ),
         );
       }
@@ -1801,6 +2522,7 @@ OrderPdfData _deserializeOrderPdfData(
     items: items,
     createdAt: _parseMillis(payload['createdAt']) ?? DateTime.now(),
     updatedAt: _parseMillis(payload['updatedAt']),
+    suppressCreatedTime: (payload['suppressCreatedTime'] as bool?) ?? false,
     observations: (payload['observations'] as String?) ?? '',
     folio: payload['folio'] as String?,
     supplier: payload['supplier'] as String?,
@@ -1810,10 +2532,16 @@ OrderPdfData _deserializeOrderPdfData(
     comprasComment: payload['comprasComment'] as String?,
     comprasReviewerName: payload['comprasReviewerName'] as String?,
     comprasReviewerArea: payload['comprasReviewerArea'] as String?,
+    processedByName: payload['processedByName'] as String?,
+    processedByArea: payload['processedByArea'] as String?,
     direccionGeneralName: payload['direccionGeneralName'] as String?,
     direccionGeneralArea: payload['direccionGeneralArea'] as String?,
+    almacenName: payload['almacenName'] as String?,
+    almacenArea: payload['almacenArea'] as String?,
+    almacenComment: payload['almacenComment'] as String?,
     requestedDeliveryDate: _parseMillis(payload['requestedDeliveryDate']),
     etaDate: _parseMillis(payload['etaDate']),
+    pendingResubmissionLabel: payload['pendingResubmissionLabel'] as String?,
     resubmissionDates: _parseResubmissionDates(payload['resubmissionDates']),
     cacheSalt: payload['cacheSalt'] as String?,
   );
@@ -1872,3 +2600,4 @@ List<DateTime> _parseResubmissionDates(dynamic value) {
   }
   return dates;
 }
+

@@ -1,17 +1,16 @@
-import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-
+﻿import 'package:flutter/material.dart';
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
-import 'package:sistema_compras/core/widgets/info_action.dart';
+import 'package:sistema_compras/core/navigation_guard.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_inline_view.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
 
-class OrderRejectionHistory extends ConsumerWidget {
+class OrderRejectionHistory extends StatelessWidget {
   const OrderRejectionHistory({
+    required this.branding,
     required this.order,
     required this.events,
     this.hideLatestResubmission = false,
@@ -20,6 +19,7 @@ class OrderRejectionHistory extends ConsumerWidget {
     super.key,
   });
 
+  final CompanyBranding branding;
   final PurchaseOrder order;
   final List<PurchaseOrderEvent> events;
   final bool hideLatestResubmission;
@@ -27,7 +27,7 @@ class OrderRejectionHistory extends ConsumerWidget {
   final bool showOriginalWithReturns;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final entries = _buildEntries(
       order,
       events,
@@ -39,8 +39,6 @@ class OrderRejectionHistory extends ConsumerWidget {
     if (entries.isEmpty) {
       return const SizedBox.shrink();
     }
-
-    final branding = ref.read(currentBrandingProvider);
 
     return Card(
       child: Column(
@@ -105,9 +103,12 @@ class OrderRejectionHistory extends ConsumerWidget {
       hideBudget: hideComprasData,
     );
 
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => _OrderHistoryPdfScreen(title: entry.title, data: pdfData),
+    runGuardedPdfNavigation<void>(
+      'order-history-pdf:${order.id}:${entry.title}',
+      () => Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => _OrderHistoryPdfScreen(title: entry.title, data: pdfData),
+        ),
       ),
     );
   }
@@ -140,15 +141,6 @@ class _OrderHistoryPdfScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(title),
-        actions: [
-          infoAction(
-            context,
-            title: 'PDF historico',
-            message:
-                'Este PDF corresponde a una version anterior.\n'
-                'Usalo para comparar cambios entre envios.',
-          ),
-        ],
       ),
       body: OrderPdfInlineView(data: data),
     );
@@ -162,12 +154,15 @@ List<_HistoryEntry> _buildEntries(
   bool showOnlyOriginal = false,
   bool showOriginalWithReturns = false,
 }) {
-  final sorted = [...events];
-  sorted.sort((a, b) {
-    final aTime = a.timestamp?.millisecondsSinceEpoch ?? 0;
-    final bTime = b.timestamp?.millisecondsSinceEpoch ?? 0;
-    return aTime.compareTo(bTime);
-  });
+  final sorted = _eventsSortedByTime(events);
+  final itemsSignatureCache = <List<PurchaseOrderItem>, String>{};
+  String itemsSignatureFor(List<PurchaseOrderItem> items) {
+    final cached = itemsSignatureCache[items];
+    if (cached != null) return cached;
+    final computed = _itemsSignature(items);
+    itemsSignatureCache[items] = computed;
+    return computed;
+  }
 
   PurchaseOrderEvent? originalEvent;
   for (final event in sorted) {
@@ -181,6 +176,13 @@ List<_HistoryEntry> _buildEntries(
     final hasReturns = sorted.any(_isReturnEvent);
     if (!hasReturns) return const [];
     if (originalEvent == null) return const [];
+    PurchaseOrderEvent? firstReturnEvent;
+    for (final event in sorted) {
+      if (_isReturnEvent(event)) {
+        firstReturnEvent = event;
+        break;
+      }
+    }
     final title = _titleForEvent(
       originalEvent,
       submissionCount: 0,
@@ -189,7 +191,7 @@ List<_HistoryEntry> _buildEntries(
     if (title == null) return const [];
     return [
       _HistoryEntry(
-        title: title,
+        title: _appendRejectionStage(title, firstReturnEvent),
         event: originalEvent,
         items: originalEvent.itemsSnapshot,
         resubmissionDates: const [],
@@ -214,10 +216,10 @@ List<_HistoryEntry> _buildEntries(
   var returnCount = 0;
   final entries = <_HistoryEntry>[];
   String? lastIncludedItemsSignature;
-  final baseItemsSignature = _itemsSignature(order.items);
+  final baseItemsSignature = itemsSignatureFor(order.items);
   final originalItemsSignature = showOriginalWithReturns && originalEvent != null
       ? (originalEvent.itemsSnapshot.isNotEmpty
-          ? _itemsSignature(originalEvent.itemsSnapshot)
+          ? itemsSignatureFor(originalEvent.itemsSnapshot)
           : baseItemsSignature)
       : null;
 
@@ -249,7 +251,7 @@ List<_HistoryEntry> _buildEntries(
 
     if (showOriginalWithReturns && isReturn) {
       final candidate = event.itemsSnapshot.isNotEmpty
-          ? _itemsSignature(event.itemsSnapshot)
+          ? itemsSignatureFor(event.itemsSnapshot)
           : baseItemsSignature;
       final compareWith = lastIncludedItemsSignature ?? originalItemsSignature;
       if (compareWith != null && candidate == compareWith) {
@@ -264,7 +266,7 @@ List<_HistoryEntry> _buildEntries(
     );
     if (title == null) continue;
     if (showOriginalWithReturns && isReturn && returnCount == 0) {
-      title = 'Orden original';
+      title = _appendRejectionStage('Orden original', event);
     }
 
     final resubmissionDates = _resubmissionDatesForEntry(
@@ -292,11 +294,32 @@ List<_HistoryEntry> _buildEntries(
     );
 
     lastIncludedItemsSignature = event.itemsSnapshot.isNotEmpty
-        ? _itemsSignature(event.itemsSnapshot)
+        ? itemsSignatureFor(event.itemsSnapshot)
         : baseItemsSignature;
   }
 
   return entries;
+}
+
+List<PurchaseOrderEvent> _eventsSortedByTime(List<PurchaseOrderEvent> events) {
+  if (events.length < 2) return events;
+
+  var previous = events.first.timestamp?.millisecondsSinceEpoch ?? 0;
+  for (var index = 1; index < events.length; index++) {
+    final current = events[index].timestamp?.millisecondsSinceEpoch ?? 0;
+    if (current < previous) {
+      final sorted = [...events];
+      sorted.sort((a, b) {
+        final aTime = a.timestamp?.millisecondsSinceEpoch ?? 0;
+        final bTime = b.timestamp?.millisecondsSinceEpoch ?? 0;
+        return aTime.compareTo(bTime);
+      });
+      return sorted;
+    }
+    previous = current;
+  }
+
+  return events;
 }
 
 bool _isSubmissionEvent(PurchaseOrderEvent event) {
@@ -369,7 +392,7 @@ String? _titleForEvent(
 
   if (_isSubmissionEvent(event)) {
     final next = submissionCount + 1;
-    return next == 1 ? 'Orden original' : 'Reenvío ${next - 1}';
+    return next == 1 ? 'Orden original' : 'ReenvÃ­o ${next - 1}';
   }
 
   if (_isReturnEvent(event)) {
@@ -389,7 +412,7 @@ String? _titleForEvent(
 
   if (event.type == 'advance' &&
       toStatus == PurchaseOrderStatus.authorizedGerencia) {
-    return 'Después de Cotizaciones';
+    return 'DespuÃ©s de Cotizaciones';
   }
 
   if (event.type == 'advance') {
@@ -397,6 +420,37 @@ String? _titleForEvent(
   }
 
   return null;
+}
+
+String _appendRejectionStage(String title, PurchaseOrderEvent? event) {
+  final stage = _rejectionStageLabel(event);
+  if (stage == null) return title;
+  return '$title (rechazada en $stage)';
+}
+
+String? _rejectionStageLabel(PurchaseOrderEvent? event) {
+  final status = event?.fromStatus;
+  if (status == null) return null;
+  switch (status) {
+    case PurchaseOrderStatus.pendingCompras:
+      return 'Compras';
+    case PurchaseOrderStatus.cotizaciones:
+      return 'Cotizaciones';
+    case PurchaseOrderStatus.authorizedGerencia:
+      return 'Dirección General';
+    case PurchaseOrderStatus.paymentDone:
+      return 'Pendientes de fecha estimada';
+    case PurchaseOrderStatus.contabilidad:
+      return 'Contabilidad';
+    case PurchaseOrderStatus.almacen:
+      return 'Almacén';
+    case PurchaseOrderStatus.orderPlaced:
+      return 'Orden realizada';
+    case PurchaseOrderStatus.eta:
+      return 'Orden finalizada';
+    case PurchaseOrderStatus.draft:
+      return 'Solicitante';
+  }
 }
 
 bool _shouldHideComprasData(PurchaseOrderEvent event) {
@@ -418,3 +472,4 @@ bool _shouldShowDireccionSignature(PurchaseOrderStatus? status) {
   final direccionIndex = defaultStatusFlow.indexOf(PurchaseOrderStatus.paymentDone);
   return index >= direccionIndex;
 }
+

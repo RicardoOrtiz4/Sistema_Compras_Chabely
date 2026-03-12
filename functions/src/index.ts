@@ -65,7 +65,23 @@ const defaultAreas: Record<string, { name: string }> = {
 
 const REGION = 'us-central1';
 const PURCHASE_ORDER_FOLIO_COUNTER = 'counters/folios/purchaseOrderNext';
+const PURCHASE_ORDER_COUNTERS_ROOT = 'purchaseOrderCounters';
 const LEGACY_COMPANY_KEYS = ['chabely', 'acerpro'];
+const TRACKED_ORDER_STATUSES = new Set([
+  'pendingCompras',
+  'cotizaciones',
+  'authorizedGerencia',
+  'paymentDone',
+  'contabilidad',
+  'almacen',
+]);
+
+type PurchaseOrderCounterSummary = {
+  status: string;
+  requesterId: string;
+  rejected: boolean;
+  readyToSend: boolean;
+};
 
 export const createUserProfile = functions
   .region(REGION)
@@ -363,6 +379,69 @@ export const returnToUser = functions
       );
     }
   });
+
+export const syncPurchaseOrderCounters = functions
+  .region(REGION)
+  .database.ref('/purchaseOrders/{orderId}')
+  .onWrite(async (change) => {
+    const before = summarizePurchaseOrderForCounters(change.before.val());
+    const after = summarizePurchaseOrderForCounters(change.after.val());
+    const tasks: Promise<unknown>[] = [];
+
+    if (before.status !== after.status) {
+      if (before.status) {
+        tasks.push(applyCounterDelta(statusCounterPath(before.status), -1));
+      }
+      if (after.status) {
+        tasks.push(applyCounterDelta(statusCounterPath(after.status), 1));
+      }
+    }
+
+    if (before.readyToSend !== after.readyToSend) {
+      if (before.readyToSend) {
+        tasks.push(applyCounterDelta(cotizacionesReadyCounterPath(), -1));
+      }
+      if (after.readyToSend) {
+        tasks.push(applyCounterDelta(cotizacionesReadyCounterPath(), 1));
+      }
+    }
+
+    const rejectedChanged =
+      before.rejected !== after.rejected || before.requesterId !== after.requesterId;
+    if (rejectedChanged) {
+      if (before.rejected && before.requesterId) {
+        tasks.push(applyCounterDelta(rejectedCounterPath(before.requesterId), -1));
+      }
+      if (after.rejected && after.requesterId) {
+        tasks.push(applyCounterDelta(rejectedCounterPath(after.requesterId), 1));
+      }
+    }
+
+    if (tasks.length == 0) {
+      return null;
+    }
+
+    await Promise.all(tasks);
+    return null;
+  });
+
+export const rebuildPurchaseOrderCounters = functions
+  .region(REGION)
+  .https.onCall(async (_data, context) => {
+    await ensureAdmin(context);
+
+    const snapshot = await db.ref('purchaseOrders').get();
+    const raw = snapshot.exists() ? snapshot.val() : null;
+    const counters = buildPurchaseOrderCounters(raw);
+
+    await db.ref(PURCHASE_ORDER_COUNTERS_ROOT).set(counters);
+
+    return {
+      rebuilt: true,
+      totalOrders: countPurchaseOrders(raw),
+    };
+  });
+
 export const createUserWithRole = functions
   .region(REGION)
   .https.onCall(async (data, context) => {
@@ -661,6 +740,206 @@ async function ensureAdmin(context: functions.https.CallableContext): Promise<vo
 
 function asTrimmedString(value: unknown): string {
   return typeof value == 'string' ? value.trim() : '';
+}
+
+function summarizePurchaseOrderForCounters(value: unknown): PurchaseOrderCounterSummary {
+  if (!value || typeof value !== 'object') {
+    return emptyPurchaseOrderCounterSummary();
+  }
+
+  const record = value as Record<string, unknown>;
+  const status = normalizeTrackedStatus(record.status);
+  const requesterId = asTrimmedString(record.requesterId);
+
+  return {
+    status,
+    requesterId,
+    rejected: isRejectedPurchaseOrder(record),
+    readyToSend: isPurchaseOrderReadyToSend(record),
+  };
+}
+
+function emptyPurchaseOrderCounterSummary(): PurchaseOrderCounterSummary {
+  return {
+    status: '',
+    requesterId: '',
+    rejected: false,
+    readyToSend: false,
+  };
+}
+
+function normalizeTrackedStatus(value: unknown): string {
+  const status = asTrimmedString(value);
+  return TRACKED_ORDER_STATUSES.has(status) ? status : '';
+}
+
+function isRejectedPurchaseOrder(order: Record<string, unknown>): boolean {
+  const status = asTrimmedString(order.status);
+  const reason = asTrimmedString(order.lastReturnReason);
+  return status == 'draft' && reason.length > 0;
+}
+
+function isPurchaseOrderReadyToSend(order: Record<string, unknown>): boolean {
+  if (asTrimmedString(order.status) != 'cotizaciones') {
+    return false;
+  }
+  if (!hasQuoteLinks(order)) {
+    return false;
+  }
+
+  const items = extractPurchaseOrderItems(order.items);
+  if (items.length == 0) {
+    return false;
+  }
+
+  return items.every((item) => item.supplier.length > 0 && item.budget > 0);
+}
+
+function hasQuoteLinks(order: Record<string, unknown>): boolean {
+  const links = order.cotizacionLinks;
+  if (Array.isArray(links)) {
+    return links.some((entry) => {
+      if (!entry || typeof entry !== 'object') return false;
+      return asTrimmedString((entry as Record<string, unknown>).url).length > 0;
+    });
+  }
+
+  if (links && typeof links === 'object') {
+    return Object.values(links as Record<string, unknown>).some((entry) => {
+      if (!entry || typeof entry !== 'object') return false;
+      return asTrimmedString((entry as Record<string, unknown>).url).length > 0;
+    });
+  }
+
+  const urls = extractStringList(order.cotizacionPdfUrls);
+  if (urls.some((url) => url.length > 0)) {
+    return true;
+  }
+
+  return asTrimmedString(order.cotizacionPdfUrl).length > 0;
+}
+
+function extractPurchaseOrderItems(value: unknown): Array<{ supplier: string; budget: number }> {
+  if (Array.isArray(value)) {
+    const items: Array<{ supplier: string; budget: number }> = [];
+    for (const entry of value) {
+      const item = summarizePurchaseOrderItem(entry);
+      if (item) {
+        items.push(item);
+      }
+    }
+    return items;
+  }
+
+  if (value && typeof value === 'object') {
+    const items: Array<{ supplier: string; budget: number }> = [];
+    for (const entry of Object.values(value as Record<string, unknown>)) {
+      const item = summarizePurchaseOrderItem(entry);
+      if (item) {
+        items.push(item);
+      }
+    }
+    return items;
+  }
+
+  return [];
+}
+
+function summarizePurchaseOrderItem(value: unknown): { supplier: string; budget: number } | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  return {
+    supplier: asTrimmedString(record.supplier),
+    budget: parseNumericValue(record.budget),
+  };
+}
+
+function extractStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(asTrimmedString).filter((entry) => entry.length > 0);
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>)
+      .map(asTrimmedString)
+      .filter((entry) => entry.length > 0);
+  }
+
+  return [];
+}
+
+function parseNumericValue(value: unknown): number {
+  if (typeof value == 'number') {
+    return Number.isFinite(value) ? value : 0;
+  }
+  if (typeof value == 'string') {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function buildPurchaseOrderCounters(value: unknown): Record<string, unknown> {
+  const status = Object.fromEntries(
+    Array.from(TRACKED_ORDER_STATUSES).map((entry) => [entry, 0])
+  ) as Record<string, number>;
+  const rejectedByUser: Record<string, number> = {};
+  let readyToSend = 0;
+
+  if (value && typeof value === 'object') {
+    for (const rawOrder of Object.values(value as Record<string, unknown>)) {
+      const summary = summarizePurchaseOrderForCounters(rawOrder);
+      if (summary.status) {
+        status[summary.status] = (status[summary.status] ?? 0) + 1;
+      }
+      if (summary.readyToSend) {
+        readyToSend += 1;
+      }
+      if (summary.rejected && summary.requesterId) {
+        rejectedByUser[summary.requesterId] =
+          (rejectedByUser[summary.requesterId] ?? 0) + 1;
+      }
+    }
+  }
+
+  return {
+    status,
+    cotizaciones: {
+      readyToSend,
+    },
+    rejectedByUser,
+  };
+}
+
+function countPurchaseOrders(value: unknown): number {
+  if (!value || typeof value !== 'object') {
+    return 0;
+  }
+  return Object.keys(value as Record<string, unknown>).length;
+}
+
+function statusCounterPath(status: string): string {
+  return `${PURCHASE_ORDER_COUNTERS_ROOT}/status/${status}`;
+}
+
+function cotizacionesReadyCounterPath(): string {
+  return `${PURCHASE_ORDER_COUNTERS_ROOT}/cotizaciones/readyToSend`;
+}
+
+function rejectedCounterPath(uid: string): string {
+  return `${PURCHASE_ORDER_COUNTERS_ROOT}/rejectedByUser/${uid}`;
+}
+
+async function applyCounterDelta(path: string, delta: number): Promise<void> {
+  if (delta == 0) return;
+
+  await db.ref(path).transaction((current) => {
+    const next = parseCounterValue(current) + delta;
+    return next > 0 ? next : 0;
+  });
 }
 
 function isAuthUserNotFound(error: unknown): boolean {

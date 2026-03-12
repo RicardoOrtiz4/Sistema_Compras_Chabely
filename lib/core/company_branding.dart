@@ -56,7 +56,7 @@ const _chabelyBranding = CompanyBranding(
   company: Company.chabely,
   displayName: 'Chabely',
   tagline: 'Sistema de compras',
-  logoAsset: 'evidencias/LOGO CHABELY.png',
+  logoAsset: 'evidencias/LOGO_CHABELY_1500.png',
   seedColor: Color(0xFF4A4A4A),
   lightBackground: Color(0xFFF6F6F6),
   lightSurface: Color(0xFFFFFFFF),

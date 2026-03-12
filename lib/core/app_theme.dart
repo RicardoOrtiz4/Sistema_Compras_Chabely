@@ -41,27 +41,30 @@ class AppTheme {
       visualDensity: VisualDensity.adaptivePlatformDensity,
       dialogTheme: DialogThemeData(backgroundColor: branding.lightSurface),
       filledButtonTheme: FilledButtonThemeData(
-        style: FilledButton.styleFrom(
-          side: buttonBorder,
+        style: _filledButtonStyle(
+          scheme: scheme,
+          border: buttonBorder,
           shape: buttonShape,
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
-        style: OutlinedButton.styleFrom(
-          side: buttonBorder,
+        style: _outlinedButtonStyle(
+          scheme: scheme,
+          border: buttonBorder,
           shape: buttonShape,
         ),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
-        style: ElevatedButton.styleFrom(
-          side: buttonBorder,
+        style: _elevatedButtonStyle(
+          scheme: scheme,
+          border: buttonBorder,
           shape: buttonShape,
-          elevation: 0,
         ),
       ),
       textButtonTheme: TextButtonThemeData(
-        style: TextButton.styleFrom(
-          side: buttonBorder,
+        style: _textButtonStyle(
+          scheme: scheme,
+          border: buttonBorder,
           shape: buttonShape,
         ),
       ),
@@ -99,31 +102,175 @@ class AppTheme {
       brightness: Brightness.dark,
       visualDensity: VisualDensity.adaptivePlatformDensity,
       filledButtonTheme: FilledButtonThemeData(
-        style: FilledButton.styleFrom(
-          side: buttonBorder,
+        style: _filledButtonStyle(
+          scheme: scheme,
+          border: buttonBorder,
           shape: buttonShape,
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
-        style: OutlinedButton.styleFrom(
-          side: buttonBorder,
+        style: _outlinedButtonStyle(
+          scheme: scheme,
+          border: buttonBorder,
           shape: buttonShape,
         ),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
-        style: ElevatedButton.styleFrom(
-          side: buttonBorder,
+        style: _elevatedButtonStyle(
+          scheme: scheme,
+          border: buttonBorder,
           shape: buttonShape,
-          elevation: 0,
         ),
       ),
       textButtonTheme: TextButtonThemeData(
-        style: TextButton.styleFrom(
-          side: buttonBorder,
+        style: _textButtonStyle(
+          scheme: scheme,
+          border: buttonBorder,
           shape: buttonShape,
         ),
       ),
     );
+  }
+
+  static ButtonStyle _filledButtonStyle({
+    required ColorScheme scheme,
+    required BorderSide border,
+    required OutlinedBorder shape,
+  }) {
+    return FilledButton.styleFrom(
+      side: border,
+      shape: shape,
+    ).copyWith(
+      animationDuration: const Duration(milliseconds: 170),
+      elevation: _elevation(0, 5, 2),
+      shadowColor: WidgetStatePropertyAll(scheme.primary.withValues(alpha: 0.26)),
+      overlayColor: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.pressed)) {
+          return Colors.white.withValues(alpha: 0.16);
+        }
+        if (states.contains(WidgetState.hovered)) {
+          return Colors.white.withValues(alpha: 0.10);
+        }
+        if (states.contains(WidgetState.focused)) {
+          return Colors.white.withValues(alpha: 0.08);
+        }
+        return null;
+      }),
+      side: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.hovered)) {
+          return BorderSide(color: scheme.primary.withValues(alpha: 0.72), width: 1.4);
+        }
+        return border;
+      }),
+    );
+  }
+
+  static ButtonStyle _outlinedButtonStyle({
+    required ColorScheme scheme,
+    required BorderSide border,
+    required OutlinedBorder shape,
+  }) {
+    return OutlinedButton.styleFrom(
+      side: border,
+      shape: shape,
+    ).copyWith(
+      animationDuration: const Duration(milliseconds: 170),
+      elevation: _elevation(0, 2, 1),
+      shadowColor: WidgetStatePropertyAll(scheme.primary.withValues(alpha: 0.16)),
+      backgroundColor: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.hovered)) {
+          return scheme.primary.withValues(alpha: 0.08);
+        }
+        if (states.contains(WidgetState.pressed)) {
+          return scheme.primary.withValues(alpha: 0.12);
+        }
+        return null;
+      }),
+      side: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.hovered)) {
+          return BorderSide(color: scheme.primary.withValues(alpha: 0.80), width: 1.4);
+        }
+        return border;
+      }),
+    );
+  }
+
+  static ButtonStyle _elevatedButtonStyle({
+    required ColorScheme scheme,
+    required BorderSide border,
+    required OutlinedBorder shape,
+  }) {
+    return ElevatedButton.styleFrom(
+      side: border,
+      shape: shape,
+      elevation: 0,
+    ).copyWith(
+      animationDuration: const Duration(milliseconds: 170),
+      elevation: _elevation(0, 6, 3),
+      shadowColor: WidgetStatePropertyAll(scheme.primary.withValues(alpha: 0.22)),
+      overlayColor: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.pressed)) {
+          return scheme.primary.withValues(alpha: 0.14);
+        }
+        if (states.contains(WidgetState.hovered)) {
+          return scheme.primary.withValues(alpha: 0.09);
+        }
+        return null;
+      }),
+      side: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.hovered)) {
+          return BorderSide(color: scheme.primary.withValues(alpha: 0.72), width: 1.4);
+        }
+        return border;
+      }),
+    );
+  }
+
+  static ButtonStyle _textButtonStyle({
+    required ColorScheme scheme,
+    required BorderSide border,
+    required OutlinedBorder shape,
+  }) {
+    return TextButton.styleFrom(
+      side: border,
+      shape: shape,
+    ).copyWith(
+      animationDuration: const Duration(milliseconds: 170),
+      overlayColor: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.pressed)) {
+          return scheme.primary.withValues(alpha: 0.14);
+        }
+        if (states.contains(WidgetState.hovered)) {
+          return scheme.primary.withValues(alpha: 0.08);
+        }
+        return null;
+      }),
+      backgroundColor: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.hovered)) {
+          return scheme.primary.withValues(alpha: 0.04);
+        }
+        return null;
+      }),
+      side: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.hovered)) {
+          return BorderSide(color: scheme.primary.withValues(alpha: 0.60), width: 1.3);
+        }
+        return border;
+      }),
+    );
+  }
+
+  static WidgetStateProperty<double?> _elevation(
+    double normal,
+    double hovered,
+    double pressed,
+  ) {
+    return WidgetStateProperty.resolveWith((states) {
+      if (states.contains(WidgetState.disabled)) return 0;
+      if (states.contains(WidgetState.pressed)) return pressed;
+      if (states.contains(WidgetState.hovered)) return hovered;
+      return normal;
+    });
   }
 
   static Color _onColor(Color color) {

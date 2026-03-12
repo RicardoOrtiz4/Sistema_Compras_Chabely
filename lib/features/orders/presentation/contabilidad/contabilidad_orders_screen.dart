@@ -5,19 +5,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/session_drafts.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
-import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
-import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_card_pills.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_pdf_preload_gate.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_search.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_status_duration.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_summary_lines.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
 
@@ -31,6 +31,10 @@ class ContabilidadOrdersScreen extends ConsumerStatefulWidget {
 
 class _ContabilidadOrdersScreenState
     extends ConsumerState<ContabilidadOrdersScreen> {
+  List<PurchaseOrder>? _cachedSourceOrders;
+  String? _cachedVisibleKey;
+  List<PurchaseOrder>? _cachedVisibleOrders;
+
   late final TextEditingController _searchController;
   final OrderSearchCache _searchCache = OrderSearchCache();
   Timer? _searchDebounce;
@@ -54,12 +58,14 @@ class _ContabilidadOrdersScreenState
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 250), () {
       if (!mounted) return;
+      _searchDebounce = null;
       setState(() => _searchQuery = value);
     });
   }
 
   void _clearSearch() {
     _searchDebounce?.cancel();
+    _searchDebounce = null;
     _searchController.clear();
     setState(() => _searchQuery = '');
   }
@@ -70,21 +76,21 @@ class _ContabilidadOrdersScreenState
 
   @override
   Widget build(BuildContext context) {
-    final ordersAsync = ref.watch(contabilidadOrdersPagedProvider(_limit));
+    final ordersAsync = ref.watch(contabilidadOrdersProvider);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Contabilidad'),
-        actions: [
-          infoAction(
-            context,
-            title: 'Contabilidad',
-            message:
-                'Aqui ves ordenes autorizadas para facturar.\n'
-                'Usa el buscador por folio, solicitante o fecha.\n'
-                'Abre una orden para cargar la factura y avanzar.',
-          ),
-        ],
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            if (Navigator.of(context).canPop()) {
+              Navigator.of(context).pop();
+            } else {
+              guardedGo(context, '/home');
+            }
+          },
+        ),
       ),
       body: ordersAsync.when(
         data: (orders) {
@@ -93,17 +99,11 @@ class _ContabilidadOrdersScreenState
           }
 
           _searchCache.retainFor(orders);
-          final filtered = orders
-              .where((order) => orderMatchesSearch(order, _searchQuery, cache: _searchCache))
-              .toList();
-          final canLoadMore = orders.length >= _limit;
-          final showLoadMore =
-              canLoadMore && filtered.length >= defaultOrderPageSize;
+          final filtered = _resolveVisibleOrders(orders);
+          final visibleOrders = filtered.take(_limit).toList(growable: false);
+          final showLoadMore = filtered.length > visibleOrders.length;
 
-          final branding = ref.read(currentBrandingProvider);
-          prefetchOrderPdfsForOrders(filtered, branding: branding);
-
-          return Column(
+          final content = Column(
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -125,46 +125,51 @@ class _ContabilidadOrdersScreenState
               ),
               const SizedBox(height: 12),
               Expanded(
-                child: filtered.isEmpty
+                child: visibleOrders.isEmpty
                     ? Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Text('No hay órdenes con ese filtro.'),
+                          const Text('No hay Ã³rdenes con ese filtro.'),
                           if (showLoadMore) ...[
                             const SizedBox(height: 12),
                             OutlinedButton.icon(
                               onPressed: _loadMore,
                               icon: const Icon(Icons.expand_more),
-                              label: const Text('Ver más'),
+                              label: const Text('Ver mÃ¡s'),
                             ),
                           ],
                         ],
                       )
                     : ListView.separated(
                         padding: const EdgeInsets.all(16),
-                        itemCount: filtered.length + (showLoadMore ? 1 : 0),
-                        separatorBuilder: (_, __) =>
-                            const SizedBox(height: 12),
+                        itemCount: visibleOrders.length + (showLoadMore ? 1 : 0),
+                        separatorBuilder: (_, __) => const SizedBox(height: 12),
                         itemBuilder: (context, index) {
-                          if (index >= filtered.length) {
+                          if (index >= visibleOrders.length) {
                             return Center(
                               child: OutlinedButton.icon(
                                 onPressed: _loadMore,
                                 icon: const Icon(Icons.expand_more),
-                                label: const Text('Ver más'),
+                                label: const Text('Ver mÃ¡s'),
                               ),
                             );
                           }
-                          final order = filtered[index];
+                          final order = visibleOrders[index];
                           return _ContabilidadOrderCard(
                             order: order,
-                            onReview: () => context
-                                .push('/orders/contabilidad/${order.id}'),
+                            onReview: () => context.push(
+                              '/orders/contabilidad/${order.id}',
+                            ),
                           );
                         },
                       ),
               ),
             ],
+          );
+          return OrderPdfPreloadGate(
+            orders: visibleOrders,
+            enabled: _searchDebounce == null && _searchQuery.trim().isEmpty,
+            child: content,
           );
         },
         loading: () => const AppSplash(),
@@ -176,13 +181,39 @@ class _ContabilidadOrdersScreenState
       ),
     );
   }
+
+  List<PurchaseOrder> _resolveVisibleOrders(List<PurchaseOrder> orders) {
+    final key = _visibleOrdersKey();
+    final cached = _cachedVisibleOrders;
+    if (cached != null &&
+        identical(_cachedSourceOrders, orders) &&
+        _cachedVisibleKey == key) {
+      return cached;
+    }
+
+    final trimmedQuery = _searchQuery.trim();
+    final resolved = trimmedQuery.isEmpty
+        ? orders
+        : orders
+              .where(
+                (order) => orderMatchesSearch(
+                  order,
+                  trimmedQuery,
+                  cache: _searchCache,
+                ),
+              )
+              .toList(growable: false);
+    _cachedSourceOrders = orders;
+    _cachedVisibleKey = key;
+    _cachedVisibleOrders = resolved;
+    return resolved;
+  }
+
+  String _visibleOrdersKey() => _searchQuery.trim().toLowerCase();
 }
 
 class _ContabilidadOrderCard extends StatelessWidget {
-  const _ContabilidadOrderCard({
-    required this.order,
-    required this.onReview,
-  });
+  const _ContabilidadOrderCard({required this.order, required this.onReview});
 
   final PurchaseOrder order;
   final VoidCallback onReview;
@@ -191,7 +222,8 @@ class _ContabilidadOrderCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final createdLabel = order.createdAt?.toFullDateTime() ?? 'Pendiente';
 
-    final hasFactura = order.facturaPdfUrls.isNotEmpty ||
+    final hasFactura =
+        order.facturaPdfUrls.isNotEmpty ||
         ((order.facturaPdfUrl != null) &&
             order.facturaPdfUrl!.trim().isNotEmpty);
 
@@ -206,42 +238,34 @@ class _ContabilidadOrderCard extends StatelessWidget {
               runSpacing: 4,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
+                OrderFolioPill(folio: order.id),
+                OrderUrgencyPill(urgency: order.urgency),
                 if (hasFactura)
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.green.shade100,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.green.shade400),
-                    ),
-                    child: Text(
-                      'Factura cargada',
-                      style: TextStyle(
-                        color: Colors.green.shade800,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
+                  OrderTagPill(
+                    label: 'Factura cargada',
+                    backgroundColor: Colors.green.shade100,
+                    borderColor: Colors.green.shade400,
+                    textColor: Colors.green.shade800,
                   ),
               ],
             ),
             const SizedBox(height: 8),
             Text('Solicitante: ${order.requesterName}'),
             Text('Área: ${order.areaName}'),
-            Text('Urgencia: ${order.urgency.label}'),
-            Text('Creada: $createdLabel'),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: Text('Creada: $createdLabel')),
+                OrderStatusDurationPill(order: order),
+              ],
+            ),
             const SizedBox(height: 8),
-
-            // ✅ Reemplazo del widget corrupto:
             _OrderCardSummary(order: order),
-            const SizedBox(height: 6),
-            OrderStatusDurationPill(order: order),
-
             const SizedBox(height: 12),
-            FilledButton(
+            FilledButton.icon(
               onPressed: onReview,
-              child: const Text('Revisar factura'),
+              icon: const Icon(Icons.receipt_long_outlined),
+              label: const Text('Agregar factura'),
             ),
           ],
         ),
@@ -280,16 +304,16 @@ class _ContabilidadOrderReviewScreenState
     return Scaffold(
       appBar: AppBar(
         title: const Text('Factura de contabilidad'),
-        actions: [
-          infoAction(
-            context,
-            title: 'Factura de contabilidad',
-            message:
-                'Pega uno o varios links de factura.\n'
-                'Verifica que los links sean validos.\n'
-                'Guardar envia la orden al siguiente paso.',
-          ),
-        ],
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            if (Navigator.of(context).canPop()) {
+              Navigator.of(context).pop();
+            } else {
+              guardedGo(context, '/orders/contabilidad');
+            }
+          },
+        ),
       ),
       body: orderAsync.when(
         data: (order) {
@@ -303,8 +327,9 @@ class _ContabilidadOrderReviewScreenState
               _facturaLinks
                 ..clear()
                 ..addAll(
-                  cachedDraft.facturaLinks
-                      .map((url) => _FacturaLinkDraft(url: url)),
+                  cachedDraft.facturaLinks.map(
+                    (url) => _FacturaLinkDraft(url: url),
+                  ),
                 );
               _linkController.text = cachedDraft.pendingLink;
             } else {
@@ -318,17 +343,19 @@ class _ContabilidadOrderReviewScreenState
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
                   children: [
-                    // ✅ Reemplazo del widget corrupto:
                     _OrderHeaderSummary(order: order),
 
                     const SizedBox(height: 12),
                     OutlinedButton.icon(
-                      onPressed: () => guardedPush(context, '/orders/${order.id}/pdf'),
+                      onPressed: () =>
+                          guardedPdfPush(context, '/orders/${order.id}/pdf'),
                       icon: const Icon(Icons.picture_as_pdf_outlined),
                       label: const Text('Ver PDF'),
                     ),
                     const SizedBox(height: 16),
-                    const Text('Agrega uno o varios links del PDF de la factura.'),
+                    const Text(
+                      'Agrega uno o varios links del PDF de la factura.',
+                    ),
                     const SizedBox(height: 8),
                     Row(
                       children: [
@@ -455,16 +482,16 @@ class _ContabilidadOrderReviewScreenState
         !uri.isAbsolute ||
         (uri.scheme != 'http' && uri.scheme != 'https') ||
         uri.host.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('El link no es válido.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('El link no es vÃ¡lido.')));
       return;
     }
 
     if (_facturaLinks.any((entry) => entry.url == link)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('El link ya fue agregado.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('El link ya fue agregado.')));
       return;
     }
 
@@ -518,7 +545,7 @@ class _ContabilidadOrderReviewScreenState
                   (uri.scheme != 'http' && uri.scheme != 'https') ||
                   uri.host.isEmpty) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('El link no es válido.')),
+                  const SnackBar(content: Text('El link no es vÃ¡lido.')),
                 );
                 return;
               }
@@ -585,10 +612,14 @@ class _ContabilidadOrderReviewScreenState
       guardedGo(context, '/orders/contabilidad');
     } catch (error, stack) {
       if (!mounted) return;
-      final message =
-          reportError(error, stack, context: 'ContabilidadOrderReview.send');
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(message)));
+      final message = reportError(
+        error,
+        stack,
+        context: 'ContabilidadOrderReview.send',
+      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     } finally {
       if (mounted) {
         setState(() => _isSubmitting = false);
@@ -617,9 +648,9 @@ class _ContabilidadOrderReviewScreenState
         !uri.isAbsolute ||
         (uri.scheme != 'http' && uri.scheme != 'https') ||
         uri.host.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('El link no es válido.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('El link no es vÃ¡lido.')));
       return;
     }
 
@@ -645,25 +676,14 @@ String _normalizeLink(String raw) {
   return 'https://$trimmed';
 }
 
-/// Resumen pequeño para tarjetas (reemplaza el widget corrupto).
+/// Resumen pequeÃ±o para tarjetas (reemplaza el widget corrupto).
 class _OrderCardSummary extends StatelessWidget {
   const _OrderCardSummary({required this.order});
   final PurchaseOrder order;
 
   @override
   Widget build(BuildContext context) {
-    final supplier = (order.supplier ?? '').trim();
-    final internalOrder = (order.internalOrder ?? '').trim();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Estado: ${order.status.label}'),
-        if (supplier.isNotEmpty) Text('Proveedor: $supplier'),
-        if (internalOrder.isNotEmpty) Text('OC interna: $internalOrder'),
-        if (order.budget != null) Text('Presupuesto: ${order.budget}'),
-      ],
-    );
+    return OrderSummaryLines(order: order, emptyLabel: '');
   }
 }
 
@@ -704,5 +724,3 @@ class _OrderHeaderSummary extends StatelessWidget {
     );
   }
 }
-
-

@@ -1,22 +1,22 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:url_launcher/url_launcher.dart';
-
-import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/session_drafts.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
-import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
-import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_card_pills.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_pdf_preload_gate.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_search.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_status_duration.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_summary_lines.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
 
@@ -24,10 +24,15 @@ class AlmacenOrdersScreen extends ConsumerStatefulWidget {
   const AlmacenOrdersScreen({super.key});
 
   @override
-  ConsumerState<AlmacenOrdersScreen> createState() => _AlmacenOrdersScreenState();
+  ConsumerState<AlmacenOrdersScreen> createState() =>
+      _AlmacenOrdersScreenState();
 }
 
 class _AlmacenOrdersScreenState extends ConsumerState<AlmacenOrdersScreen> {
+  List<PurchaseOrder>? _cachedSourceOrders;
+  String? _cachedVisibleKey;
+  List<PurchaseOrder>? _cachedVisibleOrders;
+
   late final TextEditingController _searchController;
   final OrderSearchCache _searchCache = OrderSearchCache();
   Timer? _searchDebounce;
@@ -51,12 +56,14 @@ class _AlmacenOrdersScreenState extends ConsumerState<AlmacenOrdersScreen> {
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 250), () {
       if (!mounted) return;
+      _searchDebounce = null;
       setState(() => _searchQuery = value);
     });
   }
 
   void _clearSearch() {
     _searchDebounce?.cancel();
+    _searchDebounce = null;
     _searchController.clear();
     setState(() => _searchQuery = '');
   }
@@ -67,21 +74,21 @@ class _AlmacenOrdersScreenState extends ConsumerState<AlmacenOrdersScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final ordersAsync = ref.watch(almacenOrdersPagedProvider(_limit));
+    final ordersAsync = ref.watch(almacenOrdersProvider);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Almacen'),
-        actions: [
-          infoAction(
-            context,
-            title: 'Almacen',
-            message:
-                'Lista de ordenes listas para recepcion.\n'
-                'Usa el buscador para filtrar.\n'
-                'Abre una orden para registrar recepcion.',
-          ),
-        ],
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            if (Navigator.of(context).canPop()) {
+              Navigator.of(context).pop();
+            } else {
+              guardedGo(context, '/home');
+            }
+          },
+        ),
       ),
       body: ordersAsync.when(
         data: (orders) {
@@ -90,17 +97,11 @@ class _AlmacenOrdersScreenState extends ConsumerState<AlmacenOrdersScreen> {
           }
 
           _searchCache.retainFor(orders);
-          final filtered = orders
-              .where((order) => orderMatchesSearch(order, _searchQuery, cache: _searchCache))
-              .toList();
-          final canLoadMore = orders.length >= _limit;
-          final showLoadMore =
-              canLoadMore && filtered.length >= defaultOrderPageSize;
+          final filtered = _resolveVisibleOrders(orders);
+          final visibleOrders = filtered.take(_limit).toList(growable: false);
+          final showLoadMore = filtered.length > visibleOrders.length;
 
-          final branding = ref.read(currentBrandingProvider);
-          prefetchOrderPdfsForOrders(filtered, branding: branding);
-
-          return Column(
+          final content = Column(
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -122,7 +123,7 @@ class _AlmacenOrdersScreenState extends ConsumerState<AlmacenOrdersScreen> {
               ),
               const SizedBox(height: 12),
               Expanded(
-                child: filtered.isEmpty
+                child: visibleOrders.isEmpty
                     ? Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
@@ -132,35 +133,40 @@ class _AlmacenOrdersScreenState extends ConsumerState<AlmacenOrdersScreen> {
                             OutlinedButton.icon(
                               onPressed: _loadMore,
                               icon: const Icon(Icons.expand_more),
-                              label: const Text('Ver más'),
+                              label: const Text('Ver mÃ¡s'),
                             ),
                           ],
                         ],
                       )
                     : ListView.separated(
                         padding: const EdgeInsets.all(16),
-                        itemCount: filtered.length + (showLoadMore ? 1 : 0),
+                        itemCount: visibleOrders.length + (showLoadMore ? 1 : 0),
                         separatorBuilder: (_, __) => const SizedBox(height: 12),
                         itemBuilder: (context, index) {
-                          if (index >= filtered.length) {
+                          if (index >= visibleOrders.length) {
                             return Center(
                               child: OutlinedButton.icon(
                                 onPressed: _loadMore,
                                 icon: const Icon(Icons.expand_more),
-                                label: const Text('Ver más'),
+                                label: const Text('Ver mÃ¡s'),
                               ),
                             );
                           }
-                          final order = filtered[index];
+                          final order = visibleOrders[index];
                           return _AlmacenOrderCard(
                             order: order,
                             onReview: () =>
-                                guardedPush(context, '/orders/almacen/${order.id}'),
+                                guardedPdfPush(context, '/orders/${order.id}/pdf'),
                           );
                         },
                       ),
               ),
             ],
+          );
+          return OrderPdfPreloadGate(
+            orders: visibleOrders,
+            enabled: _searchDebounce == null && _searchQuery.trim().isEmpty,
+            child: content,
           );
         },
         loading: () => const AppSplash(),
@@ -172,13 +178,39 @@ class _AlmacenOrdersScreenState extends ConsumerState<AlmacenOrdersScreen> {
       ),
     );
   }
+
+  List<PurchaseOrder> _resolveVisibleOrders(List<PurchaseOrder> orders) {
+    final key = _visibleOrdersKey();
+    final cached = _cachedVisibleOrders;
+    if (cached != null &&
+        identical(_cachedSourceOrders, orders) &&
+        _cachedVisibleKey == key) {
+      return cached;
+    }
+
+    final trimmedQuery = _searchQuery.trim();
+    final resolved = trimmedQuery.isEmpty
+        ? orders
+        : orders
+              .where(
+                (order) => orderMatchesSearch(
+                  order,
+                  trimmedQuery,
+                  cache: _searchCache,
+                ),
+              )
+              .toList(growable: false);
+    _cachedSourceOrders = orders;
+    _cachedVisibleKey = key;
+    _cachedVisibleOrders = resolved;
+    return resolved;
+  }
+
+  String _visibleOrdersKey() => _searchQuery.trim().toLowerCase();
 }
 
 class _AlmacenOrderCard extends StatelessWidget {
-  const _AlmacenOrderCard({
-    required this.order,
-    required this.onReview,
-  });
+  const _AlmacenOrderCard({required this.order, required this.onReview});
 
   final PurchaseOrder order;
   final VoidCallback onReview;
@@ -187,7 +219,10 @@ class _AlmacenOrderCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final createdLabel = order.createdAt?.toFullDateTime() ?? 'Pendiente';
     final hasFactura = _facturaLinks(order).isNotEmpty;
-    final hasReceived = order.items.any((item) => item.receivedQuantity != null);
+    final hasReceived = order.items.any(
+      (item) => item.receivedQuantity != null,
+    );
+    final contabilidadDuration = _contabilidadDuration(order);
 
     return Card(
       child: Padding(
@@ -200,58 +235,50 @@ class _AlmacenOrderCard extends StatelessWidget {
               runSpacing: 4,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
+                OrderFolioPill(folio: order.id),
+                OrderUrgencyPill(urgency: order.urgency),
                 if (hasFactura)
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.green.shade100,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.green.shade400),
-                    ),
-                    child: Text(
-                      'Factura lista',
-                      style: TextStyle(
-                        color: Colors.green.shade800,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
+                  OrderTagPill(
+                    label: 'Factura lista',
+                    backgroundColor: Colors.green.shade100,
+                    borderColor: Colors.green.shade400,
+                    textColor: Colors.green.shade800,
                   ),
                 if (hasReceived)
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.blue.shade100,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.blue.shade400),
-                    ),
-                    child: Text(
-                      'Recepcion iniciada',
-                      style: TextStyle(
-                        color: Colors.blue.shade800,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
+                  OrderTagPill(
+                    label: 'Recepcion iniciada',
+                    backgroundColor: Colors.blue.shade100,
+                    borderColor: Colors.blue.shade400,
+                    textColor: Colors.blue.shade800,
                   ),
               ],
             ),
             const SizedBox(height: 8),
-            Text('Folio: ${order.id}'),
             Text('Solicitante: ${order.requesterName}'),
             Text('Area: ${order.areaName}'),
-            Text('Urgencia: ${order.urgency.label}'),
-            Text('Creada: $createdLabel'),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: Text('Creada: $createdLabel')),
+                if (contabilidadDuration == null)
+                  const StatusDurationPill(
+                    text: 'Tiempo en Contabilidad: sin registro',
+                  )
+                else
+                  OrderStatusDurationPill(
+                    order: order,
+                    label: 'Tiempo en Contabilidad',
+                    durationOverride: contabilidadDuration,
+                  ),
+              ],
+            ),
             const SizedBox(height: 8),
             _OrderCardSummary(order: order),
-            const SizedBox(height: 6),
-            OrderStatusDurationPill(order: order),
             const SizedBox(height: 12),
-            FilledButton(
+            FilledButton.icon(
               onPressed: onReview,
-              child: Text(hasReceived ? 'Ver recepcion' : 'Registrar recepcion'),
+              icon: const Icon(Icons.picture_as_pdf_outlined),
+              label: const Text('Ver PDF'),
             ),
           ],
         ),
@@ -267,18 +294,7 @@ class _OrderCardSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final supplier = (order.supplier ?? '').trim();
-    final internalOrder = (order.internalOrder ?? '').trim();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Estado: ${order.status.label}'),
-        if (supplier.isNotEmpty) Text('Proveedor: $supplier'),
-        if (internalOrder.isNotEmpty) Text('OC interna: $internalOrder'),
-        if (order.budget != null) Text('Presupuesto: ${order.budget}'),
-      ],
-    );
+    return OrderSummaryLines(order: order, emptyLabel: '');
   }
 }
 
@@ -294,7 +310,7 @@ class AlmacenOrderReviewScreen extends ConsumerStatefulWidget {
 
 class _AlmacenOrderReviewScreenState
     extends ConsumerState<AlmacenOrderReviewScreen> {
-  final _commentController = TextEditingController();
+  final _generalCommentController = TextEditingController();
   final Map<int, String> _qtyErrors = {};
   final List<_ReceivedItemDraft> _drafts = [];
   String? _seededOrderId;
@@ -303,12 +319,12 @@ class _AlmacenOrderReviewScreenState
   @override
   void initState() {
     super.initState();
-    _commentController.addListener(() => _saveDraft(widget.orderId));
+    _generalCommentController.addListener(() => _saveDraft(widget.orderId));
   }
 
   @override
   void dispose() {
-    _commentController.dispose();
+    _generalCommentController.dispose();
     for (final draft in _drafts) {
       draft.dispose();
     }
@@ -322,15 +338,16 @@ class _AlmacenOrderReviewScreenState
     return Scaffold(
       appBar: AppBar(
         title: const Text('Recepcion en almacen'),
-        actions: [
-          infoAction(
-            context,
-            title: 'Recepcion en almacen',
-            message:
-                'Registra cantidades recibidas y comentarios.\n'
-                'Finalizar avanza la orden al siguiente paso.',
-          ),
-        ],
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            if (Navigator.of(context).canPop()) {
+              Navigator.of(context).pop();
+            } else {
+              guardedGo(context, '/orders/almacen');
+            }
+          },
+        ),
       ),
       body: orderAsync.when(
         data: (order) {
@@ -346,20 +363,12 @@ class _AlmacenOrderReviewScreenState
                 child: ListView(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
                   children: [
-                    _OrderHeaderSummary(order: order),
-                    const SizedBox(height: 12),
-                    OutlinedButton.icon(
-                      onPressed: () => guardedPush(context, '/orders/${order.id}/pdf'),
-                      icon: const Icon(Icons.picture_as_pdf_outlined),
-                      label: const Text('Ver PDF'),
-                    ),
-                    const SizedBox(height: 12),
                     _FacturaLinksSection(order: order),
                     const SizedBox(height: 12),
                     TextField(
-                      controller: _commentController,
+                      controller: _generalCommentController,
                       decoration: const InputDecoration(
-                        labelText: 'Comentario general (opcional)',
+                        labelText: 'Nota de almacen (opcional)',
                       ),
                       minLines: 1,
                       maxLines: 3,
@@ -375,9 +384,7 @@ class _AlmacenOrderReviewScreenState
                         draft: _drafts[i],
                         errorText: _qtyErrors[i],
                         onQuantityChanged: () {
-                          if (_qtyErrors.containsKey(i)) {
-                            setState(() => _qtyErrors.remove(i));
-                          }
+                          setState(() => _qtyErrors.remove(i));
                         },
                       ),
                       if (i != _drafts.length - 1) const SizedBox(height: 12),
@@ -391,14 +398,16 @@ class _AlmacenOrderReviewScreenState
                 child: SizedBox(
                   width: double.infinity,
                   child: FilledButton(
-                    onPressed: _isSubmitting ? null : () => _handleSubmit(order),
+                    onPressed: _isSubmitting
+                        ? null
+                        : () => _handleSubmit(order),
                     child: _isSubmitting
                         ? const SizedBox(
                             width: 20,
                             height: 20,
                             child: AppSplash(compact: true, size: 20),
                           )
-                        : const Text('Finalizar recepcion'),
+                        : const Text('Finalizar y cerrar orden'),
                   ),
                 ),
               ),
@@ -429,20 +438,16 @@ class _AlmacenOrderReviewScreenState
 
     final cachedDraft = SessionDraftStore.almacen(order.id);
     if (cachedDraft != null) {
-      _commentController.text = cachedDraft.comment;
+      _generalCommentController.text = cachedDraft.comment;
       for (final draft in _drafts) {
         final line = draft.item.line;
         final cachedQty = cachedDraft.qtyByLine[line];
         if (cachedQty != null) {
           draft.qtyController.text = cachedQty;
         }
-        final cachedComment = cachedDraft.commentByLine[line];
-        if (cachedComment != null) {
-          draft.commentController.text = cachedComment;
-        }
       }
     } else {
-      _commentController.text = (order.almacenComment ?? '').trim();
+      _generalCommentController.text = (order.almacenComment ?? '').trim();
     }
 
     _qtyErrors.clear();
@@ -453,25 +458,22 @@ class _AlmacenOrderReviewScreenState
   void _attachDraftListeners(String orderId) {
     for (final draft in _drafts) {
       draft.qtyController.addListener(() => _saveDraft(orderId));
-      draft.commentController.addListener(() => _saveDraft(orderId));
     }
   }
 
   void _saveDraft(String orderId) {
     final qtyByLine = <int, String>{};
-    final commentByLine = <int, String>{};
 
     for (final draft in _drafts) {
       qtyByLine[draft.item.line] = draft.qtyController.text;
-      commentByLine[draft.item.line] = draft.commentController.text;
     }
 
     SessionDraftStore.saveAlmacen(
       orderId,
       AlmacenDraft(
-        comment: _commentController.text,
+        comment: _generalCommentController.text,
         qtyByLine: qtyByLine,
-        commentByLine: commentByLine,
+        commentByLine: const {},
       ),
     );
   }
@@ -484,110 +486,187 @@ class _AlmacenOrderReviewScreenState
       final draft = _drafts[i];
       final raw = draft.qtyController.text.trim();
 
-      num? received;
       if (raw.isEmpty) {
-        received = draft.item.quantity;
-      } else {
-        received = num.tryParse(_normalizeNumber(raw));
+        nextErrors[i] = 'Captura la cantidad recibida';
+        continue;
       }
+
+      final received = num.tryParse(_normalizeNumber(raw));
 
       if (received == null || received < 0) {
         nextErrors[i] = 'Cantidad no valida';
         continue;
       }
 
-      final comment = draft.commentController.text.trim();
-
       updatedItems.add(
         draft.item.copyWith(
           receivedQuantity: received,
-          receivedComment: comment.isEmpty ? null : comment,
+          clearReceivedQuantity: false,
+          clearReceivedComment: true,
         ),
       );
     }
 
     if (nextErrors.isNotEmpty) {
-      setState(() => _qtyErrors
-        ..clear()
-        ..addAll(nextErrors));
+      setState(
+        () => _qtyErrors
+          ..clear()
+          ..addAll(nextErrors),
+      );
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Corrige las cantidades en rojo.')),
       );
       return;
     }
 
+    final actor = ref.read(currentUserProfileProvider).value;
+    if (actor == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Perfil no disponible.')));
+      return;
+    }
+
+    final diffs = _warehouseDiffs(updatedItems);
+    final confirmed = diffs.isNotEmpty
+        ? await _confirmDifferenceSubmission(
+            order,
+            diffs,
+            warehouseName: actor.name,
+            warehouseArea: actor.areaDisplay,
+          )
+        : await _confirmWarehouseFinalize(
+            warehouseName: actor.name,
+            warehouseArea: actor.areaDisplay,
+          );
+    if (!confirmed) return;
+
     setState(() => _isSubmitting = true);
 
     try {
-      final actor = ref.read(currentUserProfileProvider).value;
-      if (actor == null) {
-        throw StateError('Perfil no disponible.');
-      }
-
       final repo = ref.read(purchaseOrderRepositoryProvider);
       await repo.finalizeFromAlmacen(
         order: order,
         items: updatedItems,
         actor: actor,
-        comment: _commentController.text.trim(),
+        comment: _generalCommentController.text.trim(),
       );
 
       if (!mounted) return;
 
       SessionDraftStore.clearAlmacen(order.id);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Recepcion guardada.')),
-      );
-      guardedGo(context, '/orders/almacen');
+      guardedPdfGo(context, '/orders/${order.id}/pdf');
     } catch (error, stack) {
       if (!mounted) return;
-      final message =
-          reportError(error, stack, context: 'AlmacenOrderReview.submit');
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(message)));
+      final message = reportError(
+        error,
+        stack,
+        context: 'AlmacenOrderReview.submit',
+      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
     } finally {
       if (mounted) {
         setState(() => _isSubmitting = false);
       }
     }
   }
-}
 
-class _OrderHeaderSummary extends StatelessWidget {
-  const _OrderHeaderSummary({required this.order});
-
-  final PurchaseOrder order;
-
-  @override
-  Widget build(BuildContext context) {
-    final created = order.createdAt?.toFullDateTime() ?? 'Pendiente';
-    final updated = order.updatedAt?.toFullDateTime();
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                Chip(label: Text(order.urgency.label)),
-                Chip(label: Text(order.status.label)),
-              ],
+  Future<bool> _confirmDifferenceSubmission(
+    PurchaseOrder order,
+    List<_WarehouseDiff> diffs, {
+    required String warehouseName,
+    required String warehouseArea,
+  }) async {
+    final displayName = warehouseName.trim().isEmpty
+        ? 'Tu nombre'
+        : warehouseName.trim();
+    final displayArea = warehouseArea.trim().isEmpty
+        ? 'Tu area'
+        : warehouseArea.trim();
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Confirmar descuadre'),
+          content: SizedBox(
+            width: 520,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'La orden ${order.id} tiene descuadre entre lo solicitado en el PDF y lo recibido en almacen. '
+                    'Si confirmas, el PDF final marcara el descuadre y la orden se enviara a ordenes finalizadas.\n\n'
+                    'En el PDF, la casilla RECIBIO mostrara "$displayName" y el area "$displayArea".',
+                  ),
+                  const SizedBox(height: 12),
+                  for (final diff in diffs) ...[
+                    Text(
+                      diff.title,
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Solicitado: ${diff.requestedLabel} | Recibido: ${diff.receivedLabel} | Diferencia: ${diff.deltaLabel}',
+                    ),
+                    if (diff != diffs.last) const SizedBox(height: 12),
+                  ],
+                ],
+              ),
             ),
-            const SizedBox(height: 12),
-            Text('Folio: ${order.id}'),
-            Text('Solicitante: ${order.requesterName}'),
-            Text('Area: ${order.areaName}'),
-            const SizedBox(height: 8),
-            Text('Creada: $created'),
-            if (updated != null) Text('Actualizada: $updated'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Confirmar y finalizar'),
+            ),
           ],
+        );
+      },
+    );
+
+    return result == true;
+  }
+
+  Future<bool> _confirmWarehouseFinalize({
+    required String warehouseName,
+    required String warehouseArea,
+  }) async {
+    final displayName = warehouseName.trim().isEmpty
+        ? 'Tu nombre'
+        : warehouseName.trim();
+    final displayArea = warehouseArea.trim().isEmpty
+        ? 'Tu area'
+        : warehouseArea.trim();
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Finalizar recepcion'),
+        content: Text(
+          'En el PDF, la casilla RECIBIO mostrara "$displayName" y el area "$displayArea".',
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Confirmar y finalizar'),
+          ),
+        ],
       ),
     );
+
+    return result == true;
   }
 }
 
@@ -633,9 +712,9 @@ class _FacturaLinksSection extends StatelessWidget {
   Future<void> _openLink(BuildContext context, String raw) async {
     final uri = Uri.tryParse(raw);
     if (uri == null || !uri.isAbsolute) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('El link no es valido.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('El link no es valido.')));
       return;
     }
 
@@ -662,6 +741,15 @@ class _ReceivedItemCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final item = draft.item;
+    final received = num.tryParse(
+      _normalizeNumber(draft.qtyController.text.trim()),
+    );
+    final diff = received == null ? null : received - item.quantity;
+    final hasDifference = diff != null && diff != 0;
+    final diffLabel = hasDifference
+        ? (diff > 0 ? '+${_formatNum(diff)}' : _formatNum(diff))
+        : null;
+    final expectedLabel = '${_formatNum(item.quantity)} ${item.unit}'.trim();
 
     return Card(
       child: Padding(
@@ -676,26 +764,60 @@ class _ReceivedItemCard extends StatelessWidget {
             const SizedBox(height: 6),
             if (item.partNumber.trim().isNotEmpty)
               Text('No. parte: ${item.partNumber}'),
-            Text('Solicitado: ${item.quantity} ${item.unit}'),
-            const SizedBox(height: 8),
-            TextField(
-              controller: draft.qtyController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: InputDecoration(
-                labelText: 'Recibido',
-                errorText: errorText,
-              ),
-              onChanged: (_) => onQuantityChanged(),
+            const SizedBox(height: 10),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: _QtyInfoBox(
+                    label: 'Cantidad solicitada',
+                    value: expectedLabel,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextField(
+                    controller: draft.qtyController,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    inputFormatters: [_quantityInputFormatter],
+                    decoration: InputDecoration(
+                      labelText: 'Cantidad recibida',
+                      helperText: hasDifference
+                          ? 'Revisa esta cantidad antes de finalizar.'
+                          : null,
+                      errorText: errorText,
+                    ),
+                    onChanged: (_) => onQuantityChanged(),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: draft.commentController,
-              decoration: const InputDecoration(
-                labelText: 'Comentario (opcional)',
+            if (hasDifference) ...[
+              const SizedBox(height: 6),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.orange.shade300),
+                ),
+                child: Text(
+                  'La cantidad capturada no coincide con lo que indica el PDF. '
+                  'Diferencia: $diffLabel ${item.unit}. '
+                  'Si la dejas asi, el sistema te pedira confirmar el descuadre antes de finalizar.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Colors.orange.shade900,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
-              minLines: 1,
-              maxLines: 3,
-            ),
+            ],
           ],
         ),
       ),
@@ -703,32 +825,101 @@ class _ReceivedItemCard extends StatelessWidget {
   }
 }
 
-class _ReceivedItemDraft {
-  _ReceivedItemDraft({
-    required this.item,
-    required this.qtyController,
-    required this.commentController,
+class _QtyInfoBox extends StatelessWidget {
+  const _QtyInfoBox({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.labelMedium),
+          const SizedBox(height: 4),
+          Text(value, style: Theme.of(context).textTheme.titleMedium),
+        ],
+      ),
+    );
+  }
+}
+
+class _WarehouseDiff {
+  const _WarehouseDiff({
+    required this.title,
+    required this.requestedLabel,
+    required this.receivedLabel,
+    required this.deltaLabel,
   });
+
+  final String title;
+  final String requestedLabel;
+  final String receivedLabel;
+  final String deltaLabel;
+}
+
+class _ReceivedItemDraft {
+  _ReceivedItemDraft({required this.item, required this.qtyController});
 
   final PurchaseOrderItem item;
   final TextEditingController qtyController;
-  final TextEditingController commentController;
 
   factory _ReceivedItemDraft.fromItem(PurchaseOrderItem item) {
-    final initialQty = item.receivedQuantity ?? item.quantity;
-    final initialComment = (item.receivedComment ?? '').trim();
+    final initialQty = item.receivedQuantity;
 
     return _ReceivedItemDraft(
       item: item,
-      qtyController: TextEditingController(text: _formatNum(initialQty)),
-      commentController: TextEditingController(text: initialComment),
+      qtyController: TextEditingController(
+        text: initialQty == null ? '' : _formatNum(initialQty),
+      ),
     );
   }
 
   void dispose() {
     qtyController.dispose();
-    commentController.dispose();
   }
+}
+
+List<_WarehouseDiff> _warehouseDiffs(List<PurchaseOrderItem> items) {
+  final diffs = <_WarehouseDiff>[];
+  for (final item in items) {
+    final received = item.receivedQuantity;
+    if (received == null) continue;
+
+    final delta = received - item.quantity;
+    if (delta == 0) continue;
+
+    final unit = item.unit.trim();
+    final description = item.description.trim().isEmpty
+        ? 'Item ${item.line}'
+        : 'Item ${item.line}: ${item.description.trim()}';
+    final deltaText = delta > 0 ? '+${_formatNum(delta)}' : _formatNum(delta);
+    final unitSuffix = unit.isEmpty ? '' : ' $unit';
+
+    diffs.add(
+      _WarehouseDiff(
+        title: description,
+        requestedLabel: '${_formatNum(item.quantity)}$unitSuffix',
+        receivedLabel: '${_formatNum(received)}$unitSuffix',
+        deltaLabel: '$deltaText$unitSuffix',
+      ),
+    );
+  }
+  return diffs;
+}
+
+Duration? _contabilidadDuration(PurchaseOrder order) {
+  final stored = order.statusDurations[PurchaseOrderStatus.contabilidad.name];
+  if (stored == null || stored < 0) return null;
+  return Duration(milliseconds: stored);
 }
 
 List<String> _facturaLinks(PurchaseOrder order) {
@@ -749,6 +940,15 @@ List<String> _facturaLinks(PurchaseOrder order) {
   return links;
 }
 
+final TextInputFormatter _quantityInputFormatter =
+    TextInputFormatter.withFunction((oldValue, newValue) {
+      final text = newValue.text;
+      if (text.isEmpty) return newValue;
+      final normalized = text.replaceAll(',', '.');
+      final valid = RegExp(r'^\d*([.]\d{0,3})?$').hasMatch(normalized);
+      return valid ? newValue : oldValue;
+    });
+
 String _normalizeNumber(String raw) => raw.replaceAll(',', '.');
 
 String _formatNum(num value) {
@@ -757,5 +957,3 @@ String _formatNum(num value) {
   if (value == asInt) return asInt.toString();
   return value.toString();
 }
-
-

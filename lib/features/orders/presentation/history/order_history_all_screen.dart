@@ -4,18 +4,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sistema_compras/core/area_labels.dart';
-import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
-import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
-import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_pdf_preload_gate.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_search.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_summary_lines.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
+
+_HistoryAllViewState _historyAllViewState = const _HistoryAllViewState();
 
 class OrderHistoryAllScreen extends ConsumerStatefulWidget {
   const OrderHistoryAllScreen({super.key});
@@ -26,9 +27,10 @@ class OrderHistoryAllScreen extends ConsumerStatefulWidget {
 }
 
 class _OrderHistoryAllScreenState extends ConsumerState<OrderHistoryAllScreen> {
-  PurchaseOrderStatus? statusFilter;
-  PurchaseOrderUrgency? urgencyFilter;
   DateTimeRange? dateRange;
+  List<PurchaseOrder>? _cachedSourceOrders;
+  String? _cachedVisibleKey;
+  List<PurchaseOrder>? _cachedVisibleOrders;
 
   late final TextEditingController _searchController;
   final OrderSearchCache _searchCache = OrderSearchCache();
@@ -40,10 +42,20 @@ class _OrderHistoryAllScreenState extends ConsumerState<OrderHistoryAllScreen> {
   void initState() {
     super.initState();
     _searchController = TextEditingController();
+    final snapshot = _historyAllViewState;
+    dateRange = snapshot.dateRange;
+    _searchQuery = snapshot.searchQuery;
+    _limit = snapshot.limit;
+    _searchController.text = snapshot.searchQuery;
   }
 
   @override
   void dispose() {
+    _historyAllViewState = _HistoryAllViewState(
+      dateRange: dateRange,
+      searchQuery: _searchQuery,
+      limit: _limit,
+    );
     _searchController.dispose();
     _searchDebounce?.cancel();
     super.dispose();
@@ -53,12 +65,14 @@ class _OrderHistoryAllScreenState extends ConsumerState<OrderHistoryAllScreen> {
     _searchDebounce?.cancel();
     _searchDebounce = Timer(const Duration(milliseconds: 250), () {
       if (!mounted) return;
+      _searchDebounce = null;
       setState(() => _searchQuery = value);
     });
   }
 
   void _clearSearch() {
     _searchDebounce?.cancel();
+    _searchDebounce = null;
     _searchController.clear();
     setState(() => _searchQuery = '');
   }
@@ -82,21 +96,11 @@ class _OrderHistoryAllScreenState extends ConsumerState<OrderHistoryAllScreen> {
     final canViewAll =
         isAdminRole(user.role) || isDireccionGeneralLabel(user.areaDisplay);
 
-    final ordersAsync = ref.watch(allOrdersPagedProvider(_limit));
+    final ordersAsync = ref.watch(allOrdersProvider);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Historial general'),
-        actions: [
-          infoAction(
-            context,
-            title: 'Historial general',
-            message:
-                'Vista global para administradores y Direccion General.\n'
-                'Usa buscador y filtros para acotar resultados.\n'
-                'Abre una orden para ver el detalle.',
-          ),
-        ],
       ),
       body: !canViewAll
           ? const Center(
@@ -109,81 +113,89 @@ class _OrderHistoryAllScreenState extends ConsumerState<OrderHistoryAllScreen> {
                 }
 
                 _searchCache.retainFor(orders);
-                final filtered = orders
-                    .where(_isHistoryVisible)
-                    .where(_filterOrder)
-                    .where((order) =>
-                        orderMatchesSearch(order, _searchQuery, cache: _searchCache))
-                    .toList();
-                final canLoadMore = orders.length >= _limit;
-                final showLoadMore =
-                    canLoadMore && filtered.length >= defaultOrderPageSize;
+                final filtered = _resolveVisibleOrders(orders);
+                final visibleOrders =
+                    filtered.take(_limit).toList(growable: false);
+                final showLoadMore = filtered.length > visibleOrders.length;
 
-                final branding = ref.read(currentBrandingProvider);
-                prefetchOrderPdfsForOrders(filtered, branding: branding);
-
-                return Column(
+                final content = Column(
                   children: [
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                      child: TextField(
-                        controller: _searchController,
-                        decoration: InputDecoration(
-                          labelText:
-                              'Buscar por folio (000001), solicitante, cliente, fecha...',
-                          prefixIcon: const Icon(Icons.search),
-                          suffixIcon: _searchQuery.isEmpty
-                              ? null
-                              : IconButton(
-                                  icon: const Icon(Icons.clear),
-                                  onPressed: _clearSearch,
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final isNarrow = constraints.maxWidth < 720;
+                          final searchField = TextField(
+                            controller: _searchController,
+                            decoration: InputDecoration(
+                              labelText:
+                                  'Buscar por folio (000001), solicitante, cliente, fecha...',
+                              prefixIcon: const Icon(Icons.search),
+                              suffixIcon: _searchQuery.isEmpty
+                                  ? null
+                                  : IconButton(
+                                      icon: const Icon(Icons.clear),
+                                      onPressed: _clearSearch,
+                                    ),
+                            ),
+                            onChanged: _updateSearch,
+                          );
+                          final dateButton = _DateRangeButton(
+                            dateRange: dateRange,
+                            onDateRangeChanged: (range) =>
+                                setState(() => dateRange = range),
+                            onClear: dateRange == null
+                                ? null
+                                : () => setState(() => dateRange = null),
+                          );
+
+                          if (isNarrow) {
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Align(
+                                  alignment: Alignment.centerRight,
+                                  child: dateButton,
                                 ),
-                        ),
-                        onChanged: _updateSearch,
+                                const SizedBox(height: 12),
+                                searchField,
+                              ],
+                            );
+                          }
+
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(child: searchField),
+                              const SizedBox(width: 12),
+                              dateButton,
+                            ],
+                          );
+                        },
                       ),
                     ),
                     const Padding(
                       padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
                       child: Text(
                         'Las limpiezas se ejecutan de forma anual mediante un programa externo. '
-                        'Considera respaldar las órdenes finalizadas si las necesitas.',
+                        'Considera respaldar las ordenes finalizadas si las necesitas.',
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    _FiltersBar(
-                      statusFilter: statusFilter,
-                      urgencyFilter: urgencyFilter,
-                      dateRange: dateRange,
-                      onStatusChanged: (value) =>
-                          setState(() => statusFilter = value),
-                      onUrgencyChanged: (value) =>
-                          setState(() => urgencyFilter = value),
-                      onDateRangeChanged: (range) =>
-                          setState(() => dateRange = range),
-                      onClear: () => setState(() {
-                        statusFilter = null;
-                        urgencyFilter = null;
-                        dateRange = null;
-                      }),
-                    ),
                     Expanded(
-                      child: filtered.isEmpty
+                      child: visibleOrders.isEmpty
                           ? Column(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
                                 _EmptyResults(
-                                  onClear: () => setState(() {
-                                    statusFilter = null;
-                                    urgencyFilter = null;
-                                    dateRange = null;
-                                  }),
+                                  onClear: () =>
+                                      setState(() => dateRange = null),
                                 ),
                                 if (showLoadMore) ...[
                                   const SizedBox(height: 12),
                                   OutlinedButton.icon(
                                     onPressed: _loadMore,
                                     icon: const Icon(Icons.expand_more),
-                                    label: const Text('Ver más'),
+                                    label: const Text('Ver mas'),
                                   ),
                                 ],
                               ],
@@ -191,25 +203,33 @@ class _OrderHistoryAllScreenState extends ConsumerState<OrderHistoryAllScreen> {
                           : ListView.separated(
                               padding: const EdgeInsets.all(16),
                               itemCount:
-                                  filtered.length + (showLoadMore ? 1 : 0),
+                                  visibleOrders.length + (showLoadMore ? 1 : 0),
                               separatorBuilder: (_, __) =>
                                   const SizedBox(height: 12),
                               itemBuilder: (context, index) {
-                                if (index >= filtered.length) {
+                                if (index >= visibleOrders.length) {
                                   return Center(
                                     child: OutlinedButton.icon(
                                       onPressed: _loadMore,
                                       icon: const Icon(Icons.expand_more),
-                                      label: const Text('Ver más'),
+                                      label: const Text('Ver mas'),
                                     ),
                                   );
                                 }
-                                final order = filtered[index];
+                                final order = visibleOrders[index];
                                 return _OrderHistoryCard(order: order);
                               },
                             ),
                     ),
                   ],
+                );
+                return OrderPdfPreloadGate(
+                  orders: visibleOrders,
+                  enabled:
+                      !_hasPendingSearch &&
+                      !_hasActiveFilters &&
+                      _searchQuery.trim().isEmpty,
+                  child: content,
                 );
               },
               loading: () => const AppSplash(),
@@ -222,164 +242,120 @@ class _OrderHistoryAllScreenState extends ConsumerState<OrderHistoryAllScreen> {
     );
   }
 
-  bool _filterOrder(PurchaseOrder order) {
-    final statusOk = statusFilter == null || order.status == statusFilter;
-    final urgencyOk = urgencyFilter == null || order.urgency == urgencyFilter;
+  List<PurchaseOrder> _resolveVisibleOrders(List<PurchaseOrder> orders) {
+    final key = _visibleOrdersKey();
+    final cached = _cachedVisibleOrders;
+    if (cached != null &&
+        identical(_cachedSourceOrders, orders) &&
+        _cachedVisibleKey == key) {
+      return cached;
+    }
 
-    final dateOk = dateRange == null ||
-        (order.createdAt != null &&
-            order.createdAt!
-                .isAfter(dateRange!.start.subtract(const Duration(days: 1))) &&
-            order.createdAt!
-                .isBefore(dateRange!.end.add(const Duration(days: 1))));
-
-    return statusOk && urgencyOk && dateOk;
+    final resolved = orders
+        .where(_isHistoryVisible)
+        .where(_filterOrder)
+        .where(
+          (order) =>
+              orderMatchesSearch(order, _searchQuery, cache: _searchCache),
+        )
+        .toList(growable: false);
+    _cachedSourceOrders = orders;
+    _cachedVisibleKey = key;
+    _cachedVisibleOrders = resolved;
+    return resolved;
   }
 
-  bool _isHistoryVisible(PurchaseOrder order) {
-    switch (order.status) {
-      case PurchaseOrderStatus.cotizaciones:
-      case PurchaseOrderStatus.authorizedGerencia:
-      case PurchaseOrderStatus.paymentDone:
-      case PurchaseOrderStatus.contabilidad:
-      case PurchaseOrderStatus.almacen:
-      case PurchaseOrderStatus.eta:
-        return true;
+  String _visibleOrdersKey() {
+    final buffer = StringBuffer()
+      ..write(dateRange?.start.millisecondsSinceEpoch ?? '')
+      ..write('|')
+      ..write(dateRange?.end.millisecondsSinceEpoch ?? '')
+      ..write('|')
+      ..write(_searchQuery.trim().toLowerCase());
+    return buffer.toString();
+  }
 
-      case PurchaseOrderStatus.draft:
-      case PurchaseOrderStatus.pendingCompras:
-      case PurchaseOrderStatus.orderPlaced:
-        return false;
-    }
+  bool _filterOrder(PurchaseOrder order) {
+    final dateOk =
+        dateRange == null ||
+        (order.createdAt != null &&
+            order.createdAt!.isAfter(
+              dateRange!.start.subtract(const Duration(days: 1)),
+            ) &&
+            order.createdAt!.isBefore(
+              dateRange!.end.add(const Duration(days: 1)),
+            ));
+
+    return dateOk;
+  }
+
+  bool get _hasPendingSearch => _searchDebounce != null;
+
+  bool get _hasActiveFilters => dateRange != null;
+
+  bool _isHistoryVisible(PurchaseOrder order) {
+    return order.status == PurchaseOrderStatus.eta;
   }
 }
 
-class _FiltersBar extends StatelessWidget {
-  const _FiltersBar({
-    required this.statusFilter,
-    required this.urgencyFilter,
+class _HistoryAllViewState {
+  const _HistoryAllViewState({
+    this.dateRange,
+    this.searchQuery = '',
+    this.limit = defaultOrderPageSize,
+  });
+
+  final DateTimeRange? dateRange;
+  final String searchQuery;
+  final int limit;
+}
+
+class _DateRangeButton extends StatelessWidget {
+  const _DateRangeButton({
     required this.dateRange,
-    required this.onStatusChanged,
-    required this.onUrgencyChanged,
     required this.onDateRangeChanged,
     required this.onClear,
   });
 
-  final PurchaseOrderStatus? statusFilter;
-  final PurchaseOrderUrgency? urgencyFilter;
   final DateTimeRange? dateRange;
-
-  final ValueChanged<PurchaseOrderStatus?> onStatusChanged;
-  final ValueChanged<PurchaseOrderUrgency?> onUrgencyChanged;
   final ValueChanged<DateTimeRange?> onDateRangeChanged;
-
-  final VoidCallback onClear;
+  final VoidCallback? onClear;
 
   @override
   Widget build(BuildContext context) {
-    const statusOptions = [
-      PurchaseOrderStatus.cotizaciones,
-      PurchaseOrderStatus.authorizedGerencia,
-      PurchaseOrderStatus.paymentDone,
-      PurchaseOrderStatus.contabilidad,
-      PurchaseOrderStatus.almacen,
-      PurchaseOrderStatus.eta,
-    ];
-
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final isNarrow = constraints.maxWidth < 600;
-          final fieldWidth = isNarrow ? constraints.maxWidth : 220.0;
-          final urgencyWidth = isNarrow ? constraints.maxWidth : 200.0;
-          final dateButtonWidth = isNarrow ? constraints.maxWidth : null;
-
-          return Wrap(
-            spacing: 16,
-            runSpacing: 12,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              SizedBox(
-                width: fieldWidth,
-                child: DropdownButtonFormField<PurchaseOrderStatus?>(
-                  initialValue: statusFilter,
-                  decoration: const InputDecoration(labelText: 'Estado'),
-                  isExpanded: true,
-                  items: [
-                    const DropdownMenuItem(
-                      value: null,
-                      child: Text('Todos'),
-                    ),
-                    ...statusOptions.map(
-                      (status) => DropdownMenuItem(
-                        value: status,
-                        child: Text(
-                          status.label,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ),
-                  ],
-                  onChanged: onStatusChanged,
-                ),
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        ElevatedButton.icon(
+          onPressed: () async {
+            final picked = await showDateRangePicker(
+              context: context,
+              firstDate: DateTime.now().subtract(
+                const Duration(days: 365),
               ),
-              SizedBox(
-                width: urgencyWidth,
-                child: DropdownButtonFormField<PurchaseOrderUrgency?>(
-                  initialValue: urgencyFilter,
-                  decoration: const InputDecoration(labelText: 'Urgencia'),
-                  isExpanded: true,
-                  items: [
-                    const DropdownMenuItem(
-                      value: null,
-                      child: Text('Todas'),
-                    ),
-                    ...PurchaseOrderUrgency.values.map(
-                      (urgency) => DropdownMenuItem(
-                        value: urgency,
-                        child: Text(
-                          urgency.label,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ),
-                  ],
-                  onChanged: onUrgencyChanged,
-                ),
-              ),
-              SizedBox(
-                width: dateButtonWidth,
-                child: ElevatedButton.icon(
-                  onPressed: () async {
-                    final picked = await showDateRangePicker(
-                      context: context,
-                      firstDate:
-                          DateTime.now().subtract(const Duration(days: 365)),
-                      lastDate: DateTime.now().add(const Duration(days: 365)),
-                      currentDate: DateTime.now(),
-                      initialDateRange: dateRange,
-                    );
-                    onDateRangeChanged(picked);
-                  },
-                  icon: const Icon(Icons.calendar_today),
-                  label: Text(
-                    dateRange == null
-                        ? 'Rango de fechas'
-                        : '${dateRange!.start.toShortDate()} - ${dateRange!.end.toShortDate()}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ),
-              TextButton(
-                onPressed: onClear,
-                child: const Text('Limpiar filtros'),
-              ),
-            ],
-          );
-        },
-      ),
+              lastDate: DateTime.now().add(const Duration(days: 365)),
+              currentDate: DateTime.now(),
+              initialDateRange: dateRange,
+            );
+            onDateRangeChanged(picked);
+          },
+          icon: const Icon(Icons.calendar_today),
+          label: Text(
+            dateRange == null
+                ? 'Rango de fechas'
+                : '${dateRange!.start.toShortDate()} - ${dateRange!.end.toShortDate()}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        if (onClear != null)
+          TextButton(
+            onPressed: onClear,
+            child: const Text('Limpiar'),
+          ),
+      ],
     );
   }
 }
@@ -397,7 +373,7 @@ class _EmptyHistory extends StatelessWidget {
           children: [
             const Icon(Icons.inbox, size: 48),
             const SizedBox(height: 12),
-            const Text('Aún no hay órdenes registradas'),
+            const Text('Aun no hay ordenes registradas'),
           ],
         ),
       ),
@@ -420,7 +396,7 @@ class _EmptyResults extends StatelessWidget {
           children: [
             const Icon(Icons.search_off, size: 48),
             const SizedBox(height: 12),
-            const Text('No hay órdenes con esos filtros.'),
+            const Text('No hay ordenes con esos filtros.'),
             const SizedBox(height: 12),
             OutlinedButton(
               onPressed: onClear,
@@ -433,13 +409,13 @@ class _EmptyResults extends StatelessWidget {
   }
 }
 
-class _OrderHistoryCard extends ConsumerWidget {
+class _OrderHistoryCard extends StatelessWidget {
   const _OrderHistoryCard({required this.order});
 
   final PurchaseOrder order;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final resendCount = order.returnCount;
     final resendLabel = resendCount <= 0
         ? null
@@ -467,8 +443,10 @@ class _OrderHistoryCard extends ConsumerWidget {
                   Chip(label: Text(order.urgency.label)),
                   if (resendLabel != null)
                     Container(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.red.shade100,
                         borderRadius: BorderRadius.circular(12),
@@ -486,13 +464,8 @@ class _OrderHistoryCard extends ConsumerWidget {
                 ],
               ),
               const SizedBox(height: 8),
-              Text('Solicitante: ${order.requesterName}'),
-              Text('Área: ${order.areaName}'),
-              const SizedBox(height: 8),
               Text('Estado: ${order.status.label}'),
               const SizedBox(height: 8),
-
-              // ✅ Reemplazo del widget corrupto
               _OrderCardSummary(order: order),
 
               const SizedBox(height: 8),
@@ -519,8 +492,9 @@ class _OrderHistoryCard extends ConsumerWidget {
   }
 
   double _statusProgress(PurchaseOrderStatus status) {
-    final normalized =
-        status == PurchaseOrderStatus.orderPlaced ? PurchaseOrderStatus.eta : status;
+    final normalized = status == PurchaseOrderStatus.orderPlaced
+        ? PurchaseOrderStatus.eta
+        : status;
     final index = defaultStatusFlow.indexOf(normalized);
     if (index == -1) return 0;
     return (index + 1) / defaultStatusFlow.length;
@@ -534,33 +508,12 @@ class _OrderCardSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    final supplier = (order.supplier ?? '').trim();
-    final internalOrder = (order.internalOrder ?? '').trim();
-    final comprasComment = (order.comprasComment ?? '').trim();
-    final clientNote = (order.clientNote ?? '').trim();
-
-    final lines = <String>[
-      if (supplier.isNotEmpty) 'Proveedor: $supplier',
-      if (internalOrder.isNotEmpty) 'OC interna: $internalOrder',
-      if (order.budget != null) 'Presupuesto: ${order.budget}',
-      if (comprasComment.isNotEmpty) 'Compras: $comprasComment',
-      if (clientNote.isNotEmpty) 'Nota: $clientNote',
-    ];
-
-    if (lines.isEmpty) {
-      return Text('Sin detalles adicionales.', style: theme.textTheme.bodySmall);
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (final line in lines) ...[
-          Text(line, style: theme.textTheme.bodySmall),
-          const SizedBox(height: 2),
-        ],
-      ],
+    return OrderSummaryLines(
+      order: order,
+      includeBudget: true,
+      includeComprasComment: true,
+      includeClientNote: true,
+      emptyLabel: 'Sin detalles adicionales.',
     );
   }
 }

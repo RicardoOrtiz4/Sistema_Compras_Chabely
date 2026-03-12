@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sistema_compras/core/app_logger.dart';
+import 'package:sistema_compras/features/orders/data/order_local_snapshot_store.dart';
 import 'firebase_options.dart';
 import 'package:sistema_compras/app/app.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
@@ -23,6 +24,7 @@ Future<void> main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+  await OrderLocalSnapshotStore.ensureInitialized();
   if (_supportsBackgroundMessaging()) {
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
   }

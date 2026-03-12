@@ -6,7 +6,6 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
-import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_pdf_thumbnail.dart';
@@ -21,55 +20,49 @@ class OrderDetailScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final order = ref.watch(orderByIdProvider(orderId));
-    final eventsAsync = ref.watch(orderEventsProvider(orderId));
+    final orderAsync = ref.watch(orderByIdStreamProvider(orderId));
+    final order = orderAsync.valueOrNull;
 
+    if (orderAsync.isLoading && order == null) {
+      return const Scaffold(body: AppSplash());
+    }
+    if (orderAsync.hasError && order == null) {
+      return Scaffold(
+        body: Center(
+          child: Text(
+            'Error: ${reportError(orderAsync.error!, orderAsync.stackTrace, context: 'OrderDetailScreen')}',
+          ),
+        ),
+      );
+    }
     if (order == null) {
       return const Scaffold(body: AppSplash());
     }
+    final detailData = _buildOrderDetailData(order);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Detalle de orden'),
-        actions: [
-          infoAction(
-            context,
-            title: 'Detalle de orden',
-            message:
-                'Consulta el resumen y el timeline de eventos.\n'
-                'Revisa PDFs, cotizaciones, facturas y almacen.\n'
-                'Usa las secciones para abrir documentos.',
-          ),
-        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // ✅ Reemplazo del widget corrupto:
           _OrderSummaryHeader(order: order, compact: false),
-
-          eventsAsync.when(
-            data: (events) => OrderTimeline(order: order, events: events),
-            loading: () => const SizedBox(height: 200, child: AppSplash()),
-            error: (error, stack) => Text(
-              'Error en timeline: ${reportError(error, stack, context: 'OrderDetailScreen')}',
-            ),
-          ),
+          _OrderTimelineSection(order: order, orderId: orderId),
           const SizedBox(height: 16),
           _OrderPdfSection(order: order),
           const SizedBox(height: 16),
-          _CotizacionSection(order: order),
+          _CotizacionSection(links: detailData.cotizacionLinks),
           const SizedBox(height: 16),
-          _FacturaSection(order: order),
+          _FacturaSection(links: detailData.facturaLinks),
           const SizedBox(height: 16),
-          _AlmacenDiffSection(order: order),
+          _AlmacenDiffSection(summary: detailData.diffSummary),
         ],
       ),
     );
   }
 }
 
-/// Encabezado/resumen de la orden (reemplaza al widget cuyo nombre se corrompió).
 class _OrderSummaryHeader extends StatelessWidget {
   const _OrderSummaryHeader({
     required this.order,
@@ -85,7 +78,7 @@ class _OrderSummaryHeader extends StatelessWidget {
 
     final createdLabel = order.createdAt?.toFullDateTime() ?? 'Pendiente';
     final updatedLabel = order.updatedAt?.toFullDateTime();
-    final folio = order.id; // si tienes un folio distinto, cámbialo aquí.
+    final folio = order.id; // Si existe otro folio, ajustalo aqui.
 
     return Card(
       child: Padding(
@@ -100,6 +93,8 @@ class _OrderSummaryHeader extends StatelessWidget {
               children: [
                 Chip(label: Text(order.urgency.label)),
                 Chip(label: Text(order.status.label)),
+                if (order.almacenHasDifferences)
+                  const Chip(label: Text('Descuadre en recepcion')),
               ],
             ),
             const SizedBox(height: 12),
@@ -117,7 +112,7 @@ class _OrderSummaryHeader extends StatelessWidget {
             if ((order.areaName).trim().isNotEmpty) ...[
               const SizedBox(height: 4),
               Text(
-                'Área: ${order.areaName}',
+                'Area: ${order.areaName}',
                 style: theme.textTheme.bodyMedium,
               ),
             ],
@@ -166,13 +161,13 @@ class _OrderPdfSection extends StatelessWidget {
             const SizedBox(height: 12),
             OrderPdfThumbnail(
               order: order,
-              onTap: () => guardedPush(context, pdfRoute),
+              onTap: () => guardedPdfPush(context, pdfRoute),
             ),
             const SizedBox(height: 12),
             Align(
               alignment: Alignment.centerRight,
               child: OutlinedButton.icon(
-                onPressed: () => guardedPush(context, pdfRoute),
+                onPressed: () => guardedPdfPush(context, pdfRoute),
                 icon: const Icon(Icons.picture_as_pdf),
                 label: const Text('Ver PDF'),
               ),
@@ -185,13 +180,12 @@ class _OrderPdfSection extends StatelessWidget {
 }
 
 class _CotizacionSection extends StatelessWidget {
-  const _CotizacionSection({required this.order});
+  const _CotizacionSection({required this.links});
 
-  final PurchaseOrder order;
+  final List<CotizacionLink> links;
 
   @override
   Widget build(BuildContext context) {
-    final links = _cotizacionLinks(order);
     final hasLink = links.isNotEmpty;
 
     return Card(
@@ -200,7 +194,7 @@ class _CotizacionSection extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Cotización', style: Theme.of(context).textTheme.titleMedium),
+            Text('Cotizacion', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
             if (hasLink)
               for (final link in links)
@@ -219,13 +213,13 @@ class _CotizacionSection extends StatelessWidget {
                   ),
                 )
             else
-              const Text('Sin link de cotización.'),
+              const Text('Sin link de cotizacion.'),
             if (hasLink) ...[
               for (final link in links) ...[
                 Align(
                   alignment: Alignment.centerRight,
                   child: OutlinedButton.icon(
-                    onPressed: () => _openLink(context, link.url),
+                    onPressed: () => _openExternalLink(context, link.url),
                     icon: const Icon(Icons.open_in_new),
                     label: const Text('Abrir link'),
                   ),
@@ -238,33 +232,15 @@ class _CotizacionSection extends StatelessWidget {
       ),
     );
   }
-
-  Future<void> _openLink(BuildContext context, String raw) async {
-    final uri = Uri.tryParse(raw);
-    if (uri == null || !uri.isAbsolute) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('El link no es válido.')),
-      );
-      return;
-    }
-    final messenger = ScaffoldMessenger.of(context);
-    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!launched && messenger.mounted) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('No se pudo abrir el link.')),
-      );
-    }
-  }
 }
 
 class _FacturaSection extends StatelessWidget {
-  const _FacturaSection({required this.order});
+  const _FacturaSection({required this.links});
 
-  final PurchaseOrder order;
+  final List<String> links;
 
   @override
   Widget build(BuildContext context) {
-    final links = _facturaLinks(order);
     final hasLink = links.isNotEmpty;
 
     return Card(
@@ -291,7 +267,7 @@ class _FacturaSection extends StatelessWidget {
                 Align(
                   alignment: Alignment.centerRight,
                   child: OutlinedButton.icon(
-                    onPressed: () => _openLink(context, link),
+                    onPressed: () => _openExternalLink(context, link),
                     icon: const Icon(Icons.open_in_new),
                     label: const Text('Abrir link'),
                   ),
@@ -304,22 +280,44 @@ class _FacturaSection extends StatelessWidget {
       ),
     );
   }
+}
 
-  Future<void> _openLink(BuildContext context, String raw) async {
-    final uri = Uri.tryParse(raw);
-    if (uri == null || !uri.isAbsolute) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('El link no es válido.')),
-      );
-      return;
-    }
-    final messenger = ScaffoldMessenger.of(context);
-    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!launched && messenger.mounted) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('No se pudo abrir el link.')),
-      );
-    }
+Future<void> _openExternalLink(BuildContext context, String raw) async {
+  final uri = Uri.tryParse(raw);
+  if (uri == null || !uri.isAbsolute) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('El link no es valido.')),
+    );
+    return;
+  }
+  final messenger = ScaffoldMessenger.of(context);
+  final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+  if (!launched && messenger.mounted) {
+    messenger.showSnackBar(
+      const SnackBar(content: Text('No se pudo abrir el link.')),
+    );
+  }
+}
+
+class _OrderTimelineSection extends ConsumerWidget {
+  const _OrderTimelineSection({
+    required this.order,
+    required this.orderId,
+  });
+
+  final PurchaseOrder order;
+  final String orderId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final eventsAsync = ref.watch(orderEventsProvider(orderId));
+    return eventsAsync.when(
+      data: (events) => OrderTimeline(order: order, events: events),
+      loading: () => const SizedBox(height: 200, child: AppSplash()),
+      error: (error, stack) => Text(
+        'Error en timeline: ${reportError(error, stack, context: 'OrderDetailScreen')}',
+      ),
+    );
   }
 }
 
@@ -366,14 +364,14 @@ List<String> _facturaLinks(PurchaseOrder order) {
 }
 
 class _AlmacenDiffSection extends StatelessWidget {
-  const _AlmacenDiffSection({required this.order});
+  const _AlmacenDiffSection({required this.summary});
 
-  final PurchaseOrder order;
+  final _ItemDiffSummary summary;
 
   @override
   Widget build(BuildContext context) {
-    final diffs = _itemDiffs(order.items);
-    final hasReceived = order.items.any((item) => item.receivedQuantity != null);
+    final diffs = summary.diffs;
+    final hasReceived = summary.hasReceived;
 
     return Card(
       child: Padding(
@@ -382,20 +380,25 @@ class _AlmacenDiffSection extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Recepción en almacén',
+              'Recepcion en almacen',
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 12),
             if (!hasReceived)
-              const Text('Sin recepción registrada.')
+              const Text('Sin recepcion registrada.')
             else if (diffs.isEmpty)
-              const Text('Sin diferencias registradas.')
+              const Text('Recepcion cuadrada. No hay descuadres registrados.')
             else
               Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  for (final diff in diffs) ...[
-                    _DiffRow(diff: diff),
-                    if (diff != diffs.last) const SizedBox(height: 8),
+                  const Text(
+                    'Se detecto descuadre entre lo solicitado y lo recibido.',
+                  ),
+                  const SizedBox(height: 12),
+                  for (var index = 0; index < diffs.length; index++) ...[
+                    _DiffRow(diff: diffs[index]),
+                    if (index + 1 < diffs.length) const SizedBox(height: 8),
                   ],
                 ],
               ),
@@ -404,6 +407,14 @@ class _AlmacenDiffSection extends StatelessWidget {
       ),
     );
   }
+}
+
+_OrderDetailData _buildOrderDetailData(PurchaseOrder order) {
+  return _OrderDetailData(
+    cotizacionLinks: _cotizacionLinks(order),
+    facturaLinks: _facturaLinks(order),
+    diffSummary: _buildItemDiffSummary(order.items),
+  );
 }
 
 class _DiffRow extends StatelessWidget {
@@ -438,12 +449,14 @@ class _DiffRow extends StatelessWidget {
   }
 }
 
-List<_ItemDiff> _itemDiffs(List<PurchaseOrderItem> items) {
+_ItemDiffSummary _buildItemDiffSummary(List<PurchaseOrderItem> items) {
   final diffs = <_ItemDiff>[];
+  var hasReceived = false;
 
   for (final item in items) {
     final received = item.receivedQuantity;
     if (received == null) continue;
+    hasReceived = true;
 
     final delta = received - item.quantity;
     if (delta == 0) continue;
@@ -460,7 +473,10 @@ List<_ItemDiff> _itemDiffs(List<PurchaseOrderItem> items) {
     );
   }
 
-  return diffs;
+  return _ItemDiffSummary(
+    hasReceived: hasReceived,
+    diffs: diffs,
+  );
 }
 
 class _ItemDiff {
@@ -479,4 +495,26 @@ class _ItemDiff {
   final num received;
   final num delta;
   final String comment;
+}
+
+class _ItemDiffSummary {
+  const _ItemDiffSummary({
+    required this.hasReceived,
+    required this.diffs,
+  });
+
+  final bool hasReceived;
+  final List<_ItemDiff> diffs;
+}
+
+class _OrderDetailData {
+  const _OrderDetailData({
+    required this.cotizacionLinks,
+    required this.facturaLinks,
+    required this.diffSummary,
+  });
+
+  final List<CotizacionLink> cotizacionLinks;
+  final List<String> facturaLinks;
+  final _ItemDiffSummary diffSummary;
 }

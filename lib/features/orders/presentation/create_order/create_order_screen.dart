@@ -1,27 +1,21 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:csv/csv.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sistema_compras/core/area_labels.dart';
-import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/core/widgets/searchable_select.dart';
-import 'package:sistema_compras/core/widgets/info_action.dart';
-import 'package:sistema_compras/features/auth/domain/app_user.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/domain/order_folio.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
-import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 import 'package:sistema_compras/features/partners/data/partner_repository.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
 
@@ -63,21 +57,45 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
   bool _draftRequested = false;
   bool _resetRequested = false;
   bool _copyRequested = false;
-  Timer? _pdfWarmTimer;
-  String? _lastPdfWarmSignature;
 
   late final TextEditingController _notesController;
   ScaffoldMessengerState? _messenger;
+  ProviderSubscription<CreateOrderState>? _controllerSubscription;
 
   @override
   void initState() {
     super.initState();
     _notesController = TextEditingController();
+    _controllerSubscription =
+        ref.listenManual<CreateOrderState>(createOrderControllerProvider, (
+      previous,
+      next,
+    ) {
+      if (!mounted) return;
+
+      _syncUrgencyForState(next);
+
+      final route = ModalRoute.of(context);
+      if (route != null && !route.isCurrent) return;
+
+      if (previous?.message != next.message && next.message != null) {
+        _messenger?.showSnackBar(SnackBar(content: Text(next.message!)));
+      }
+
+      if (previous?.error != next.error && next.error != null) {
+        final message = reportError(
+          next.error!,
+          StackTrace.current,
+          context: 'CreateOrderScreen',
+        );
+        _messenger?.showSnackBar(SnackBar(content: Text(message)));
+      }
+    });
   }
 
   @override
   void dispose() {
-    _pdfWarmTimer?.cancel();
+    _controllerSubscription?.close();
     _notesController.dispose();
     super.dispose();
   }
@@ -124,36 +142,7 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
     final controller = ref.watch(createOrderControllerProvider);
     final notifier = ref.read(createOrderControllerProvider.notifier);
 
-    ref.listen(createOrderControllerProvider, (previous, next) {
-      if (!mounted) return;
-
-      final route = ModalRoute.of(context);
-      if (route != null && !route.isCurrent) return;
-
-      if (previous?.message != next.message && next.message != null) {
-        _messenger?.showSnackBar(SnackBar(content: Text(next.message!)));
-      }
-
-      if (previous?.error != next.error && next.error != null) {
-        final message = reportError(next.error!, StackTrace.current,
-  context: 'CreateOrderScreen');
-        _messenger?.showSnackBar(SnackBar(content: Text(message)));
-      }
-
-      final user = ref.read(currentUserProfileProvider).value;
-      if (user != null) {
-        _schedulePdfWarm(next, user);
-      }
-    });
-
     final userAsync = ref.watch(currentUserProfileProvider);
-
-    final clientOptions = ref
-            .watch(userClientsProvider)
-            .value
-            ?.map((entry) => entry.name)
-            .toList() ??
-        const <String>[];
 
     final scheme = Theme.of(context).colorScheme;
 
@@ -173,29 +162,12 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
             : Colors.black;
 
     final isLastAttempt = controller.returnCount == _maxCorrections - 1;
-    final lastAttemptContact =
-        isLastAttempt ? _lastReturnContact(ref, controller.draftId) : null;
-
-    if (maxDeliveryDate != null && controller.urgency != displayUrgency) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        notifier.syncUrgencyFromDate(maxDeliveryDate);
-      });
-    }
+    final requiresScheduleChange = controller.requiresScheduleChange;
+    final hasScheduleChange = controller.hasScheduleChange;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Requisición de compra'),
-        actions: [
-          infoAction(
-            context,
-            title: 'Requisicion de compra',
-            message:
-                'Captura los datos generales de la requisicion.\n'
-                'Agrega articulos y cantidades.\n'
-                'Puedes importar CSV.\n'
-                'Al final envia a revision.',
-          ),
-        ],
       ),
       body: userAsync.when(
         data: (user) {
@@ -224,17 +196,8 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
 
                 if (isLastAttempt) ...[
                   const SizedBox(height: 12),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.secondaryContainer,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      _lastAttemptMessage(lastAttemptContact),
-                      style: TextStyle(color: Theme.of(context).colorScheme.onSecondaryContainer),
-                    ),
+                  _LastAttemptWarning(
+                    draftId: controller.draftId,
                   ),
                 ],
 
@@ -351,23 +314,19 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                 ),
 
                 const SizedBox(height: 12),
-                ...controller.items.asMap().entries.map(
-                      (entry) => _OrderItemCard(
-                        index: entry.key,
-                        draft: entry.value,
-                        clientOptions: clientOptions,
-                        unitOptions: _unitOptions,
-                        onAddClient: _addClientFromSearch,
-                        onChanged: (updated) => ref
-                            .read(createOrderControllerProvider.notifier)
-                            .updateItem(entry.key, updated),
-                        onRemove: controller.items.length == 1
-                            ? null
-                            : () => ref
-                                .read(createOrderControllerProvider.notifier)
-                                .removeItem(entry.key),
-                      ),
-                    ),
+                _OrderItemsSection(
+                  items: controller.items,
+                  unitOptions: _unitOptions,
+                  onAddClient: _addClientFromSearch,
+                  onChanged: (index, updated) => ref
+                      .read(createOrderControllerProvider.notifier)
+                      .updateItem(index, updated),
+                  onRemove: controller.items.length == 1
+                      ? null
+                      : (index) => ref
+                          .read(createOrderControllerProvider.notifier)
+                          .removeItem(index),
+                ),
 
                 const SizedBox(height: 16),
                 TextFormField(
@@ -386,7 +345,7 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                     onPressed:
                         controller.isSubmitting || controller.returnCount >= _maxCorrections
                             ? null
-                            : () {
+                            : () async {
                                 if (!(_formKey.currentState?.validate() ?? false)) {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     const SnackBar(
@@ -395,7 +354,16 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                                   );
                                   return;
                                 }
-                                guardedPush(context, '/orders/preview');
+                                if (requiresScheduleChange && !hasScheduleChange) {
+                                  final confirmed =
+                                      await _confirmRequestedDateRefresh();
+                                  if (confirmed != true) return;
+                                  ref
+                                      .read(createOrderControllerProvider.notifier)
+                                      .refreshRequestedDateForCurrentUrgency();
+                                  if (!mounted) return;
+                                }
+                                guardedPdfPush(context, '/orders/preview');
                               },
                     child: controller.isSubmitting
                         ? const SizedBox(
@@ -455,6 +423,28 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
         const SnackBar(content: Text('No se pudo importar el CSV.')),
       );
     }
+  }
+
+  Future<bool?> _confirmRequestedDateRefresh() {
+    return showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Actualizar fecha maxima solicitada'),
+        content: const Text(
+          'No cambiaste la urgencia. Para continuar, se actualizara la fecha maxima solicitada con base en la urgencia actual.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Continuar'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<String?> _addClientFromSearch(String query) async {
@@ -536,52 +526,17 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
     return result ?? false;
   }
 
-  void _schedulePdfWarm(CreateOrderState state, AppUser user) {
-    if (state.isLoadingDraft) return;
-    if (state.items.isEmpty) return;
-    final signature = buildCreateOrderSignature(
-      urgency: state.urgency,
-      notes: state.notes,
-      items: state.items,
-    );
-    final previewCreatedAt = state.previewCreatedAt?.millisecondsSinceEpoch ?? 0;
-    final cacheSignature = '$signature|$previewCreatedAt|${state.returnCount}';
-    if (_lastPdfWarmSignature == cacheSignature) return;
-    _lastPdfWarmSignature = cacheSignature;
+  void _syncUrgencyForState(CreateOrderState state) {
+    final maxDeliveryDate =
+        state.items.isEmpty ? null : state.items.first.estimatedDate;
+    if (maxDeliveryDate == null) return;
 
-    final baselineSignature = state.baselineSignature;
-    final hasEdits = baselineSignature == null
-        ? true
-        : baselineSignature != signature;
-    if (state.returnCount > 0 && hasEdits) {
-      return;
-    }
-
-    _pdfWarmTimer?.cancel();
-    _pdfWarmTimer = Timer(const Duration(milliseconds: 550), () {
-      if (!mounted) return;
-      final branding = ref.read(currentBrandingProvider);
-      final requestedDate = _earliestDate(state.items);
-      final modificationDate = state.returnCount > 0
-          ? (hasEdits ? DateTime.now() : state.baselineUpdatedAt)
-          : null;
-      final pdfData = OrderPdfData(
-        branding: branding,
-        folio: normalizeFolio(state.draftId) ?? '',
-        requesterName: user.name,
-        requesterArea: user.areaDisplay,
-        areaName: user.areaDisplay,
-        urgency: state.urgency,
-        items: state.items,
-        createdAt: state.previewCreatedAt ?? DateTime.now(),
-        updatedAt: modificationDate,
-        observations: state.notes,
-        requestedDeliveryDate: requestedDate,
-        resubmissionDates: state.resubmissionDates,
-      );
-      unawaited(buildOrderPdf(pdfData, useIsolate: !kIsWeb));
-    });
+    final notifier = ref.read(createOrderControllerProvider.notifier);
+    final expectedUrgency = notifier.urgencyFromDate(maxDeliveryDate);
+    if (expectedUrgency == state.urgency) return;
+    notifier.syncUrgencyFromDate(maxDeliveryDate);
   }
+
 }
 
 class _OrderHeader extends StatelessWidget {
@@ -613,6 +568,66 @@ class _OrderHeader extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _LastAttemptWarning extends ConsumerWidget {
+  const _LastAttemptWarning({required this.draftId});
+
+  final String? draftId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final contact = _lastReturnContact(ref, draftId);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        _lastAttemptMessage(contact),
+        style: TextStyle(
+          color: Theme.of(context).colorScheme.onSecondaryContainer,
+        ),
+      ),
+    );
+  }
+}
+
+class _OrderItemsSection extends ConsumerWidget {
+  const _OrderItemsSection({
+    required this.items,
+    required this.unitOptions,
+    required this.onAddClient,
+    required this.onChanged,
+    required this.onRemove,
+  });
+
+  final List<OrderItemDraft> items;
+  final List<String> unitOptions;
+  final Future<String?> Function(String query)? onAddClient;
+  final void Function(int index, OrderItemDraft updated) onChanged;
+  final void Function(int index)? onRemove;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final clientOptions = ref.watch(userClientNamesProvider);
+    return Column(
+      children: [
+        for (final entry in items.asMap().entries)
+          _OrderItemCard(
+            index: entry.key,
+            draft: entry.value,
+            clientOptions: clientOptions,
+            unitOptions: unitOptions,
+            onAddClient: onAddClient,
+            onChanged: (updated) => onChanged(entry.key, updated),
+            onRemove: onRemove == null ? null : () => onRemove!(entry.key),
+          ),
+      ],
     );
   }
 }

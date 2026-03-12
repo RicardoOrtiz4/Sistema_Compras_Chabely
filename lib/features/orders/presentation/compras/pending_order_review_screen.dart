@@ -3,13 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-
 import 'package:sistema_compras/core/company_branding.dart';
+
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/optimistic_action.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
-import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
@@ -43,30 +42,10 @@ class _PendingOrderReviewScreenState
     final actions = orderAsync.maybeWhen(
       data: (order) {
         if (order == null) return const <Widget>[];
-        final eventsAsync = ref.watch(orderEventsProvider(order.id));
-        final hasReturns = order.returnCount > 0;
         return [
-          eventsAsync.when(
-            data: (events) {
-              final canShow =
-                  hasReturns && events.any((event) => event.type == 'return');
-              return IconButton(
-                icon: const Icon(Icons.history),
-                tooltip: 'Historial de cambios',
-                onPressed:
-                    canShow ? () => _showHistory(context, order, events) : null,
-              );
-            },
-            loading: () => IconButton(
-              icon: const Icon(Icons.history),
-              tooltip: 'Historial de cambios',
-              onPressed: null,
-            ),
-            error: (_, __) => IconButton(
-              icon: const Icon(Icons.history),
-              tooltip: 'Historial de cambios',
-              onPressed: null,
-            ),
+          _PendingReviewHistoryActionButton(
+            order: order,
+            onShowHistory: (events) => _showHistory(context, order, events),
           ),
         ];
       },
@@ -78,14 +57,6 @@ class _PendingOrderReviewScreenState
         title: const Text('Revisar PDF'),
         actions: [
           ...actions,
-          infoAction(
-            context,
-            title: 'Revisar PDF',
-            message:
-                'Revisa el PDF de la orden.\n'
-                'Autorizar abre la confirmacion.\n'
-                'Rechazar solicita motivos por articulo.',
-          ),
         ],
       ),
       body: orderAsync.when(
@@ -95,15 +66,13 @@ class _PendingOrderReviewScreenState
           }
 
           final maxCorrectionsReached = order.returnCount >= _maxCorrections;
-          final branding = ref.watch(currentBrandingProvider);
-          final pdfData = buildPdfDataFromOrder(order, branding: branding);
 
           return Column(
             children: [
               Expanded(
-                child: OrderPdfInlineView(
+                child: _PendingReviewPdfBody(
                   key: ValueKey('review-pdf-$_pdfRefreshToken'),
-                  data: pdfData,
+                  order: order,
                   preferOrderCache: true,
                 ),
               ),
@@ -192,6 +161,7 @@ class _PendingOrderReviewScreenState
       title: 'Rechazar orden ${order.id}',
       confirmLabel: 'Rechazar',
     );
+    if (!mounted) return;
     if (review == null) return;
 
     setState(() => _isBusy = true);
@@ -256,6 +226,7 @@ class _PendingOrderReviewScreenState
     PurchaseOrder order,
     List<PurchaseOrderEvent> events,
   ) {
+    final branding = ref.read(currentBrandingProvider);
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -264,6 +235,7 @@ class _PendingOrderReviewScreenState
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: OrderRejectionHistory(
+              branding: branding,
               order: order,
               events: events,
               showOnlyOriginal: true,
@@ -271,6 +243,70 @@ class _PendingOrderReviewScreenState
           ),
         );
       },
+    );
+  }
+}
+
+class _PendingReviewPdfBody extends ConsumerWidget {
+  const _PendingReviewPdfBody({
+    required this.order,
+    required this.preferOrderCache,
+    super.key,
+  });
+
+  final PurchaseOrder order;
+  final bool preferOrderCache;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final branding = ref.watch(currentBrandingProvider);
+    final pdfData = buildPdfDataFromOrder(order, branding: branding);
+    return OrderPdfInlineView(
+      data: pdfData,
+      preferOrderCache: preferOrderCache,
+    );
+  }
+}
+
+class _PendingReviewHistoryActionButton extends ConsumerWidget {
+  const _PendingReviewHistoryActionButton({
+    required this.order,
+    required this.onShowHistory,
+  });
+
+  final PurchaseOrder order;
+  final ValueChanged<List<PurchaseOrderEvent>> onShowHistory;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (order.returnCount <= 0) {
+      return IconButton(
+        icon: const Icon(Icons.history),
+        tooltip: 'Historial de cambios',
+        onPressed: null,
+      );
+    }
+
+    final eventsAsync = ref.watch(orderEventsProvider(order.id));
+    return eventsAsync.when(
+      data: (events) {
+        final canShow = events.any((event) => event.type == 'return');
+        return IconButton(
+          icon: const Icon(Icons.history),
+          tooltip: 'Historial de cambios',
+          onPressed: canShow ? () => onShowHistory(events) : null,
+        );
+      },
+      loading: () => IconButton(
+        icon: const Icon(Icons.history),
+        tooltip: 'Historial de cambios',
+        onPressed: null,
+      ),
+      error: (_, __) => IconButton(
+        icon: const Icon(Icons.history),
+        tooltip: 'Historial de cambios',
+        onPressed: null,
+      ),
     );
   }
 }
@@ -300,16 +336,6 @@ class _PendingOrderApprovalScreenState
     return Scaffold(
       appBar: AppBar(
         title: const Text('Autorizar orden'),
-        actions: [
-          infoAction(
-            context,
-            title: 'Autorizar orden',
-            message:
-                'Confirma el envio a Cotizaciones.\n'
-                'El PDF mostrara quien recibio.\n'
-                'Cancelar no cambia la orden.',
-          ),
-        ],
       ),
       body: orderAsync.when(
         data: (order) {
@@ -317,30 +343,14 @@ class _PendingOrderApprovalScreenState
             return const AppSplash();
           }
 
-          final branding = ref.watch(currentBrandingProvider);
-          final actor = ref.watch(currentUserProfileProvider).value;
-          final reviewerName = (order.comprasReviewerName ?? '').trim().isEmpty
-              ? actor?.name
-              : order.comprasReviewerName;
-          final reviewerArea = (order.comprasReviewerArea ?? '').trim().isEmpty
-              ? actor?.areaDisplay
-              : order.comprasReviewerArea;
-          final computedPdfData = buildPdfDataFromOrder(
-            order,
-            branding: branding,
-            comprasReviewerName: reviewerName,
-            comprasReviewerArea: reviewerArea,
-          );
-          final pdfData = _isSubmitting && _frozenPdfData != null
-              ? _frozenPdfData!
-              : computedPdfData;
-
           return Column(
             children: [
               Expanded(
-                child: OrderPdfInlineView(
+                child: _PendingApprovalPdfBody(
                   key: ValueKey('approve-pdf-$_pdfRefreshToken'),
-                  data: pdfData,
+                  order: order,
+                  isSubmitting: _isSubmitting,
+                  frozenPdfData: _frozenPdfData,
                 ),
               ),
               Padding(
@@ -393,6 +403,7 @@ class _PendingOrderApprovalScreenState
 
     final confirmed =
         await _confirmSendToCotizaciones(actor.name, actor.areaDisplay);
+    if (!mounted) return;
     if (!confirmed) {
       if (mounted) {
         setState(() {
@@ -454,14 +465,14 @@ class _PendingOrderApprovalScreenState
 
   Future<bool> _confirmSendToCotizaciones(String name, String area) async {
     final trimmedName = name.trim().isEmpty ? 'Tu nombre' : name.trim();
-    final trimmedArea = area.trim().isEmpty ? 'Tu área' : area.trim();
+    final trimmedArea = area.trim().isEmpty ? 'Tu area' : area.trim();
 
     final result = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Enviar a Cotizaciones'),
         content: Text(
-          'En el PDF, la casilla RECIBIÓ mostrará "$trimmedName" y el área "$trimmedArea".',
+          'En el PDF, la casilla AUTORIZO mostrara "$trimmedName" y el area "$trimmedArea".',
         ),
         actions: [
           TextButton(
@@ -480,3 +491,36 @@ class _PendingOrderApprovalScreenState
   }
 }
 
+class _PendingApprovalPdfBody extends ConsumerWidget {
+  const _PendingApprovalPdfBody({
+    required this.order,
+    required this.isSubmitting,
+    required this.frozenPdfData,
+    super.key,
+  });
+
+  final PurchaseOrder order;
+  final bool isSubmitting;
+  final OrderPdfData? frozenPdfData;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final branding = ref.watch(currentBrandingProvider);
+    final actor = ref.watch(currentUserProfileProvider).value;
+    final reviewerName = (order.comprasReviewerName ?? '').trim().isEmpty
+        ? actor?.name
+        : order.comprasReviewerName;
+    final reviewerArea = (order.comprasReviewerArea ?? '').trim().isEmpty
+        ? actor?.areaDisplay
+        : order.comprasReviewerArea;
+    final computedPdfData = buildPdfDataFromOrder(
+      order,
+      branding: branding,
+      comprasReviewerName: reviewerName,
+      comprasReviewerArea: reviewerArea,
+    );
+    final pdfData =
+        isSubmitting && frozenPdfData != null ? frozenPdfData! : computedPdfData;
+    return OrderPdfInlineView(data: pdfData);
+  }
+}

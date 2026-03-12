@@ -3,13 +3,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 
 import 'package:sistema_compras/core/area_labels.dart';
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
-import 'package:sistema_compras/core/widgets/info_action.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
@@ -30,27 +30,20 @@ class OrderPdfPreviewScreen extends ConsumerStatefulWidget {
 
 class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
   ScaffoldMessengerState? _messenger;
-  GoRouter? _router;
+  ProviderSubscription<CreateOrderState>? _controllerSubscription;
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _messenger = ScaffoldMessenger.maybeOf(context);
-    _router = GoRouter.of(context);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final controller = ref.watch(createOrderControllerProvider);
-
-    ref.listen(createOrderControllerProvider, (previous, next) {
+  void initState() {
+    super.initState();
+    _controllerSubscription =
+        ref.listenManual<CreateOrderState>(createOrderControllerProvider, (
+      previous,
+      next,
+    ) {
       if (!mounted) return;
 
       if (previous?.message != next.message && next.message != null) {
         _messenger?.showSnackBar(SnackBar(content: Text(next.message!)));
-        if (next.message == 'Orden enviada a Compras') {
-          _router?.go('/home');
-        }
       }
 
       if (previous?.error != next.error && next.error != null) {
@@ -62,22 +55,29 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
         _messenger?.showSnackBar(SnackBar(content: Text(message)));
       }
     });
+  }
+
+  @override
+  void dispose() {
+    _controllerSubscription?.close();
+    super.dispose();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _messenger = ScaffoldMessenger.maybeOf(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = ref.watch(createOrderControllerProvider);
 
     final userAsync = ref.watch(currentUserProfileProvider);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Revisar PDF'),
-        actions: [
-          infoAction(
-            context,
-            title: 'Revisar PDF',
-            message:
-                'Revisa el PDF antes de enviar la requisicion.\n'
-                'Si es reenvio, se mostraran los cambios.\n'
-                'Enviar manda la requisicion a Compras.',
-          ),
-        ],
       ),
       body: userAsync.when(
         data: (user) {
@@ -91,7 +91,6 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
             controller.urgency,
             controller.previewCreatedAt ?? DateTime.now(),
           );
-          final branding = ref.watch(currentBrandingProvider);
 
           final baselineSignature = controller.baselineSignature;
           final currentSignature = buildCreateOrderSignature(
@@ -102,25 +101,16 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
           final hasEdits = baselineSignature == null
               ? true
               : baselineSignature != currentSignature;
+          final hasScheduleChange = controller.hasScheduleChange;
 
-          final modificationDate = controller.returnCount > 0
-              ? (hasEdits ? DateTime.now() : controller.baselineUpdatedAt)
-              : null;
-
-          final pdfData = OrderPdfData(
-            branding: branding,
-            folio: folio ?? '',
-            requesterName: user.name,
-            requesterArea: user.areaDisplay,
-            areaName: user.areaDisplay,
-            urgency: controller.urgency,
-            items: controller.items,
-            createdAt: controller.previewCreatedAt ?? DateTime.now(),
-            updatedAt: modificationDate,
-            observations: controller.notes,
-            requestedDeliveryDate: requestedDate,
-            resubmissionDates: controller.resubmissionDates,
-          );
+          final modificationDate =
+              controller.returnCount > 0 && hasEdits
+                  ? controller.previewUpdatedAt
+                  : null;
+          final requiresPreviewAcceptance =
+              controller.returnCount > 0 && hasEdits && hasScheduleChange;
+          final hasAcceptedPreview =
+              !requiresPreviewAcceptance || controller.previewAccepted;
 
           final submitLabel =
               folio == null ? 'Enviar a revisión' : 'Reenviar a revisión';
@@ -129,9 +119,6 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
               controller.returnCount >= _maxCorrections;
 
           final isLastAttempt = controller.returnCount == _maxCorrections - 1;
-          final lastAttemptContact = isLastAttempt
-              ? _lastReturnContact(ref, controller.draftId)
-              : null;
 
           return Column(
             children: [
@@ -143,13 +130,7 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
               if (isLastAttempt && !maxCorrectionsReached)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                  child: Text(
-                    _lastAttemptMessage(lastAttemptContact),
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodySmall
-                        ?.copyWith(color: Theme.of(context).colorScheme.error),
-                  ),
+                  child: _LastAttemptWarning(draftId: controller.draftId),
                 ),
               if (maxCorrectionsReached)
                 Padding(
@@ -159,17 +140,60 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
-              Expanded(child: OrderPdfInlineView(data: pdfData)),
+              Expanded(
+                child: _PersistentDraftPdfBody(
+                  controller: controller,
+                  userName: user.name,
+                  userArea: user.areaDisplay,
+                  folio: folio,
+                  requestedDate: requestedDate,
+                  modificationDate: modificationDate,
+                ),
+              ),
+              if (requiresPreviewAcceptance)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        hasAcceptedPreview
+                            ? 'PDF aceptado. El reenvio pendiente ya se refleja en el documento. La hora se registrara cuando reenvies la orden.'
+                            : 'El reenvio pendiente ya se refleja en el PDF. Acepta este PDF para continuar; la hora quedara registrada hasta que reenvies la orden.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: hasAcceptedPreview
+                              ? null
+                              : () => ref
+                                  .read(createOrderControllerProvider.notifier)
+                                  .acceptPreview(),
+                          icon: const Icon(Icons.verified_outlined),
+                          label: Text(
+                            hasAcceptedPreview
+                                ? 'PDF aceptado'
+                                : 'Aceptar PDF',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               Padding(
                 padding: const EdgeInsets.all(16),
                 child: SizedBox(
                   width: double.infinity,
-                  child: FilledButton(
-                    onPressed: controller.isSubmitting || maxCorrectionsReached
+                    child: FilledButton(
+                    onPressed: controller.isSubmitting ||
+                            maxCorrectionsReached ||
+                            !hasScheduleChange ||
+                            !hasAcceptedPreview
                         ? null
                         : () async {
                             if (controller.returnCount > 0) {
-                              prefetchOrderPdfs([pdfData], limit: 1);
                               final confirmed = await _confirmResubmission(
                                 context,
                                 hasEdits: hasEdits,
@@ -181,6 +205,17 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
                                 .submit();
                             if (orderId != null) {
                               unawaited(_warmPendingCache(orderId));
+                              if (!mounted) return;
+                              if (controller.returnCount > 0) {
+                                _returnToRejectedOrders(context);
+                              } else {
+                                final navigator = Navigator.of(context);
+                                if (navigator.canPop()) {
+                                  navigator.pop();
+                                } else {
+                                  context.go('/orders/create');
+                                }
+                              }
                             }
                           },
                     child: controller.isSubmitting
@@ -232,6 +267,21 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
   }
 }
 
+void _returnToRejectedOrders(BuildContext context) {
+  final navigator = Navigator.of(context);
+  var foundRejectedRoute = false;
+  navigator.popUntil((route) {
+    if (route.settings.name == 'rejectedOrders') {
+      foundRejectedRoute = true;
+      return true;
+    }
+    return false;
+  });
+  if (!foundRejectedRoute) {
+    context.go('/orders/rejected');
+  }
+}
+
 String? _folioFromDraft(String? draftId) {
   return normalizeFolio(draftId);
 }
@@ -242,6 +292,185 @@ String _lastAttemptMessage(String? contactArea) {
       : 'Compras';
   return 'Advertencia: este es el último intento para enviar la requisición. '
       'Antes de enviarla, contacta a $area.';
+}
+
+class _LastAttemptWarning extends ConsumerWidget {
+  const _LastAttemptWarning({required this.draftId});
+
+  final String? draftId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final contact = _lastReturnContact(ref, draftId);
+    return Text(
+      _lastAttemptMessage(contact),
+      style: Theme.of(context)
+          .textTheme
+          .bodySmall
+          ?.copyWith(color: Theme.of(context).colorScheme.error),
+    );
+  }
+}
+
+class _DraftPdfBody extends ConsumerWidget {
+  const _DraftPdfBody({
+    required this.controller,
+    required this.userName,
+    required this.userArea,
+    required this.folio,
+    required this.requestedDate,
+    required this.modificationDate,
+  });
+
+  final CreateOrderState controller;
+  final String userName;
+  final String userArea;
+  final String? folio;
+  final DateTime? requestedDate;
+  final DateTime? modificationDate;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final branding = ref.watch(currentBrandingProvider);
+    final isNewOrderPreview = folio == null && controller.returnCount <= 0;
+    final pdfData = OrderPdfData(
+      branding: branding,
+      folio: folio ?? '',
+      requesterName: userName,
+      requesterArea: userArea,
+      areaName: userArea,
+      urgency: controller.urgency,
+      items: controller.items,
+      createdAt: controller.previewCreatedAt ?? DateTime.now(),
+      updatedAt: modificationDate,
+      observations: controller.notes,
+      requestedDeliveryDate: requestedDate,
+      pendingResubmissionLabel: _pendingResubmissionLabel(
+        controller,
+        modificationDate: modificationDate,
+      ),
+      suppressCreatedTime: isNewOrderPreview,
+      resubmissionDates: controller.resubmissionDates,
+    );
+    return OrderPdfInlineView(data: pdfData);
+  }
+}
+
+class _PersistentDraftPdfBody extends ConsumerStatefulWidget {
+  const _PersistentDraftPdfBody({
+    required this.controller,
+    required this.userName,
+    required this.userArea,
+    required this.folio,
+    required this.requestedDate,
+    required this.modificationDate,
+  });
+
+  final CreateOrderState controller;
+  final String userName;
+  final String userArea;
+  final String? folio;
+  final DateTime? requestedDate;
+  final DateTime? modificationDate;
+
+  @override
+  ConsumerState<_PersistentDraftPdfBody> createState() =>
+      _PersistentDraftPdfBodyState();
+}
+
+class _PersistentDraftPdfBodyState
+    extends ConsumerState<_PersistentDraftPdfBody> {
+  String? _signature;
+  Widget? _cachedChild;
+
+  @override
+  Widget build(BuildContext context) {
+    final nextSignature = _pdfSignature(widget);
+    if (_cachedChild == null || _signature != nextSignature) {
+      _signature = nextSignature;
+      _cachedChild = _DraftPdfBody(
+        controller: widget.controller,
+        userName: widget.userName,
+        userArea: widget.userArea,
+        folio: widget.folio,
+        requestedDate: widget.requestedDate,
+        modificationDate: widget.modificationDate,
+      );
+    }
+    return _cachedChild!;
+  }
+}
+
+String _pdfSignature(_PersistentDraftPdfBody body) {
+  final buffer = StringBuffer()
+    ..write(body.folio ?? '')
+    ..write('|')
+    ..write(body.userName)
+    ..write('|')
+    ..write(body.userArea)
+    ..write('|')
+    ..write(body.controller.urgency.name)
+    ..write('|')
+    ..write(body.controller.notes)
+    ..write('|')
+    ..write(body.controller.returnCount)
+    ..write('|')
+    ..write(
+      _pendingResubmissionLabel(
+            body.controller,
+            modificationDate: body.modificationDate,
+          ) ??
+          '',
+    )
+    ..write('|')
+    ..write(body.controller.previewCreatedAt?.millisecondsSinceEpoch ?? 0)
+    ..write('|')
+    ..write(body.modificationDate?.millisecondsSinceEpoch ?? 0)
+    ..write('|')
+    ..write(body.requestedDate?.millisecondsSinceEpoch ?? 0);
+  for (final date in body.controller.resubmissionDates) {
+    buffer
+      ..write('|')
+      ..write(date.millisecondsSinceEpoch);
+  }
+  for (final item in body.controller.items) {
+    buffer
+      ..write('|')
+      ..write(item.line)
+      ..write(':')
+      ..write(item.pieces)
+      ..write(':')
+      ..write(item.partNumber)
+      ..write(':')
+      ..write(item.description)
+      ..write(':')
+      ..write(item.quantity)
+      ..write(':')
+      ..write(item.unit)
+      ..write(':')
+      ..write(item.customer ?? '')
+      ..write(':')
+      ..write(item.supplier ?? '')
+      ..write(':')
+      ..write(item.budget?.toString() ?? '')
+      ..write(':')
+      ..write(item.estimatedDate?.millisecondsSinceEpoch ?? 0)
+      ..write(':')
+      ..write(item.reviewFlagged ? 1 : 0)
+      ..write(':')
+      ..write(item.reviewComment ?? '');
+  }
+  return buffer.toString();
+}
+
+String? _pendingResubmissionLabel(
+  CreateOrderState controller, {
+  required DateTime? modificationDate,
+}) {
+  final returnCount = controller.returnCount;
+  if (returnCount <= 0 || modificationDate == null) return null;
+  final dateText = DateFormat('dd/MM/yyyy').format(modificationDate);
+  return 'REENVIO $returnCount: $dateText';
 }
 
 String _lastReturnContact(WidgetRef ref, String? draftId) {
