@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:intl/intl.dart';
 
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
@@ -226,7 +225,6 @@ class _PendingOrderCard extends StatelessWidget {
         (order.lastReturnReason != null &&
             order.lastReturnReason!.trim().isNotEmpty);
 
-    final resubmissions = order.resubmissionDates;
 
     return Card(
       child: Padding(
@@ -286,11 +284,6 @@ class _PendingOrderCard extends StatelessWidget {
             const SizedBox(height: 8),
             Text('Solicitante: ${order.requesterName}'),
             Text('Área: ${order.areaName}'),
-            if (resubmissions.isNotEmpty)
-              Text(
-                'Reenvío: ${_formatResubmissionStamp(resubmissions.last, order.createdAt)}',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -525,18 +518,5 @@ String _formatDuration(Duration duration) {
   return '$minutes min';
 }
 
-final DateFormat _resubmissionTimeFormat = DateFormat('HH:mm');
-final DateFormat _resubmissionDateTimeFormat = DateFormat(
-  'dd MMM yyyy â€¢ HH:mm',
-);
 
-String _formatResubmissionStamp(DateTime stamp, DateTime? createdAt) {
-  if (createdAt != null && _isSameDate(createdAt, stamp)) {
-    return _resubmissionTimeFormat.format(stamp);
-  }
-  return _resubmissionDateTimeFormat.format(stamp);
-}
 
-bool _isSameDate(DateTime a, DateTime b) {
-  return a.year == b.year && a.month == b.month && a.day == b.day;
-}

@@ -523,21 +523,14 @@ Duration? _timeInPendingCompras(List<PurchaseOrderEvent> events) {
   return duration;
 }
 
-final DateFormat _resubmissionTimeFormat = DateFormat('HH:mm');
 final DateFormat _resubmissionDateTimeFormat = DateFormat(
-  'dd MMM yyyy â€¢ HH:mm',
+  'dd MMM yyyy - HH:mm',
 );
 
 String _formatResubmissionStamp(DateTime stamp, DateTime? createdAt) {
-  if (createdAt != null && _isSameDate(createdAt, stamp)) {
-    return _resubmissionTimeFormat.format(stamp);
-  }
   return _resubmissionDateTimeFormat.format(stamp);
 }
 
-bool _isSameDate(DateTime a, DateTime b) {
-  return a.year == b.year && a.month == b.month && a.day == b.day;
-}
 
 class _CotizacionOrderPreviewScreen extends ConsumerStatefulWidget {
   const _CotizacionOrderPreviewScreen({required this.orderId});

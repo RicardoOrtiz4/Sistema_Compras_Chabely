@@ -52,6 +52,7 @@ class _CotizacionesDashboardScreenState
   final Set<String> _dismissedDireccionBundleIds = <String>{};
   final Set<String> _editedDashboardOrderIds = <String>{};
   final Set<String> _editedBundleIds = <String>{};
+  final Set<String> _restoredOrderIds = <String>{};
   int _orderLimit = defaultOrderPageSize;
   int _bundleLimit = defaultOrderPageSize;
   List<PurchaseOrder>? _derivedOrdersRef;
@@ -60,6 +61,7 @@ class _CotizacionesDashboardScreenState
   List<PurchaseOrder>? _latestOrdersForMigration;
   List<SharedQuote>? _latestBundlesForMigration;
   bool? _derivedReadOnly;
+  String? _derivedRestoredOrdersKey;
   _DashboardDerivedData? _derivedCache;
 
   bool get _isReadOnly => widget.mode == CotizacionesDashboardMode.direccion;
@@ -215,7 +217,11 @@ class _CotizacionesDashboardScreenState
                           : null,
                       onEditBundle: _isReadOnly
                           ? null
-                          : (bundle) => _editBundle(bundle, visibleOrders),
+                          : (bundle) => _editBundle(
+                                bundle,
+                                visibleOrders,
+                                ordersById: ordersById,
+                              ),
                       onDeleteBundle: _isReadOnly
                           ? null
                           : (bundle) => _deleteBundle(bundle, ordersById),
@@ -341,15 +347,31 @@ class _CotizacionesDashboardScreenState
         identical(_derivedOrdersRef, orders) &&
         identical(_derivedAllOrdersRef, allOrders) &&
         identical(_derivedBundlesRef, bundles) &&
-        _derivedReadOnly == _isReadOnly) {
+        _derivedReadOnly == _isReadOnly &&
+        _derivedRestoredOrdersKey == _restoredOrdersKey()) {
       return cached;
     }
 
     final ordersForLookup = _isReadOnly ? orders : (allOrders ?? orders);
     final ordersById = {for (final order in ordersForLookup) order.id: order};
+    final readyOrderIds = orders.where(_orderReady).map((order) => order.id).toSet();
+    final restoredOrderIds = ordersForLookup
+        .where(
+          (order) =>
+              order.restoredToCotizacionesOrders ||
+              _restoredOrderIds.contains(order.id),
+        )
+        .map((order) => order.id)
+        .toSet();
     final visibleOrders = _isReadOnly
         ? List<PurchaseOrder>.unmodifiable(orders)
-        : List<PurchaseOrder>.unmodifiable(orders.where(_orderReady));
+        : List<PurchaseOrder>.unmodifiable(
+            ordersForLookup.where(
+              (order) =>
+                  readyOrderIds.contains(order.id) ||
+                  restoredOrderIds.contains(order.id),
+            ),
+          );
     final visibleOrderIds = visibleOrders.map((order) => order.id).toSet();
     final visibleBundlesBase = _isReadOnly
         ? List<SharedQuote>.unmodifiable(
@@ -385,8 +407,15 @@ class _CotizacionesDashboardScreenState
     _derivedAllOrdersRef = allOrders;
     _derivedBundlesRef = bundles;
     _derivedReadOnly = _isReadOnly;
+    _derivedRestoredOrdersKey = _restoredOrdersKey();
     _derivedCache = derived;
     return derived;
+  }
+
+  String _restoredOrdersKey() {
+    if (_restoredOrderIds.isEmpty) return '';
+    final ids = _restoredOrderIds.toList()..sort();
+    return ids.join('|');
   }
 
   void _toggleSelection(String orderId, bool selected) {
@@ -513,6 +542,9 @@ class _CotizacionesDashboardScreenState
   Future<void> _editBundle(
     SharedQuote bundle,
     List<PurchaseOrder> orders,
+    {
+    required Map<String, PurchaseOrder> ordersById,
+  }
   ) async {
     final linkController = TextEditingController(text: bundle.pdfUrl);
     final bundles = ref.read(sharedQuotesProvider).maybeWhen(
@@ -521,8 +553,10 @@ class _CotizacionesDashboardScreenState
         );
     final selected = bundle.orderIds.toSet();
     final availableOrders = orders.toList();
+    final canRestoreOrders =
+        bundle.needsUpdate && bundle.rejectedOrderIds.isNotEmpty;
 
-    final result = await showDialog<bool>(
+    final result = await showDialog<_EditBundleAction>(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setStateDialog) => AlertDialog(
@@ -570,16 +604,35 @@ class _CotizacionesDashboardScreenState
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ),
+                if (canRestoreOrders) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    'Si restauras las órdenes, también volverán a mostrarse en la sección "Órdenes" para que puedas crear nuevas agrupaciones sin sacarlas de esta agrupación.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Colors.orange.shade900,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
           actions: [
+            if (canRestoreOrders)
+              OutlinedButton.icon(
+                onPressed: () => Navigator.pop(
+                  context,
+                  _EditBundleAction.restoreOrders,
+                ),
+                icon: const Icon(Icons.restore_outlined),
+                label: const Text('Restaurar órdenes'),
+              ),
             TextButton(
-              onPressed: () => Navigator.pop(context, false),
+              onPressed: () => Navigator.pop(context, _EditBundleAction.cancel),
               child: const Text('Cancelar'),
             ),
             FilledButton(
-              onPressed: () => Navigator.pop(context, true),
+              onPressed: () => Navigator.pop(context, _EditBundleAction.save),
               child: const Text('Guardar'),
             ),
           ],
@@ -590,7 +643,14 @@ class _CotizacionesDashboardScreenState
     final link = linkController.text.trim();
     linkController.dispose();
 
-    if (result != true) return;
+    if (result == null || result == _EditBundleAction.cancel) return;
+    if (result == _EditBundleAction.restoreOrders) {
+      await _restoreBundleOrders(
+        bundle,
+        ordersById: ordersById,
+      );
+      return;
+    }
     if (selected.isEmpty) {
       _showMessage('La agrupacion debe conservar al menos una orden.');
       return;
@@ -653,6 +713,59 @@ class _CotizacionesDashboardScreenState
     } catch (error, stack) {
       if (!mounted) return;
       _showMessage(reportError(error, stack, context: 'CotizacionesDashboard.editBundle'));
+    }
+  }
+
+  Future<void> _restoreBundleOrders(
+    SharedQuote bundle, {
+    required Map<String, PurchaseOrder> ordersById,
+  }) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Restaurar órdenes de ${_bundleLabel(bundle)}'),
+        content: const Text(
+          'Las órdenes volverán a mostrarse en la sección "Órdenes" para que puedas crear nuevas agrupaciones, pero seguirán perteneciendo a esta agrupación.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Restaurar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      final repo = ref.read(purchaseOrderRepositoryProvider);
+      final restored = bundle.orderIds
+          .where((orderId) => ordersById.containsKey(orderId))
+          .toList(growable: false);
+      if (!mounted) return;
+      if (restored.isEmpty) {
+        _showMessage('No se encontraron órdenes para restaurar.');
+        return;
+      }
+      await repo.restoreOrdersToCotizacionesOrders(orderIds: restored);
+      if (!mounted) return;
+      setState(() {
+        _restoredOrderIds.addAll(restored);
+        _derivedCache = null;
+      });
+      _showMessage(
+        'Órdenes restauradas a la sección "Órdenes" sin quitarse de la agrupación.',
+      );
+    } catch (error, stack) {
+      if (!mounted) return;
+      _showMessage(
+        reportError(error, stack, context: 'CotizacionesDashboard.restoreBundleOrders'),
+      );
     }
   }
 
@@ -1419,6 +1532,8 @@ class _BundleRejectionResult {
   final Set<String> orderIds;
   final String comment;
 }
+
+enum _EditBundleAction { cancel, save, restoreOrders }
 
 class _OrdersSection extends StatelessWidget {
   const _OrdersSection({

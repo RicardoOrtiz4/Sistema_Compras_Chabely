@@ -746,6 +746,22 @@ class PurchaseOrderRepository {
     }
   }
 
+  Future<void> restoreOrdersToCotizacionesOrders({
+    required List<String> orderIds,
+  }) async {
+    if (orderIds.isEmpty) return;
+
+    final updates = <String, Object?>{};
+    for (final orderId in orderIds) {
+      updates[
+        'purchaseOrders/$orderId/restoredToCotizacionesOrders'
+      ] = true;
+    }
+
+    if (updates.isEmpty) return;
+    await _database.ref().update(updates);
+  }
+
   Future<void> unlinkOrderFromSharedQuote({
     required PurchaseOrder order,
     required SharedQuote quote,

@@ -88,6 +88,7 @@ class OrderPdfData {
 }
 
 const int defaultPdfPrefetchLimit = 3;
+const String _pdfTemplateVersion = '2026-03-13-resubmission-datetime';
 
 void warmUpPdfAssets(CompanyBranding branding) {
   _loadLogo(branding);
@@ -765,7 +766,6 @@ pw.Widget _buildMetaSection(
   final hasInternalOrder = _hasText(data.internalOrder);
 
   final resubmissionLabel = _pendingResubmissionLabel(data);
-  final modification = _visibleModificationDate(data);
 
   return pw.Container(
     decoration: pw.BoxDecoration(border: border),
@@ -908,13 +908,6 @@ pw.Widget _buildMetaSection(
                         ],
                       ),
                     ),
-                    if (modification != null) ...[
-                      pw.SizedBox(height: 2),
-                      pw.Text(
-                        'FECHA DE MODIFICACION: ${dateFormat.format(modification)}',
-                        style: valueStyle,
-                      ),
-                    ],
                     if (resubmissionLabel != null) ...[
                       pw.SizedBox(height: 2),
                       pw.Text(
@@ -1253,9 +1246,6 @@ String _formatResubmissionStampPdf(
   DateFormat dateFormat,
   DateFormat timeFormat,
 ) {
-  if (_isSameDate(stamp, createdAt)) {
-    return timeFormat.format(stamp);
-  }
   return '${dateFormat.format(stamp)} ${timeFormat.format(stamp)}';
 }
 
@@ -1283,28 +1273,6 @@ String? _autorizaArea(OrderPdfData data) {
 }
 
 
-DateTime? _modificationDate(OrderPdfData data) {
-  final updatedAt = data.updatedAt;
-  if (updatedAt == null) return null;
-  if (_isSameDate(updatedAt, data.createdAt)) {
-    return null;
-  }
-  return updatedAt;
-}
-
-DateTime? _visibleModificationDate(OrderPdfData data) {
-  if (_pendingResubmissionLabel(data) != null) {
-    return null;
-  }
-  if (data.resubmissionDates.isNotEmpty) {
-    return null;
-  }
-  return _modificationDate(data);
-}
-
-bool _isSameDate(DateTime a, DateTime b) {
-  return a.year == b.year && a.month == b.month && a.day == b.day;
-}
 
 
 List<pw.Widget> _buildNotesSectionWidgets(OrderPdfData data) {
@@ -1823,7 +1791,6 @@ pw.Widget _signatureBox({
 
 String _pdfCacheKey(OrderPdfData data, PdfPageFormat? format) {
   final buffer = StringBuffer();
-  final visibleModificationDate = _visibleModificationDate(data);
 
   if (format != null) {
     buffer
@@ -1837,6 +1804,9 @@ String _pdfCacheKey(OrderPdfData data, PdfPageFormat? format) {
   buffer
     ..write('salt:')
     ..write(data.cacheSalt ?? '')
+    ..write(';')
+    ..write('tpl:')
+    ..write(_pdfTemplateVersion)
     ..write(';')
     ..write('brand:')
     ..write(data.branding.id)
@@ -1853,8 +1823,6 @@ String _pdfCacheKey(OrderPdfData data, PdfPageFormat? format) {
     ..write(data.urgency.name)
     ..write(';created:')
     ..write(data.createdAt.millisecondsSinceEpoch)
-    ..write(';updated:')
-    ..write(visibleModificationDate?.millisecondsSinceEpoch.toString() ?? '')
     ..write(';suppressCreatedTime:')
     ..write(data.suppressCreatedTime ? '1' : '0')
     ..write(';obs:')

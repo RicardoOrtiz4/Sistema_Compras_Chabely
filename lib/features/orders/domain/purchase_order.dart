@@ -241,6 +241,7 @@ class PurchaseOrder {
     this.sharedQuoteRefs = const [],
     this.primaryQuoteId,
     this.cotizacionReady,
+    this.restoredToCotizacionesOrders = false,
     this.facturaPdfUrl,
     this.facturaPdfUrls = const [],
     this.pdfUrl,
@@ -294,6 +295,7 @@ class PurchaseOrder {
   final List<SharedQuoteRef> sharedQuoteRefs;
   final String? primaryQuoteId;
   final bool? cotizacionReady;
+  final bool restoredToCotizacionesOrders;
   final String? facturaPdfUrl;
   final List<String> facturaPdfUrls;
   final String? pdfUrl;
@@ -354,6 +356,7 @@ class PurchaseOrder {
           : sharedQuoteRefs.map((ref) => ref.toMap()).toList(),
       'primaryQuoteId': primaryQuoteId?.trim().isEmpty ?? true ? null : primaryQuoteId?.trim(),
       'cotizacionReady': cotizacionReady,
+      'restoredToCotizacionesOrders': restoredToCotizacionesOrders,
       'facturaPdfUrl': facturaPdfUrl,
       'facturaPdfUrls': facturaPdfUrls,
       'pdfUrl': pdfUrl,
@@ -448,6 +451,9 @@ class PurchaseOrder {
       cotizacionReady: data['cotizacionReady'] == null
           ? null
           : _parseBool(data['cotizacionReady']),
+      restoredToCotizacionesOrders: _parseBool(
+        data['restoredToCotizacionesOrders'],
+      ),
       facturaPdfUrl: singleFactura,
       facturaPdfUrls: facturaUrls,
       pdfUrl: data['pdfUrl'] as String?,

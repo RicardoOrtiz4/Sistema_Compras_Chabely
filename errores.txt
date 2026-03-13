@@ -1,17 +1,46 @@
- [PDF] inline.waitEndOfFrame 273ms
-key=6.206401529600577e+64
-[2026-03-10T15:33:12.467] [PDF] buildOrderPdfLocal.assets 533ms
-key=draft-1
-[2026-03-10T15:33:12.500] [PDF] buildOrderPdf.compose 29ms key=draft-1
-[2026-03-10T15:33:26.313] [PDF] buildOrderPdf.save 13811ms key=draft-1
-[2026-03-10T15:33:26.313] [PDF] buildOrderPdfLocal.total 14379ms
-key=draft-1
-[2026-03-10T15:33:26.314] [PDF] buildOrderPdf.generate 14381ms
-key=draft-1 isolate=false
-[2026-03-10T15:33:26.332] [PDF] inline.bytesReady 14408ms
-key=6.206401529600577e+64
-[2026-03-10T15:33:26.333] [PDF] inline.totalFuture 14686ms
-key=6.206401529600577e+64
-[2026-03-10T15:33:27.296] [PDF] inline.openDocument 899ms
-key=6.206401529600577e+64
-[2026-03-10T15:33:27.297] [PDF] inline.viewerLoaded.web 903ms
+
+[2026-03-13T11:01:20.736] ══╡ EXCEPTION CAUGHT BY RENDERING LIBRARY
+╞═════════════════════════════════════════════════════════
+The following assertion was thrown during layout:
+A RenderFlex overflowed by 27 pixels on the right.
+
+The relevant error-causing widget was:
+  Row
+  Row:file:///D:/chabely/Sistema_Compras_Chabely/lib/features/orders/presentation/compras/cotiz
+  aciones_orders_screen.dart:1709:12
+
+The overflowing RenderFlex has an orientation of Axis.horizontal.
+The edge of the RenderFlex that is overflowing has been marked in the rendering with a yellow  
+and
+black striped pattern. This is usually caused by the contents being too big for the RenderFlex.
+Consider applying a flex factor (e.g. using an Expanded widget) to force the children of the   
+RenderFlex to fit within the available space instead of being sized to their natural size.     
+This is considered an error condition because it indicates that there is content that cannot be
+seen. If the content is legitimately bigger than the available space, consider clipping it with
+a
+ClipRect widget before putting it in the flex, or using a scrollable container rather than a   
+Flex,
+like a ListView.
+The specific RenderFlex in question is: RenderFlex#28f76 relayoutBoundary=up24 OVERFLOWING:    
+  creator: Row ← _TabWithBadge ← Center ← SizedBox ← Tab ← KeyedSubtree-[GlobalKey#3dd82] ←    
+  Padding ←
+    Center ← IconTheme ← Builder ← DefaultTextStyle ← _TabStyle ← ⋯
+  parentData: offset=Offset(0.0, 12.0) (can use size)
+  constraints: BoxConstraints(0.0<=w<=74.0, 0.0<=h<=46.0)
+  size: Size(74.0, 22.0)
+  direction: horizontal
+  mainAxisAlignment: start
+  mainAxisSize: min
+  crossAxisAlignment: center
+  textDirection: ltr
+  verticalDirection: down
+  spacing: 0.0
+◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢
+◤◢◤◢◤
+═══════════════════════════════════════════════════════════════════════════════════════════════
+═════
+[2026-03-13T11:01:20.784] ERROR [FlutterError]: FlutterError message=A RenderFlex overflowed by
+25 pixels on the right.
+[2026-03-13T11:01:20.859] ===== END APP LOG DUMP =====
+[2026-03-13T11:01:20.862] Another exception was thrown: A RenderFlex overflowed by 25 pixels on
+the right.
