@@ -7,9 +7,9 @@ import 'package:intl/intl.dart';
 
 import 'package:sistema_compras/core/area_labels.dart';
 import 'package:sistema_compras/core/company_branding.dart';
-import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
+import 'package:sistema_compras/features/auth/domain/app_user.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
@@ -18,6 +18,7 @@ import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_inline_view.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
+import 'package:sistema_compras/features/orders/presentation/preview/pdf_download_helper.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 
 class OrderPdfPreviewScreen extends ConsumerStatefulWidget {
@@ -31,6 +32,7 @@ class OrderPdfPreviewScreen extends ConsumerStatefulWidget {
 class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
   ScaffoldMessengerState? _messenger;
   ProviderSubscription<CreateOrderState>? _controllerSubscription;
+  bool _downloadingPdf = false;
 
   @override
   void initState() {
@@ -78,6 +80,21 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Revisar PDF'),
+        actions: [
+          IconButton(
+            onPressed: _downloadingPdf
+                ? null
+                : () => _downloadPreviewPdf(controller, userAsync.value),
+            tooltip: 'Descargar PDF',
+            icon: _downloadingPdf
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.download_outlined),
+          ),
+        ],
       ),
       body: userAsync.when(
         data: (user) {
@@ -86,16 +103,12 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
           }
 
           final folio = _folioFromDraft(controller.draftId);
-          final requestedDate = _requestedDeliveryDate(
-            controller.items,
-            controller.urgency,
-            controller.previewCreatedAt ?? DateTime.now(),
-          );
-
           final baselineSignature = controller.baselineSignature;
           final currentSignature = buildCreateOrderSignature(
             urgency: controller.urgency,
+            requestedDeliveryDate: controller.requestedDeliveryDate,
             notes: controller.notes,
+            urgentJustification: controller.urgentJustification,
             items: controller.items,
           );
           final hasEdits = baselineSignature == null
@@ -146,7 +159,6 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
                   userName: user.name,
                   userArea: user.areaDisplay,
                   folio: folio,
-                  requestedDate: requestedDate,
                   modificationDate: modificationDate,
                 ),
               ),
@@ -265,6 +277,69 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
       logError(error, stack, context: 'OrderPdfPreviewScreen.warmCache');
     }
   }
+
+  Future<void> _downloadPreviewPdf(
+    CreateOrderState controller,
+    AppUser? user,
+  ) async {
+    if (_downloadingPdf || user == null) return;
+    setState(() => _downloadingPdf = true);
+    try {
+      final folio = _folioFromDraft(controller.draftId);
+      final baselineSignature = controller.baselineSignature;
+      final currentSignature = buildCreateOrderSignature(
+        urgency: controller.urgency,
+        requestedDeliveryDate: controller.requestedDeliveryDate,
+        notes: controller.notes,
+        urgentJustification: controller.urgentJustification,
+        items: controller.items,
+      );
+      final hasEdits = baselineSignature == null
+          ? true
+          : baselineSignature != currentSignature;
+      final hasScheduleChange = controller.hasScheduleChange;
+      final modificationDate =
+          controller.returnCount > 0 && hasEdits ? controller.previewUpdatedAt : null;
+      final requiresPreviewAcceptance =
+          controller.returnCount > 0 && hasEdits && hasScheduleChange;
+      final hasAcceptedPreview =
+          !requiresPreviewAcceptance || controller.previewAccepted;
+      final branding = ref.read(currentBrandingProvider);
+      final isNewOrderPreview = folio == null && controller.returnCount <= 0;
+      final pdfData = OrderPdfData(
+        branding: branding,
+        folio: folio ?? '',
+        requesterName: user.name,
+        requesterArea: user.areaDisplay,
+        areaName: user.areaDisplay,
+        urgency: controller.urgency,
+        items: controller.items,
+        createdAt: controller.previewCreatedAt ?? DateTime.now(),
+        updatedAt: modificationDate,
+        observations: controller.notes,
+        urgentJustification: controller.urgentJustification,
+        requestedDeliveryDate: controller.requestedDeliveryDate,
+        pendingResubmissionLabel: _pendingResubmissionLabel(
+          controller,
+          modificationDate: modificationDate,
+        ),
+        suppressCreatedTime: isNewOrderPreview,
+        resubmissionDates: controller.resubmissionDates,
+        cacheSalt: hasAcceptedPreview ? null : 'preview-pending',
+      );
+      final bytes = await buildOrderPdf(pdfData, useIsolate: false);
+      if (!mounted) return;
+      await savePdfBytes(
+        context,
+        bytes: bytes,
+        suggestedName: 'requisicion_${folio ?? 'borrador'}.pdf',
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _downloadingPdf = false);
+      }
+    }
+  }
 }
 
 void _returnToRejectedOrders(BuildContext context) {
@@ -318,7 +393,6 @@ class _DraftPdfBody extends ConsumerWidget {
     required this.userName,
     required this.userArea,
     required this.folio,
-    required this.requestedDate,
     required this.modificationDate,
   });
 
@@ -326,7 +400,6 @@ class _DraftPdfBody extends ConsumerWidget {
   final String userName;
   final String userArea;
   final String? folio;
-  final DateTime? requestedDate;
   final DateTime? modificationDate;
 
   @override
@@ -344,7 +417,8 @@ class _DraftPdfBody extends ConsumerWidget {
       createdAt: controller.previewCreatedAt ?? DateTime.now(),
       updatedAt: modificationDate,
       observations: controller.notes,
-      requestedDeliveryDate: requestedDate,
+      urgentJustification: controller.urgentJustification,
+      requestedDeliveryDate: controller.requestedDeliveryDate,
       pendingResubmissionLabel: _pendingResubmissionLabel(
         controller,
         modificationDate: modificationDate,
@@ -362,7 +436,6 @@ class _PersistentDraftPdfBody extends ConsumerStatefulWidget {
     required this.userName,
     required this.userArea,
     required this.folio,
-    required this.requestedDate,
     required this.modificationDate,
   });
 
@@ -370,7 +443,6 @@ class _PersistentDraftPdfBody extends ConsumerStatefulWidget {
   final String userName;
   final String userArea;
   final String? folio;
-  final DateTime? requestedDate;
   final DateTime? modificationDate;
 
   @override
@@ -393,7 +465,6 @@ class _PersistentDraftPdfBodyState
         userName: widget.userName,
         userArea: widget.userArea,
         folio: widget.folio,
-        requestedDate: widget.requestedDate,
         modificationDate: widget.modificationDate,
       );
     }
@@ -411,7 +482,11 @@ String _pdfSignature(_PersistentDraftPdfBody body) {
     ..write('|')
     ..write(body.controller.urgency.name)
     ..write('|')
+    ..write(body.controller.requestedDeliveryDate?.millisecondsSinceEpoch ?? 0)
+    ..write('|')
     ..write(body.controller.notes)
+    ..write('|')
+    ..write(body.controller.urgentJustification)
     ..write('|')
     ..write(body.controller.returnCount)
     ..write('|')
@@ -425,9 +500,7 @@ String _pdfSignature(_PersistentDraftPdfBody body) {
     ..write('|')
     ..write(body.controller.previewCreatedAt?.millisecondsSinceEpoch ?? 0)
     ..write('|')
-    ..write(body.modificationDate?.millisecondsSinceEpoch ?? 0)
-    ..write('|')
-    ..write(body.requestedDate?.millisecondsSinceEpoch ?? 0);
+    ..write(body.modificationDate?.millisecondsSinceEpoch ?? 0);
   for (final date in body.controller.resubmissionDates) {
     buffer
       ..write('|')
@@ -497,40 +570,6 @@ String _contactLabel(String? rawRole) {
   if (isComprasLabel(normalized)) return 'Compras';
   return normalized;
 }
-
-DateTime? _requestedDeliveryDate(
-  List<OrderItemDraft> items,
-  PurchaseOrderUrgency urgency,
-  DateTime baseDate,
-) {
-  DateTime? selected;
-  for (final item in items) {
-    final date = item.estimatedDate;
-    if (date == null) continue;
-    if (selected == null || date.isBefore(selected)) {
-      selected = date;
-    }
-  }
-  return selected ?? _requestedDateFromUrgency(urgency, baseDate);
-}
-
-DateTime _requestedDateFromUrgency(
-  PurchaseOrderUrgency urgency,
-  DateTime baseDate,
-) {
-  final base = DateTime(baseDate.year, baseDate.month, baseDate.day);
-  switch (urgency) {
-    case PurchaseOrderUrgency.urgente:
-      return base.add(const Duration(days: 1));
-    case PurchaseOrderUrgency.alta:
-      return base.add(const Duration(days: 3));
-    case PurchaseOrderUrgency.media:
-      return base.add(const Duration(days: 7));
-    case PurchaseOrderUrgency.baja:
-      return base.add(const Duration(days: 14));
-  }
-}
-
 
 const int _maxCorrections = 3;
 

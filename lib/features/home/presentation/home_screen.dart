@@ -13,7 +13,10 @@ import 'package:sistema_compras/features/auth/domain/app_user.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 import 'package:sistema_compras/features/profile/presentation/profile_sheet.dart';
+import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
+import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_inline_view.dart';
+import 'package:sistema_compras/features/orders/presentation/preview/pdf_download_helper.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -67,15 +70,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final isDireccionGeneral =
         user != null && isDireccionGeneralLabel(user.areaDisplay);
     final canViewGeneralHistory =
-        user != null && (isAdmin || isDireccionGeneral);
+        user != null && (isAdmin || isDireccionGeneral || isCompras);
     final isContabilidad =
         user != null && isContabilidadLabel(user.areaDisplay);
-    final isAlmacen = user != null && isAlmacenLabel(user.areaDisplay);
     final surfaceColor = scheme.surface;
 
     return Scaffold(
       drawer: _HomeDrawer(
         isAdmin: isAdmin,
+        canViewOrderHistory: user != null,
+        canViewGeneralHistory: canViewGeneralHistory,
         onOpenProfile: () => showProfileSheet(context, ref),
       ),
       appBar: AppBar(
@@ -93,7 +97,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               children: [
                 const Text('Inicio'),
                 Text(
-                  branding.displayName,
+                  user == null ? 'Bienvenido' : 'Bienvenido ${user.name}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
@@ -101,20 +105,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ],
         ),
         actions: [
+          if (isAdmin || isCompras)
+            IconButton(
+              icon: const Icon(Icons.monitor_heart_outlined),
+              tooltip: 'Monitoreo',
+              onPressed: () => guardedPush(context, '/orders/monitoring'),
+            ),
           if (canSwitchCompany)
             _CompanySwitcherAction(currentBranding: branding),
-          if (user != null)
-            IconButton(
-              icon: const Icon(Icons.access_time),
-              tooltip: 'Historial de órdenes de compra',
-              onPressed: () => guardedPush(context, '/orders/history'),
-            ),
-          if (canViewGeneralHistory)
-            IconButton(
-              icon: const Icon(Icons.manage_search_outlined),
-              tooltip: 'Historial general',
-              onPressed: () => guardedPush(context, '/orders/history/all'),
-            ),
         ],
       ),
       body: userAsync.when(
@@ -131,6 +129,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               foreground: scheme.onPrimary,
               onTap: () => guardedPush(context, '/orders/create'),
             ),
+            _HomeBlockData(
+              title: 'Ordenes en proceso',
+              subtitle: 'Seguimiento por item de tus solicitudes',
+              icon: Icons.track_changes_outlined,
+              color: scheme.primaryContainer,
+              foreground: scheme.onPrimaryContainer,
+              countProvider: userInProcessOrdersCountProvider,
+              onTap: () => guardedPush(context, '/orders/in-process'),
+            ),
             if (isAdmin || isCompras)
               _HomeBlockData(
                 title: 'Órdenes por confirmar',
@@ -144,7 +151,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             if (isAdmin || isCompras)
               _HomeBlockData(
                 title: 'Cotizaciones',
-                subtitle: 'Asignar proveedor y presupuesto',
+                subtitle: 'Completar datos y armar cotizaciones por proveedor',
                 icon: Icons.request_quote_outlined,
                 color: scheme.secondaryContainer,
                 foreground: scheme.onSecondaryContainer,
@@ -154,7 +161,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             if (isAdmin || isDireccionGeneral)
               _HomeBlockData(
                 title: 'Dirección General',
-                subtitle: 'Autorización de órdenes',
+                subtitle: 'Autorizar cotizaciones por proveedor',
                 icon: Icons.approval_outlined,
                 color: scheme.tertiary,
                 foreground: scheme.onTertiary,
@@ -163,8 +170,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               ),
             if (isAdmin || isCompras)
               _HomeBlockData(
-                title: 'Pendientes de fecha estimada',
-                subtitle: 'Confirmar entregas',
+                title: 'En proceso',
+                subtitle: 'Definir fecha estimada y enviar a Contabilidad',
                 icon: Icons.assignment_turned_in_outlined,
                 color: scheme.secondary,
                 foreground: scheme.onSecondary,
@@ -181,15 +188,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 countProvider: contabilidadCountProvider,
                 onTap: () => guardedPush(context, '/orders/contabilidad'),
               ),
-            if (isAdmin || isAlmacen)
+            if (isAdmin || isCompras)
               _HomeBlockData(
-                title: 'Almacén',
-                subtitle: 'Recepción de compras',
-                icon: Icons.inventory_2_outlined,
-                color: scheme.primary,
-                foreground: scheme.onPrimary,
-                countProvider: almacenCountProvider,
-                onTap: () => guardedPush(context, '/orders/almacen'),
+                title: 'Monitoreo de acciones',
+                subtitle: 'Rechazadas y finalizadas pendientes de recibido',
+                icon: Icons.report_gmailerrorred_outlined,
+                color: scheme.errorContainer,
+                foreground: scheme.onErrorContainer,
+                countProvider: globalActionMonitoringCountProvider,
+                onTap: () => guardedPush(context, '/orders/rejected/all'),
               ),
 
             _HomeBlockData(
@@ -261,9 +268,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 }
 
 class _HomeDrawer extends StatelessWidget {
-  const _HomeDrawer({required this.isAdmin, required this.onOpenProfile});
+  const _HomeDrawer({
+    required this.isAdmin,
+    required this.canViewOrderHistory,
+    required this.canViewGeneralHistory,
+    required this.onOpenProfile,
+  });
 
   final bool isAdmin;
+  final bool canViewOrderHistory;
+  final bool canViewGeneralHistory;
   final VoidCallback onOpenProfile;
 
   @override
@@ -307,6 +321,37 @@ class _HomeDrawer extends StatelessWidget {
                   guardedPush(context, '/admin/users');
                 },
               ),
+            if (canViewOrderHistory)
+              ListTile(
+                leading: const Icon(Icons.access_time),
+                title: const Text('Historial de ordenes'),
+                onTap: () {
+                  Navigator.pop(context);
+                  guardedPush(context, '/orders/history');
+                },
+              ),
+            if (canViewGeneralHistory)
+              ListTile(
+                leading: const Icon(Icons.manage_search_outlined),
+                title: const Text('Historial general'),
+                onTap: () {
+                  Navigator.pop(context);
+                  guardedPush(context, '/orders/history/all');
+                },
+              ),
+            ListTile(
+              leading: const Icon(Icons.description_outlined),
+              title: const Text('Formato'),
+              onTap: () {
+                final navigator = Navigator.of(context);
+                navigator.pop();
+                navigator.push(
+                  MaterialPageRoute(
+                    builder: (_) => const _BlankRequisitionFormatScreen(),
+                  ),
+                );
+              },
+            ),
             ListTile(
               leading: const Icon(Icons.person_outline),
               title: const Text('Perfil'),
@@ -320,6 +365,92 @@ class _HomeDrawer extends StatelessWidget {
       ),
     );
   }
+}
+
+class _BlankRequisitionFormatScreen extends ConsumerStatefulWidget {
+  const _BlankRequisitionFormatScreen();
+
+  @override
+  ConsumerState<_BlankRequisitionFormatScreen> createState() =>
+      _BlankRequisitionFormatScreenState();
+}
+
+class _BlankRequisitionFormatScreenState
+    extends ConsumerState<_BlankRequisitionFormatScreen> {
+  bool _downloading = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final branding = ref.watch(currentBrandingProvider);
+    final pdfData = _blankRequisitionFormatData(branding);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Formato de requisicion'),
+        actions: [
+          IconButton(
+            onPressed: _downloading ? null : () => _downloadPdf(pdfData),
+            tooltip: 'Descargar PDF',
+            icon: _downloading
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.download_outlined),
+          ),
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: OrderPdfInlineView(data: pdfData),
+      ),
+    );
+  }
+
+  Future<void> _downloadPdf(OrderPdfData pdfData) async {
+    if (_downloading) return;
+    setState(() => _downloading = true);
+    try {
+      final bytes = await buildOrderPdf(pdfData, useIsolate: false);
+      if (!mounted) return;
+      await savePdfBytes(
+        context,
+        bytes: bytes,
+        suggestedName: 'formato_requisicion_compra.pdf',
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _downloading = false);
+      }
+    }
+  }
+}
+
+OrderPdfData _blankRequisitionFormatData(CompanyBranding branding) {
+  return OrderPdfData(
+    branding: branding,
+    requesterName: '',
+    requesterArea: '',
+    areaName: '',
+    urgency: PurchaseOrderUrgency.normal,
+    items: const <OrderItemDraft>[],
+    createdAt: DateTime.now(),
+    observations: '',
+    folio: '',
+    internalOrder: '',
+    supplier: '',
+    comprasComment: '',
+    comprasReviewerName: '',
+    comprasReviewerArea: '',
+    processedByName: '',
+    processedByArea: '',
+    direccionGeneralName: '',
+    direccionGeneralArea: '',
+    urgentJustification: '',
+    blankTemplate: true,
+    cacheSalt: 'blank-requisition-format',
+  );
 }
 
 class _HomeBlockData {

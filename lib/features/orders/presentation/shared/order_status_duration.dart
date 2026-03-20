@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sistema_compras/core/constants.dart';
 
 import 'package:sistema_compras/core/extensions.dart';
+import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 
 /// Muestra cuánto tiempo lleva la orden en su estado actual.
@@ -132,24 +134,115 @@ class StatusDurationPill extends StatelessWidget {
   }
 }
 
-String formatDurationLabel(Duration d) {
-  final totalMinutes = d.inMinutes;
-  if (totalMinutes <= 0) return '< 1 min';
+class PreviousStatusDurationPill extends ConsumerWidget {
+  const PreviousStatusDurationPill({
+    super.key,
+    required this.orderIds,
+    required this.fromStatus,
+    required this.toStatus,
+    required this.label,
+    this.alignRight = true,
+  });
 
+  final List<String> orderIds;
+  final PurchaseOrderStatus fromStatus;
+  final PurchaseOrderStatus toStatus;
+  final String label;
+  final bool alignRight;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final durations = <Duration>[];
+    for (final orderId in orderIds.toSet()) {
+      final events = ref.watch(orderEventsProvider(orderId)).valueOrNull;
+      if (events == null) continue;
+      final duration = timeBetweenStatuses(
+        events,
+        fromStatus: fromStatus,
+        toStatus: toStatus,
+      );
+      if (duration != null) {
+        durations.add(duration);
+      }
+    }
+
+    if (durations.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final effectiveDuration = durations.length == 1
+        ? durations.first
+        : averageDuration(durations);
+    final effectiveLabel = durations.length == 1 ? label : '$label promedio';
+
+    return StatusDurationPill(
+      text: '$effectiveLabel: ${formatDurationLabel(effectiveDuration)}',
+      alignRight: alignRight,
+    );
+  }
+}
+
+String formatDurationLabel(Duration d) {
+  final totalSeconds = d.inSeconds;
+  if (totalSeconds <= 0) return '0 s';
   final days = d.inDays;
   final hours = d.inHours % 24;
   final minutes = d.inMinutes % 60;
+  final seconds = d.inSeconds % 60;
 
   if (days > 0) {
     final dayLabel = days == 1 ? 'día' : 'días';
-    final hourPart = hours > 0 ? ' $hours h' : '';
-    return '$days $dayLabel$hourPart';
+    return '$days $dayLabel $hours h $minutes min $seconds s';
   }
   if (hours > 0) {
-    final minPart = minutes > 0 ? ' $minutes min' : '';
-    return '$hours h$minPart';
+    return '${d.inHours} h $minutes min $seconds s';
   }
-  return '$minutes min';
+  if (minutes > 0) {
+    return '$minutes min $seconds s';
+  }
+  return '$seconds s';
+}
+
+Duration? timeBetweenStatuses(
+  List<PurchaseOrderEvent> events, {
+  required PurchaseOrderStatus fromStatus,
+  required PurchaseOrderStatus toStatus,
+}) {
+  if (events.isEmpty) return null;
+
+  PurchaseOrderEvent? enterToStatus;
+  for (final event in events.reversed) {
+    if (event.toStatus == toStatus && event.timestamp != null) {
+      enterToStatus = event;
+      break;
+    }
+  }
+  if (enterToStatus == null) return null;
+
+  final targetTimestamp = enterToStatus.timestamp!;
+  PurchaseOrderEvent? enterFromStatus;
+  for (final event in events.reversed) {
+    if (event.toStatus == fromStatus &&
+        event.timestamp != null &&
+        !event.timestamp!.isAfter(targetTimestamp)) {
+      enterFromStatus = event;
+      break;
+    }
+  }
+  if (enterFromStatus == null) return null;
+
+  final duration = targetTimestamp.difference(enterFromStatus.timestamp!);
+  if (duration.isNegative) return null;
+  return duration;
+}
+
+Duration averageDuration(List<Duration> durations) {
+  if (durations.isEmpty) return Duration.zero;
+  final totalMs = durations.fold<int>(
+    0,
+    (sum, duration) => sum + duration.inMilliseconds,
+  );
+  return Duration(milliseconds: totalMs ~/ durations.length);
 }
 
 /// ---------------------------------------------------------------------------
@@ -174,6 +267,3 @@ class PrMq6aNvWB9RmWRCbyBDeDQD9oy469anXH8 extends OrderStatusDuration {
     super.prefix,
   });
 }
-
-
-

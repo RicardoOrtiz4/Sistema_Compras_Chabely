@@ -12,6 +12,7 @@ import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_pdf_preload_gate.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_search.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_summary_lines.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_urgency_controls.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
 
 _HistoryViewState _historyViewState = const _HistoryViewState();
@@ -24,9 +25,8 @@ class OrderHistoryScreen extends ConsumerStatefulWidget {
 }
 
 class _OrderHistoryScreenState extends ConsumerState<OrderHistoryScreen> {
-  PurchaseOrderStatus? statusFilter;
-  PurchaseOrderUrgency? urgencyFilter;
-  DateTimeRange? dateRange;
+  OrderUrgencyFilter _urgencyFilter = OrderUrgencyFilter.all;
+  DateTimeRange? _createdDateRangeFilter;
   List<PurchaseOrder>? _cachedSourceOrders;
   String? _cachedVisibleKey;
   List<PurchaseOrder>? _cachedVisibleOrders;
@@ -42,9 +42,8 @@ class _OrderHistoryScreenState extends ConsumerState<OrderHistoryScreen> {
     super.initState();
     _searchController = TextEditingController();
     final snapshot = _historyViewState;
-    statusFilter = snapshot.statusFilter;
-    urgencyFilter = snapshot.urgencyFilter;
-    dateRange = snapshot.dateRange;
+    _urgencyFilter = snapshot.urgencyFilter;
+    _createdDateRangeFilter = snapshot.dateRange;
     _searchQuery = snapshot.searchQuery;
     _limit = snapshot.limit;
     _searchController.text = snapshot.searchQuery;
@@ -53,9 +52,8 @@ class _OrderHistoryScreenState extends ConsumerState<OrderHistoryScreen> {
   @override
   void dispose() {
     _historyViewState = _HistoryViewState(
-      statusFilter: statusFilter,
-      urgencyFilter: urgencyFilter,
-      dateRange: dateRange,
+      urgencyFilter: _urgencyFilter,
+      dateRange: _createdDateRangeFilter,
       searchQuery: _searchQuery,
       limit: _limit,
     );
@@ -84,13 +82,72 @@ class _OrderHistoryScreenState extends ConsumerState<OrderHistoryScreen> {
     setState(() => _limit += orderPageSizeStep);
   }
 
+  void _setUrgencyFilter(OrderUrgencyFilter filter) {
+    setState(() {
+      _urgencyFilter = filter;
+      _limit = defaultOrderPageSize;
+    });
+  }
+
+  Future<void> _pickCreatedDateFilter() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(1900, 1, 1),
+      lastDate: DateTime(2100, 12, 31),
+      currentDate: now,
+      initialDateRange: _createdDateRangeFilter,
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _createdDateRangeFilter = DateTimeRange(
+        start: DateTime(picked.start.year, picked.start.month, picked.start.day),
+        end: DateTime(picked.end.year, picked.end.month, picked.end.day),
+      );
+      _limit = defaultOrderPageSize;
+    });
+  }
+
+  void _clearCreatedDateFilter() {
+    if (_createdDateRangeFilter == null) return;
+    setState(() {
+      _createdDateRangeFilter = null;
+      _limit = defaultOrderPageSize;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final ordersAsync = ref.watch(userOrdersProvider);
+    final compactAppBar = useCompactOrderModuleAppBar(context);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Historial de ordenes'),
+        title: ordersAsync.when(
+          data: (orders) {
+            final historyOrders = _historyOrders(orders);
+            return compactAppBar
+                ? const Text('Historial de ordenes')
+                : OrderModuleAppBarTitle(
+                    title: 'Historial de ordenes',
+                    counts: OrderUrgencyCounts.fromOrders(historyOrders),
+                    filter: _urgencyFilter,
+                    onSelected: _setUrgencyFilter,
+                  );
+          },
+          loading: () => const Text('Historial de ordenes'),
+          error: (_, __) => const Text('Historial de ordenes'),
+        ),
+        bottom: !compactAppBar
+            ? null
+            : ordersAsync.maybeWhen(
+                data: (orders) => OrderModuleAppBarBottom(
+                  counts: OrderUrgencyCounts.fromOrders(_historyOrders(orders)),
+                  filter: _urgencyFilter,
+                  onSelected: _setUrgencyFilter,
+                ),
+                orElse: () => null,
+              ),
       ),
       body: ordersAsync.when(
         data: (orders) {
@@ -109,20 +166,52 @@ class _OrderHistoryScreenState extends ConsumerState<OrderHistoryScreen> {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                child: TextField(
-                  controller: _searchController,
-                  decoration: InputDecoration(
-                    labelText:
-                        'Buscar por folio (000001), solicitante, cliente, fecha...',
-                    prefixIcon: const Icon(Icons.search),
-                    suffixIcon: _searchQuery.isEmpty
-                        ? null
-                        : IconButton(
-                            icon: const Icon(Icons.clear),
-                            onPressed: _clearSearch,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isNarrow = constraints.maxWidth < 720;
+                    final searchField = TextField(
+                      controller: _searchController,
+                      decoration: InputDecoration(
+                        labelText:
+                            'Buscar por folio (000001), solicitante, cliente, fecha...',
+                        prefixIcon: const Icon(Icons.search),
+                        suffixIcon: _searchQuery.isEmpty
+                            ? null
+                            : IconButton(
+                                icon: const Icon(Icons.clear),
+                                onPressed: _clearSearch,
+                              ),
+                      ),
+                      onChanged: _updateSearch,
+                    );
+                    final dateFilter = OrderDateRangeFilterButton(
+                      selectedRange: _createdDateRangeFilter,
+                      onPickDate: _pickCreatedDateFilter,
+                      onClearDate: _clearCreatedDateFilter,
+                    );
+
+                    if (isNarrow) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          searchField,
+                          const SizedBox(height: 12),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: dateFilter,
                           ),
-                  ),
-                  onChanged: _updateSearch,
+                        ],
+                      );
+                    }
+
+                    return Row(
+                      children: [
+                        Expanded(child: searchField),
+                        const SizedBox(width: 12),
+                        dateFilter,
+                      ],
+                    );
+                  },
                 ),
               ),
               const Padding(
@@ -132,23 +221,7 @@ class _OrderHistoryScreenState extends ConsumerState<OrderHistoryScreen> {
                   'Considera respaldar las ordenes finalizadas si las necesitas.',
                 ),
               ),
-              const SizedBox(height: 8),
-              _FiltersBar(
-                statusFilter: statusFilter,
-                urgencyFilter: urgencyFilter,
-                dateRange: dateRange,
-                onStatusChanged: (value) =>
-                    setState(() => statusFilter = value),
-                onUrgencyChanged: (value) =>
-                    setState(() => urgencyFilter = value),
-                onDateRangeChanged: (range) =>
-                    setState(() => dateRange = range),
-                onClear: () => setState(() {
-                  statusFilter = null;
-                  urgencyFilter = null;
-                  dateRange = null;
-                }),
-              ),
+              const SizedBox(height: 12),
               Expanded(
                 child: visibleOrders.isEmpty
                     ? Column(
@@ -156,9 +229,9 @@ class _OrderHistoryScreenState extends ConsumerState<OrderHistoryScreen> {
                         children: [
                           _EmptyResults(
                             onClear: () => setState(() {
-                              statusFilter = null;
-                              urgencyFilter = null;
-                              dateRange = null;
+                              _urgencyFilter = OrderUrgencyFilter.all;
+                              _createdDateRangeFilter = null;
+                              _limit = defaultOrderPageSize;
                             }),
                           ),
                           if (showLoadMore) ...[
@@ -236,202 +309,48 @@ class _OrderHistoryScreenState extends ConsumerState<OrderHistoryScreen> {
 
   String _visibleOrdersKey() {
     final buffer = StringBuffer()
-      ..write(statusFilter?.name ?? '')
+      ..write(_urgencyFilter.name)
       ..write('|')
-      ..write(urgencyFilter?.name ?? '')
+      ..write(_createdDateRangeFilter?.start.millisecondsSinceEpoch ?? '')
       ..write('|')
-      ..write(dateRange?.start.millisecondsSinceEpoch ?? '')
-      ..write('|')
-      ..write(dateRange?.end.millisecondsSinceEpoch ?? '')
+      ..write(_createdDateRangeFilter?.end.millisecondsSinceEpoch ?? '')
       ..write('|')
       ..write(_searchQuery.trim().toLowerCase());
     return buffer.toString();
   }
 
   bool _filterOrder(PurchaseOrder order) {
-    final statusOk = statusFilter == null || order.status == statusFilter;
-    final urgencyOk = urgencyFilter == null || order.urgency == urgencyFilter;
-
-    final dateOk =
-        dateRange == null ||
-        (order.createdAt != null &&
-            order.createdAt!.isAfter(
-              dateRange!.start.subtract(const Duration(days: 1)),
-            ) &&
-            order.createdAt!.isBefore(
-              dateRange!.end.add(const Duration(days: 1)),
-            ));
-
-    return statusOk && urgencyOk && dateOk;
+    return matchesOrderUrgencyFilter(order, _urgencyFilter) &&
+        matchesOrderCreatedDateRange(order, _createdDateRangeFilter);
   }
 
   bool get _hasPendingSearch => _searchDebounce != null;
 
   bool get _hasActiveFilters =>
-      statusFilter != null || urgencyFilter != null || dateRange != null;
+      _urgencyFilter != OrderUrgencyFilter.all ||
+      _createdDateRangeFilter != null;
 
   bool _isHistoryVisible(PurchaseOrder order) {
-    switch (order.status) {
-      case PurchaseOrderStatus.cotizaciones:
-      case PurchaseOrderStatus.authorizedGerencia:
-      case PurchaseOrderStatus.paymentDone:
-      case PurchaseOrderStatus.contabilidad:
-      case PurchaseOrderStatus.almacen:
-      case PurchaseOrderStatus.eta:
-        return true;
-
-      case PurchaseOrderStatus.draft:
-      case PurchaseOrderStatus.pendingCompras:
-      case PurchaseOrderStatus.orderPlaced:
-        return false;
-    }
+    return order.status == PurchaseOrderStatus.eta &&
+        order.isRequesterReceiptConfirmed;
   }
+
+  List<PurchaseOrder> _historyOrders(List<PurchaseOrder> orders) =>
+      orders.where(_isHistoryVisible).toList(growable: false);
 }
 
 class _HistoryViewState {
   const _HistoryViewState({
-    this.statusFilter,
-    this.urgencyFilter,
+    this.urgencyFilter = OrderUrgencyFilter.all,
     this.dateRange,
     this.searchQuery = '',
     this.limit = defaultOrderPageSize,
   });
 
-  final PurchaseOrderStatus? statusFilter;
-  final PurchaseOrderUrgency? urgencyFilter;
+  final OrderUrgencyFilter urgencyFilter;
   final DateTimeRange? dateRange;
   final String searchQuery;
   final int limit;
-}
-
-class _FiltersBar extends StatelessWidget {
-  const _FiltersBar({
-    required this.statusFilter,
-    required this.urgencyFilter,
-    required this.dateRange,
-    required this.onStatusChanged,
-    required this.onUrgencyChanged,
-    required this.onDateRangeChanged,
-    required this.onClear,
-  });
-
-  final PurchaseOrderStatus? statusFilter;
-  final PurchaseOrderUrgency? urgencyFilter;
-  final DateTimeRange? dateRange;
-
-  final ValueChanged<PurchaseOrderStatus?> onStatusChanged;
-  final ValueChanged<PurchaseOrderUrgency?> onUrgencyChanged;
-  final ValueChanged<DateTimeRange?> onDateRangeChanged;
-  final VoidCallback onClear;
-
-  @override
-  Widget build(BuildContext context) {
-    const statusOptions = [
-      PurchaseOrderStatus.cotizaciones,
-      PurchaseOrderStatus.authorizedGerencia,
-      PurchaseOrderStatus.paymentDone,
-      PurchaseOrderStatus.contabilidad,
-      PurchaseOrderStatus.almacen,
-      PurchaseOrderStatus.eta,
-    ];
-
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final isNarrow = constraints.maxWidth < 600;
-          final fieldWidth = isNarrow ? constraints.maxWidth : 220.0;
-          final urgencyWidth = isNarrow ? constraints.maxWidth : 200.0;
-          final dateButtonWidth = isNarrow ? constraints.maxWidth : null;
-
-          return Wrap(
-            spacing: 16,
-            runSpacing: 12,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              SizedBox(
-                width: fieldWidth,
-                child: DropdownButtonFormField<PurchaseOrderStatus?>(
-                  initialValue: statusFilter,
-                  decoration: const InputDecoration(labelText: 'Estado'),
-                  isExpanded: true,
-                  items: [
-                    const DropdownMenuItem<PurchaseOrderStatus?>(
-                      value: null,
-                      child: Text('Todos'),
-                    ),
-                    ...statusOptions.map(
-                      (status) => DropdownMenuItem<PurchaseOrderStatus?>(
-                        value: status,
-                        child: Text(
-                          status.label,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ),
-                  ],
-                  onChanged: onStatusChanged,
-                ),
-              ),
-              SizedBox(
-                width: urgencyWidth,
-                child: DropdownButtonFormField<PurchaseOrderUrgency?>(
-                  initialValue: urgencyFilter,
-                  decoration: const InputDecoration(labelText: 'Urgencia'),
-                  isExpanded: true,
-                  items: [
-                    const DropdownMenuItem<PurchaseOrderUrgency?>(
-                      value: null,
-                      child: Text('Todas'),
-                    ),
-                    ...PurchaseOrderUrgency.values.map(
-                      (urgency) => DropdownMenuItem<PurchaseOrderUrgency?>(
-                        value: urgency,
-                        child: Text(
-                          urgency.label,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ),
-                  ],
-                  onChanged: onUrgencyChanged,
-                ),
-              ),
-              SizedBox(
-                width: dateButtonWidth,
-                child: ElevatedButton.icon(
-                  onPressed: () async {
-                    final picked = await showDateRangePicker(
-                      context: context,
-                      firstDate: DateTime.now().subtract(
-                        const Duration(days: 365),
-                      ),
-                      lastDate: DateTime.now().add(const Duration(days: 365)),
-                      currentDate: DateTime.now(),
-                      initialDateRange: dateRange,
-                    );
-                    onDateRangeChanged(picked);
-                  },
-                  icon: const Icon(Icons.calendar_today),
-                  label: Text(
-                    dateRange == null
-                        ? 'Rango de fechas'
-                        : '${dateRange!.start.toShortDate()} - ${dateRange!.end.toShortDate()}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ),
-              TextButton(
-                onPressed: onClear,
-                child: const Text('Limpiar filtros'),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
 }
 
 class _EmptyHistory extends StatelessWidget {

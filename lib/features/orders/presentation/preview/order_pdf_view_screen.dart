@@ -7,12 +7,12 @@ import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
-import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
+import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_inline_view.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
+import 'package:sistema_compras/features/orders/presentation/preview/pdf_download_helper.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_rejection_history.dart';
-import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 
 const int _maxCorrections = 3;
 
@@ -29,7 +29,7 @@ class OrderPdfViewScreen extends ConsumerStatefulWidget {
 }
 
 class _OrderPdfViewScreenState extends ConsumerState<OrderPdfViewScreen> {
-  bool _isBusy = false;
+  bool _downloading = false;
 
   @override
   Widget build(BuildContext context) {
@@ -40,6 +40,17 @@ class _OrderPdfViewScreenState extends ConsumerState<OrderPdfViewScreen> {
         if (order == null) return const <Widget>[];
 
         return <Widget>[
+          IconButton(
+            onPressed: _downloading ? null : () => _downloadPdf(order),
+            tooltip: 'Descargar PDF',
+            icon: _downloading
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.download_outlined),
+          ),
           _PdfViewHistoryActionButton(
             order: order,
             onShowHistory: (events) => _showHistory(context, order, events),
@@ -62,8 +73,6 @@ class _OrderPdfViewScreenState extends ConsumerState<OrderPdfViewScreen> {
             return const AppSplash();
           }
 
-          final showAlmacenAction =
-              order.status == PurchaseOrderStatus.almacen;
           final isRejectedDraft = _isRejectedDraft(order);
           final maxCorrectionsReached = order.returnCount >= _maxCorrections;
           final draftRoute =
@@ -94,38 +103,6 @@ class _OrderPdfViewScreenState extends ConsumerState<OrderPdfViewScreen> {
                           ),
                   ),
                 ),
-              if (showAlmacenAction)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: _isBusy
-                              ? null
-                              : () => _handleReturnToContabilidad(order),
-                          icon: const Icon(Icons.reply_outlined),
-                          label: const Text('Regresar a contabilidad'),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: FilledButton.icon(
-                          onPressed: _isBusy
-                              ? null
-                              : () => guardedPush(
-                                    context,
-                                    '/orders/almacen/${order.id}',
-                                  ),
-                          icon: const Icon(
-                            Icons.playlist_add_check_circle_outlined,
-                          ),
-                          label: const Text('Registrar recepción'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
             ],
           );
         },
@@ -137,61 +114,6 @@ class _OrderPdfViewScreenState extends ConsumerState<OrderPdfViewScreen> {
         ),
       ),
     );
-  }
-
-  Future<void> _handleReturnToContabilidad(PurchaseOrder order) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Regresar a contabilidad'),
-        content: Text(
-          'La orden ${order.id} volverá a contabilidad y se limpiará cualquier captura de recepción en almacén.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Regresar'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-
-    setState(() => _isBusy = true);
-
-    try {
-      final actor = ref.read(currentUserProfileProvider).value;
-      if (actor == null) {
-        throw StateError('Perfil no disponible.');
-      }
-
-      final repo = ref.read(purchaseOrderRepositoryProvider);
-      await repo.returnToContabilidad(order: order, actor: actor);
-
-      if (!mounted) return;
-      guardedGo(context, '/orders/contabilidad');
-    } catch (error, stack) {
-      if (!mounted) return;
-
-      final message = reportError(
-        error,
-        stack,
-        context: 'OrderPdfViewScreen.returnToContabilidad',
-      );
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message)),
-      );
-    } finally {
-      if (mounted) {
-        setState(() => _isBusy = false);
-      }
-    }
   }
 
   void _showHistory(
@@ -218,6 +140,30 @@ class _OrderPdfViewScreenState extends ConsumerState<OrderPdfViewScreen> {
         );
       },
     );
+  }
+
+  Future<void> _downloadPdf(PurchaseOrder order) async {
+    if (_downloading) return;
+    setState(() => _downloading = true);
+    try {
+      final branding = ref.read(currentBrandingProvider);
+      final pdfData = buildPdfDataFromOrder(
+        order,
+        branding: branding,
+        suppressUpdatedAt: _isRejectedDraft(order),
+      );
+      final bytes = await buildOrderPdf(pdfData, useIsolate: false);
+      if (!mounted) return;
+      await savePdfBytes(
+        context,
+        bytes: bytes,
+        suggestedName: 'requisicion_${order.id}.pdf',
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _downloading = false);
+      }
+    }
   }
 }
 

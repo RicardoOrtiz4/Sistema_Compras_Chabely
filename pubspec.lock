@@ -308,10 +308,9 @@ packages:
   firebase_core:
     dependency: "direct main"
     description:
-      name: firebase_core
-      sha256: "7be63a3f841fc9663342f7f3a011a42aef6a61066943c90b1c434d79d5c995c5"
-      url: "https://pub.dev"
-    source: hosted
+      path: "third_party/firebase_core"
+      relative: true
+    source: path
     version: "3.15.2"
   firebase_core_platform_interface:
     dependency: transitive
@@ -473,7 +472,7 @@ packages:
     source: hosted
     version: "14.8.1"
   http:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: http
       sha256: "87721a4a50b19c7f1d49001e51409bddc46303966ce89a65af4f4e6004896412"
@@ -691,10 +690,9 @@ packages:
   pdfx:
     dependency: "direct main"
     description:
-      name: pdfx
-      sha256: "29db9b71d46bf2335e001f91693f2c3fbbf0760e4c2eb596bf4bafab211471c1"
-      url: "https://pub.dev"
-    source: hosted
+      path: "third_party/pdfx"
+      relative: true
+    source: path
     version: "2.9.2"
   petitparser:
     dependency: transitive

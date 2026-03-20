@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import 'package:sistema_compras/features/auth/data/auth_repository.dart';
 import 'package:sistema_compras/features/auth/domain/app_user.dart';
@@ -76,6 +75,8 @@ class _ProfileContentState extends State<_ProfileContent> {
             decoration: const InputDecoration(
               labelText: 'Correo para enviar PDFs',
               hintText: 'correo@ejemplo.com',
+              helperText:
+                  'Si quieres enviar o recibir avisos o PDFs de ordenes, registralo aqui.',
             ),
             keyboardType: TextInputType.emailAddress,
             enabled: !_isSaving,
@@ -139,9 +140,6 @@ class _ProfileContentState extends State<_ProfileContent> {
     setState(() => _isSigningOut = true);
     try {
       await widget.ref.read(authRepositoryProvider).signOut();
-      if (!mounted) return;
-      Navigator.of(context).pop();
-      context.go('/login');
     } catch (error, stack) {
       if (!mounted) return;
       final message = reportError(error, stack, context: 'ProfileSheet.signOut');

@@ -1,9 +1,9 @@
 import 'dart:async';
 
-import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sistema_compras/core/area_labels.dart';
+import 'package:sistema_compras/core/firebase_database_compat.dart';
 import 'package:sistema_compras/core/providers.dart';
 import 'package:sistema_compras/features/auth/domain/app_user.dart';
 
@@ -17,7 +17,7 @@ class AreaOption {
 class ProfileRepository {
   ProfileRepository(this._database);
 
-  final FirebaseDatabase _database;
+  final AppDatabase _database;
 
   Stream<AppUser?> watchProfile(String uid) {
     return _database.ref('users/$uid').onValue.map((event) {
@@ -74,7 +74,7 @@ class ProfileRepository {
     required bool add,
   }) async {
     final ref = _database.ref('users/$uid');
-    await ref.update({'updatedAt': ServerValue.timestamp});
+    await ref.update({'updatedAt': appServerTimestamp});
     final tokenKey = _encodeTokenKey(token);
     final tokenRef = ref.child('fcmTokens/$tokenKey');
     if (add) {
@@ -94,7 +94,7 @@ class ProfileRepository {
       'role': role,
       'areaId': areaId,
       'areaName': areaName,
-      'updatedAt': ServerValue.timestamp,
+      'updatedAt': appServerTimestamp,
     });
   }
 
@@ -105,7 +105,7 @@ class ProfileRepository {
     final trimmed = contactEmail.trim();
     await _database.ref('users/$uid').update({
       'contactEmail': trimmed.isEmpty ? null : trimmed,
-      'updatedAt': ServerValue.timestamp,
+      'updatedAt': appServerTimestamp,
     });
   }
 

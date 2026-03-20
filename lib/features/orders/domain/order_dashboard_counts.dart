@@ -6,7 +6,6 @@ class OrderDashboardCounts {
     required this.pendingDireccion,
     required this.pendingEta,
     required this.contabilidad,
-    required this.almacen,
     required this.rejected,
     required this.hasRemoteCounters,
   });
@@ -18,7 +17,6 @@ class OrderDashboardCounts {
     pendingDireccion: 0,
     pendingEta: 0,
     contabilidad: 0,
-    almacen: 0,
     rejected: 0,
     hasRemoteCounters: false,
   );
@@ -29,7 +27,6 @@ class OrderDashboardCounts {
   final int pendingDireccion;
   final int pendingEta;
   final int contabilidad;
-  final int almacen;
   final int rejected;
   final bool hasRemoteCounters;
 
@@ -51,7 +48,6 @@ class OrderDashboardCounts {
       pendingDireccion: _asInt(status['authorizedGerencia']),
       pendingEta: _asInt(status['paymentDone']),
       contabilidad: _asInt(status['contabilidad']),
-      almacen: _asInt(status['almacen']),
       rejected: userId == null ? 0 : _asInt(rejectedByUser[userId]),
       hasRemoteCounters: hasRemoteCounters,
     );
@@ -65,7 +61,6 @@ class OrderDashboardCounts {
       pendingDireccion: _asInt(data['pendingDireccion']),
       pendingEta: _asInt(data['pendingEta']),
       contabilidad: _asInt(data['contabilidad']),
-      almacen: _asInt(data['almacen']),
       rejected: _asInt(data['rejected']),
       hasRemoteCounters: _asBool(data['hasRemoteCounters']),
     );
@@ -79,7 +74,6 @@ class OrderDashboardCounts {
       'pendingDireccion': pendingDireccion,
       'pendingEta': pendingEta,
       'contabilidad': contabilidad,
-      'almacen': almacen,
       'rejected': rejected,
       'hasRemoteCounters': hasRemoteCounters,
     };

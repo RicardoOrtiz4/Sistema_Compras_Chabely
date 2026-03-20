@@ -1,4 +1,4 @@
-linea,noParte,descripcion,piezas,cantidad,unidad,cliente,fechaEstimada
-1,NP-001,Tornillos M8x20,200,200,pzas,Cliente A,2026-02-10
-2,NP-002,Arandela M8 zinc,200,200,pzas,Cliente A,2026-02-10
-3,NP-003,Bote de pintura 20L,4,4,pzas,Cliente B,2026-02-15
+linea,noParte,descripcion,cantidad,unidad,cliente,fechaEstimada
+1,NP-001,Tornillos M8x20,200,pzas,Cliente A,2026-02-10
+2,NP-002,Arandela M8 zinc,200,pzas,Cliente A,2026-02-10
+3,NP-003,Bote de pintura 20L,4,pzas,Cliente B,2026-02-15

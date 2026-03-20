@@ -8,7 +8,6 @@ import 'package:pdf/widgets.dart' as pw;
 
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
-import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
 
@@ -35,14 +34,13 @@ class OrderPdfData {
     this.processedByArea,
     this.direccionGeneralName,
     this.direccionGeneralArea,
-    this.almacenName,
-    this.almacenArea,
-    this.almacenComment,
+    this.urgentJustification,
     this.requestedDeliveryDate,
     this.etaDate,
     this.resubmissionDates = const [],
     this.pendingResubmissionLabel,
     this.suppressCreatedTime = false,
+    this.blankTemplate = false,
     this.cacheSalt,
   });
 
@@ -72,9 +70,7 @@ class OrderPdfData {
 
   final String? direccionGeneralName;
   final String? direccionGeneralArea;
-  final String? almacenName;
-  final String? almacenArea;
-  final String? almacenComment;
+  final String? urgentJustification;
 
   final DateTime? requestedDeliveryDate;
   final DateTime? etaDate;
@@ -82,13 +78,14 @@ class OrderPdfData {
   final List<DateTime> resubmissionDates;
   final String? pendingResubmissionLabel;
   final bool suppressCreatedTime;
+  final bool blankTemplate;
 
   // Used to bust PDF caches without affecting visual content.
   final String? cacheSalt;
 }
 
 const int defaultPdfPrefetchLimit = 3;
-const String _pdfTemplateVersion = '2026-03-13-resubmission-datetime';
+const String _pdfTemplateVersion = '2026-03-20-blank-template-v3';
 
 void warmUpPdfAssets(CompanyBranding branding) {
   _loadLogo(branding);
@@ -385,6 +382,7 @@ Future<Uint8List> _buildOrderPdfWithAssets(
           return pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.stretch,
             children: [
+              _sectionTitle('FIRMAS'),
               _buildApprovalSignatureRow(data),
             ],
           );
@@ -457,7 +455,7 @@ Future<Uint8List> _buildCotizacionPdfWithAssets(
           );
         },
         build: (context) {
-          _buildNotesSectionWidgets(data);
+          final footerSections = _buildFooterSections(data);
           return [
             pw.SizedBox(height: 8),
             _sectionTitle('DATOS DE REQUISICION'),
@@ -465,6 +463,10 @@ Future<Uint8List> _buildCotizacionPdfWithAssets(
             pw.SizedBox(height: 8),
             _sectionTitle('ARTICULOS'),
             ..._buildItemsTables(data, dateFormat),
+            if (footerSections.isNotEmpty) ...[
+              pw.SizedBox(height: 8),
+              ...footerSections,
+            ],
             pw.SizedBox(height: 12),
             _sectionTitle('FIRMAS'),
             _buildApprovalSignatureRow(data),
@@ -675,6 +677,7 @@ pw.Widget _buildSinglePageOrderLayout(
 
   bodyWidgets.addAll([
     pw.Spacer(),
+    _sectionTitle('FIRMAS'),
     _buildApprovalSignatureRow(data),
   ]);
 
@@ -690,6 +693,8 @@ pw.Widget _buildSinglePageCotizacionLayout(
   DateFormat dateFormat,
   DateFormat timeFormat,
 ) {
+  final footerSections = _buildFooterSections(data);
+
   return pw.Column(
     crossAxisAlignment: pw.CrossAxisAlignment.stretch,
     children: [
@@ -700,6 +705,10 @@ pw.Widget _buildSinglePageCotizacionLayout(
       pw.SizedBox(height: 8),
       _sectionTitle('ARTICULOS'),
       ..._buildItemsTables(data, dateFormat),
+      if (footerSections.isNotEmpty) ...[
+        pw.SizedBox(height: 8),
+        ...footerSections,
+      ],
       pw.Spacer(),
       pw.SizedBox(height: 12),
       _sectionTitle('FIRMAS'),
@@ -709,9 +718,9 @@ pw.Widget _buildSinglePageCotizacionLayout(
 }
 
 bool _shouldUseSinglePageOrderLayout(OrderPdfData data) {
+  if (data.blankTemplate) return true;
   if (data.items.length > 3) return false;
   if ((data.observations.trim()).length > 180) return false;
-  if (((data.comprasComment ?? '').trim()).length > 180) return false;
   if (data.items.any((item) {
     return item.description.trim().length > 90 ||
         item.partNumber.trim().length > 45 ||
@@ -720,11 +729,6 @@ bool _shouldUseSinglePageOrderLayout(OrderPdfData data) {
   })) {
     return false;
   }
-  final warehouseDiffs = data.items.where((item) {
-    final received = item.receivedQuantity;
-    return received != null && received != item.quantity;
-  });
-  if (warehouseDiffs.length > 2) return false;
   return true;
 }
 
@@ -760,10 +764,23 @@ pw.Widget _buildMetaSection(
   final labelStyle = pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold);
   final valueStyle = const pw.TextStyle(fontSize: 8);
 
-  final requestedDate = data.requestedDeliveryDate;
-  final showRequestedDate = requestedDate != null;
   final hasFolio = _hasText(data.folio);
-  final hasInternalOrder = _hasText(data.internalOrder);
+  final showFolioField = data.blankTemplate || hasFolio;
+  final urgentJustification = (data.urgentJustification ?? '').trim();
+  final requestedDeliveryLabel = data.blankTemplate
+      ? ''
+      : data.requestedDeliveryDate == null
+      ? null
+      : dateFormat.format(data.requestedDeliveryDate!);
+  final showRequestedDeliveryField =
+      data.blankTemplate || requestedDeliveryLabel != null;
+  final requesterName = data.blankTemplate ? '' : data.requesterName;
+  final areaName = data.blankTemplate ? '' : data.areaName;
+  final createdLabel = data.blankTemplate
+      ? ''
+      : data.suppressCreatedTime
+      ? dateFormat.format(data.createdAt)
+      : '${dateFormat.format(data.createdAt)} ${timeFormat.format(data.createdAt)}';
 
   final resubmissionLabel = _pendingResubmissionLabel(data);
 
@@ -784,7 +801,7 @@ pw.Widget _buildMetaSection(
                   children: [
                     pw.Text('NOMBRE DEL SOLICITANTE: ', style: labelStyle),
                     pw.Expanded(
-                      child: pw.Text(data.requesterName, style: valueStyle),
+                      child: pw.Text(requesterName, style: valueStyle),
                     ),
                   ],
                 ),
@@ -795,9 +812,9 @@ pw.Widget _buildMetaSection(
                 padding: const pw.EdgeInsets.all(6),
                 child: pw.Row(
                   children: [
-                    pw.Text('PROCESÓ: ', style: labelStyle),
+                    pw.Text('PROCESO: ', style: labelStyle),
                     pw.Expanded(
-                      child: pw.Text(data.areaName, style: valueStyle),
+                      child: pw.Text(areaName, style: valueStyle),
                     ),
                   ],
                 ),
@@ -806,30 +823,29 @@ pw.Widget _buildMetaSection(
               pw.Text('URGENCIA:', style: labelStyle),
               pw.SizedBox(height: 4),
               pw.Row(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
                 children: [
                   _checkBox(
-                    'BAJA',
-                    data.urgency == PurchaseOrderUrgency.baja,
-                  ),
-                  pw.SizedBox(width: 8),
-                  _checkBox(
-                    'MEDIA',
-                    data.urgency == PurchaseOrderUrgency.media,
-                  ),
-                  pw.SizedBox(width: 8),
-                  _checkBox(
-                    'ALTA',
-                    data.urgency == PurchaseOrderUrgency.alta,
+                    'NORMAL',
+                    !data.blankTemplate &&
+                    data.urgency == PurchaseOrderUrgency.normal,
                   ),
                   pw.SizedBox(width: 8),
                   _checkBox(
                     'URGENTE',
+                    !data.blankTemplate &&
                     data.urgency == PurchaseOrderUrgency.urgente,
                   ),
-                  if (showRequestedDate) ...[
-                    pw.SizedBox(width: 12),
-                    pw.Text('FECHA MÁXIMA SOLICITADA: ', style: labelStyle),
-                    pw.Text(requestedDate.toShortDate(), style: valueStyle),
+                  if (!data.blankTemplate &&
+                      data.urgency == PurchaseOrderUrgency.urgente &&
+                      urgentJustification.isNotEmpty) ...[
+                    pw.SizedBox(width: 8),
+                    pw.Expanded(
+                      child: pw.Text(
+                        'Justificacion: $urgentJustification',
+                        style: valueStyle,
+                      ),
+                    ),
                   ],
                 ],
               ),
@@ -844,7 +860,7 @@ pw.Widget _buildMetaSection(
           child: pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.stretch,
             children: [
-              if (hasFolio) ...[
+              if (showFolioField) ...[
                 pw.Row(
                   children: [
                     pw.Text('No. ', style: labelStyle),
@@ -855,26 +871,8 @@ pw.Widget _buildMetaSection(
                           horizontal: 6,
                           vertical: 4,
                         ),
-                        child: pw.Text(data.folio ?? '', style: valueStyle),
-                      ),
-                    ),
-                  ],
-                ),
-                pw.SizedBox(height: 6),
-              ],
-              if (hasInternalOrder) ...[
-                pw.Row(
-                  children: [
-                    pw.Text('OC INT. ', style: labelStyle),
-                    pw.Expanded(
-                      child: pw.Container(
-                        decoration: pw.BoxDecoration(border: border),
-                        padding: const pw.EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 4,
-                        ),
                         child: pw.Text(
-                          data.internalOrder ?? '',
+                          data.blankTemplate ? '' : (data.folio ?? ''),
                           style: valueStyle,
                         ),
                       ),
@@ -900,15 +898,13 @@ pw.Widget _buildMetaSection(
                             style: labelStyle,
                           ),
                           pw.TextSpan(
-                            text: data.suppressCreatedTime
-                                ? dateFormat.format(data.createdAt)
-                                : '${dateFormat.format(data.createdAt)} ${timeFormat.format(data.createdAt)}',
+                            text: createdLabel,
                             style: valueStyle,
                           ),
                         ],
                       ),
                     ),
-                    if (resubmissionLabel != null) ...[
+                    if (!data.blankTemplate && resubmissionLabel != null) ...[
                       pw.SizedBox(height: 2),
                       pw.Text(
                         resubmissionLabel,
@@ -919,7 +915,8 @@ pw.Widget _buildMetaSection(
                         ),
                       ),
                     ],
-                    if (data.resubmissionDates.isNotEmpty) ...[
+                    if (!data.blankTemplate &&
+                        data.resubmissionDates.isNotEmpty) ...[
                       pw.SizedBox(height: 2),
                       for (var i = 0; i < data.resubmissionDates.length; i++)
                         pw.Text(
@@ -930,6 +927,23 @@ pw.Widget _buildMetaSection(
                             fontStyle: pw.FontStyle.italic,
                           ),
                         ),
+                    ],
+                    if (showRequestedDeliveryField) ...[
+                      pw.SizedBox(height: 4),
+                      pw.RichText(
+                        text: pw.TextSpan(
+                          children: [
+                            pw.TextSpan(
+                              text: 'FECHA REQUERIDA: ',
+                              style: labelStyle,
+                            ),
+                            pw.TextSpan(
+                              text: requestedDeliveryLabel,
+                              style: valueStyle,
+                            ),
+                          ],
+                        ),
+                      ),
                     ],
                   ],
                 ),
@@ -982,12 +996,21 @@ pw.Widget _buildItemsTable(
   final etaLabel = data.etaDate == null ? '' : dateFormat.format(data.etaDate!);
   final items = _sortItemsForPdf(itemsOverride ?? data.items);
 
-  final hasPartNumber = items.any((item) => _hasText(item.partNumber));
-  final hasCustomer = items.any((item) => _hasText(item.customer));
+  final hasPartNumber =
+      data.blankTemplate || items.any((item) => _hasText(item.partNumber));
+  final hasCustomer =
+      data.blankTemplate || items.any((item) => _hasText(item.customer));
+  final hasInternalOrder =
+      data.blankTemplate ||
+      _hasText(data.internalOrder) ||
+      items.any((item) => _hasText(item.internalOrder));
   final hasSupplier =
-      _hasText(data.supplier) || items.any((item) => _hasText(item.supplier));
-  final hasEta = data.etaDate != null;
-  final showCostColumn = showCost;
+      data.blankTemplate ||
+      _hasText(data.supplier) ||
+      items.any((item) => _hasText(item.supplier));
+  final hasEta = data.blankTemplate || data.etaDate != null;
+  final showCostColumn = data.blankTemplate || showCost;
+  final blankTemplateRowCount = data.blankTemplate ? 12 : 0;
 
   final columns = <_PdfColumn>[
     _PdfColumn(
@@ -1019,6 +1042,12 @@ pw.Widget _buildItemsTable(
       alignment: pw.Alignment.center,
       value: (item) => item.unit,
     ),
+    if (hasInternalOrder)
+      _PdfColumn(
+        label: 'OC INTERNA',
+        width: 1.0,
+        value: (item) => (item.internalOrder ?? data.internalOrder ?? '').trim(),
+      ),
     if (hasSupplier)
       _PdfColumn(
         label: 'PROVEEDOR',
@@ -1056,19 +1085,37 @@ pw.Widget _buildItemsTable(
     ),
   ];
 
-  for (final item in items) {
-    rows.add(
-      pw.TableRow(
-        children: [
-          for (final column in columns)
-            _bodyCell(
-              column.value(item),
-              bodyStyle,
-              alignment: column.alignment,
-            ),
-        ],
-      ),
-    );
+  if (data.blankTemplate) {
+    for (var i = 0; i < blankTemplateRowCount; i++) {
+      rows.add(
+        pw.TableRow(
+          children: [
+            for (final column in columns)
+              _bodyCell(
+                '',
+                bodyStyle,
+                alignment: column.alignment,
+                minHeight: 18,
+              ),
+          ],
+        ),
+      );
+    }
+  } else {
+    for (final item in items) {
+      rows.add(
+        pw.TableRow(
+          children: [
+            for (final column in columns)
+              _bodyCell(
+                column.value(item),
+                bodyStyle,
+                alignment: column.alignment,
+              ),
+          ],
+        ),
+      );
+    }
   }
 
   final columnWidths = <int, pw.TableColumnWidth>{
@@ -1196,9 +1243,13 @@ pw.Widget _bodyCell(
   pw.TextStyle style, {
   pw.Alignment alignment = pw.Alignment.centerLeft,
   int maxLines = 2,
+  double? minHeight,
 }) {
   return pw.Container(
     padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+    constraints: minHeight == null
+        ? null
+        : pw.BoxConstraints(minHeight: minHeight),
     alignment: alignment,
     child: pw.Text(text, style: style, maxLines: maxLines),
   );
@@ -1252,7 +1303,8 @@ String _formatResubmissionStampPdf(
 String _autorizaName(OrderPdfData data) {
   final direccion = (data.direccionGeneralName ?? '').trim();
   if (direccion.isNotEmpty) return direccion;
-  return (data.comprasReviewerName ?? '').trim();
+  final compras = (data.comprasReviewerName ?? '').trim();
+  return compras;
 }
 
 String _procesoName(OrderPdfData data) {
@@ -1272,47 +1324,30 @@ String? _autorizaArea(OrderPdfData data) {
   return comprasArea.isEmpty ? null : comprasArea;
 }
 
-
-
-
-List<pw.Widget> _buildNotesSectionWidgets(OrderPdfData data) {
-  final notes = <pw.Widget>[];
-  final hasObservations = data.observations.trim().isNotEmpty;
-  final comprasText = _composeComprasText(data);
-
-  if (hasObservations) {
-    notes.addAll(
-      _buildTextSection(
-        'OBSERVACIONES',
-        data.observations,
-        labelStyle: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
-        valueStyle: const pw.TextStyle(fontSize: 8),
+pw.Widget _buildBlankTextSection(
+  String title, {
+  required double height,
+}) {
+  return pw.Column(
+    crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+    children: [
+      pw.Container(
+        width: double.infinity,
+        color: PdfColors.grey300,
+        padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: pw.Text(
+          title,
+          style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
+        ),
       ),
-    );
-  }
-
-  if (comprasText.trim().isNotEmpty) {
-    if (notes.isNotEmpty) {
-      notes.add(pw.SizedBox(height: 6));
-    }
-    notes.addAll(
-      _buildTextSection(
-        'REVISIÓN DEL ÁREA DE COMPRAS',
-        comprasText,
-        labelStyle: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
-        valueStyle: const pw.TextStyle(fontSize: 8),
+      pw.Container(
+        height: height,
+        decoration: pw.BoxDecoration(
+          border: pw.Border.all(width: 0.8, color: PdfColors.grey700),
+        ),
       ),
-    );
-  }
-
-  return notes;
-}
-
-
-String _composeComprasText(OrderPdfData data) {
-  final comment = (data.comprasComment ?? '').trim();
-  if (comment.isEmpty) return '';
-  return comment;
+    ],
+  );
 }
 
 List<pw.Widget> _buildTextSection(
@@ -1382,12 +1417,6 @@ pw.Widget _buildApprovalSignatureRow(OrderPdfData data) {
       area: _autorizaArea(data),
       areaInTitle: true,
     ),
-    _signatureBox(
-      label: 'RECIBIÓ',
-      name: (data.almacenName ?? '').trim(),
-      area: data.almacenArea,
-      areaInTitle: true,
-    ),
   ];
 
   return pw.Row(
@@ -1406,9 +1435,20 @@ List<pw.Widget> _buildFooterSections(OrderPdfData data) {
   final sections = <pw.Widget>[];
 
   final hasObservations = data.observations.trim().isNotEmpty;
-  final comprasText = _composeComprasText(data);
+
+  if (data.blankTemplate) {
+    sections.add(
+      _buildBlankTextSection(
+        'OBSERVACIONES',
+        height: 56,
+      ),
+    );
+  }
 
   if (hasObservations) {
+    if (sections.isNotEmpty) {
+      sections.add(pw.SizedBox(height: 6));
+    }
     sections.addAll(
       _buildTextSection(
         'OBSERVACIONES',
@@ -1417,28 +1457,6 @@ List<pw.Widget> _buildFooterSections(OrderPdfData data) {
         valueStyle: const pw.TextStyle(fontSize: 8),
       ),
     );
-  }
-
-  if (comprasText.trim().isNotEmpty) {
-    if (sections.isNotEmpty) {
-      sections.add(pw.SizedBox(height: 6));
-    }
-    sections.addAll(
-      _buildTextSection(
-        'REVISIÓN DEL ÁREA DE COMPRAS',
-        comprasText,
-        labelStyle: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
-        valueStyle: const pw.TextStyle(fontSize: 8),
-      ),
-    );
-  }
-
-  final warehouseSections = _buildWarehouseReceptionSection(data);
-  if (warehouseSections.isNotEmpty) {
-    if (sections.isNotEmpty) {
-      sections.add(pw.SizedBox(height: 6));
-    }
-    sections.addAll(warehouseSections);
   }
 
   return sections;
@@ -1457,214 +1475,6 @@ void _logPdfTiming(
       : 'draft-${data.items.length}';
   final isolateLabel = useIsolate == null ? '' : ' isolate=$useIsolate';
   debugPrint('[PDF] $stage ${elapsed.inMilliseconds}ms key=$label$isolateLabel');
-}
-
-List<pw.Widget> _buildWarehouseReceptionSection(OrderPdfData data) {
-  final receivedItems = data.items
-      .where((item) => item.receivedQuantity != null)
-      .toList(growable: false);
-  if (receivedItems.isEmpty) return const [];
-
-  final diffs = receivedItems
-      .map(_WarehousePdfDiff.fromItem)
-      .whereType<_WarehousePdfDiff>()
-      .toList(growable: false);
-
-  final widgets = <pw.Widget>[
-    pw.Container(
-      width: double.infinity,
-      color: PdfColors.grey300,
-      padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      child: pw.Text(
-        'RECEPCION EN ALMACEN',
-        style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold),
-      ),
-    ),
-  ];
-
-  final warehouseLines = <String>[];
-  final warehouseName = (data.almacenName ?? '').trim();
-  if (warehouseName.isNotEmpty) {
-    final area = (data.almacenArea ?? '').trim();
-    warehouseLines.add(
-      area.isEmpty ? 'Registrado por: $warehouseName' : 'Registrado por: $warehouseName ($area)',
-    );
-  }
-  final warehouseComment = (data.almacenComment ?? '').trim();
-  if (warehouseComment.isNotEmpty) {
-    warehouseLines.add('Nota: $warehouseComment');
-  }
-  if (diffs.isNotEmpty) {
-    warehouseLines.add('Nota de descuadre: la recepcion no coincide con lo solicitado.');
-  }
-
-  if (warehouseLines.isNotEmpty) {
-    widgets.add(
-      pw.Padding(
-        padding: const pw.EdgeInsets.fromLTRB(6, 4, 6, 2),
-        child: pw.Column(
-          crossAxisAlignment: pw.CrossAxisAlignment.start,
-          children: [
-            for (final line in warehouseLines)
-              pw.Padding(
-                padding: const pw.EdgeInsets.only(bottom: 2),
-                child: pw.Text(line, style: const pw.TextStyle(fontSize: 8)),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  if (diffs.isEmpty) {
-    widgets.add(
-      pw.Padding(
-        padding: const pw.EdgeInsets.fromLTRB(6, 4, 6, 4),
-        child: pw.Text(
-          'Recepcion completa sin descuadre.',
-          style: const pw.TextStyle(fontSize: 8),
-        ),
-      ),
-    );
-    return widgets;
-  }
-
-  widgets.add(
-    pw.Container(
-      width: double.infinity,
-      margin: const pw.EdgeInsets.fromLTRB(6, 4, 6, 6),
-      padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      decoration: pw.BoxDecoration(
-        color: PdfColors.red100,
-        border: pw.Border.all(color: PdfColors.red700, width: 0.8),
-      ),
-      child: pw.Column(
-        crossAxisAlignment: pw.CrossAxisAlignment.start,
-        children: [
-          pw.Text(
-            'DESCUADRE DETECTADO EN RECEPCION',
-            style: pw.TextStyle(
-              fontSize: 8,
-              fontWeight: pw.FontWeight.bold,
-              color: PdfColors.red900,
-            ),
-          ),
-          pw.SizedBox(height: 2),
-          pw.Text(
-            'La orden fue finalizada con diferencias entre lo solicitado y lo recibido.',
-            style: pw.TextStyle(fontSize: 7, color: PdfColors.red900),
-          ),
-        ],
-      ),
-    ),
-  );
-
-  widgets.add(
-    pw.Table(
-      border: pw.TableBorder.all(color: PdfColors.grey500, width: 0.6),
-      columnWidths: const {
-        0: pw.FlexColumnWidth(4),
-        1: pw.FlexColumnWidth(1.4),
-        2: pw.FlexColumnWidth(1.4),
-        3: pw.FlexColumnWidth(1.4),
-      },
-      children: [
-        pw.TableRow(
-          decoration: const pw.BoxDecoration(color: PdfColors.grey200),
-          children: [
-            _warehouseHeaderCell('ARTICULO'),
-            _warehouseHeaderCell('SOLICITADO'),
-            _warehouseHeaderCell('RECIBIDO'),
-            _warehouseHeaderCell('DIF.'),
-          ],
-        ),
-        for (final diff in diffs)
-          pw.TableRow(
-            children: [
-              _warehouseBodyCell(diff.title, alignment: pw.Alignment.centerLeft),
-              _warehouseBodyCell(diff.requestedLabel),
-              _warehouseBodyCell(diff.receivedLabel),
-              _warehouseBodyCell(diff.deltaLabel),
-            ],
-          ),
-      ],
-    ),
-  );
-
-  return widgets;
-}
-
-pw.Widget _warehouseHeaderCell(String text) {
-  return pw.Padding(
-    padding: const pw.EdgeInsets.all(4),
-    child: pw.Text(
-      text,
-      textAlign: pw.TextAlign.center,
-      style: pw.TextStyle(fontSize: 7, fontWeight: pw.FontWeight.bold),
-    ),
-  );
-}
-
-pw.Widget _warehouseBodyCell(
-  String text, {
-  pw.Alignment alignment = pw.Alignment.center,
-}) {
-  return pw.Container(
-    alignment: alignment,
-    padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 3),
-    child: pw.Text(
-      text.isEmpty ? '-' : text,
-      style: const pw.TextStyle(fontSize: 7),
-    ),
-  );
-}
-
-class _WarehousePdfDiff {
-  const _WarehousePdfDiff({
-    required this.title,
-    required this.requestedLabel,
-    required this.receivedLabel,
-    required this.deltaLabel,
-  });
-
-  final String title;
-  final String requestedLabel;
-  final String receivedLabel;
-  final String deltaLabel;
-
-  static _WarehousePdfDiff? fromItem(OrderItemDraft item) {
-    final received = item.receivedQuantity;
-    if (received == null) return null;
-
-    final delta = received - item.quantity;
-    if (delta == 0) return null;
-
-    final description = item.description.trim().isEmpty
-        ? 'Item ${item.line}'
-        : 'Item ${item.line}: ${item.description.trim()}';
-    final unit = item.unit.trim();
-
-    String withUnit(num value) {
-      final base = _formatPdfWarehouseNumber(value);
-      return unit.isEmpty ? base : '$base $unit';
-    }
-
-    final deltaBase = _formatPdfWarehouseNumber(delta);
-    final deltaLabel = delta > 0 ? '+$deltaBase${unit.isEmpty ? '' : ' $unit'}' : withUnit(delta);
-
-    return _WarehousePdfDiff(
-      title: description,
-      requestedLabel: withUnit(item.quantity),
-      receivedLabel: withUnit(received),
-      deltaLabel: deltaLabel,
-    );
-  }
-}
-
-String _formatPdfWarehouseNumber(num value) {
-  final asInt = value.toInt();
-  if (value == asInt) return asInt.toString();
-  return value.toString();
 }
 
 Map<String, num> _normalizedBudgets(Map<String, num> raw) {
@@ -1825,6 +1635,8 @@ String _pdfCacheKey(OrderPdfData data, PdfPageFormat? format) {
     ..write(data.createdAt.millisecondsSinceEpoch)
     ..write(';suppressCreatedTime:')
     ..write(data.suppressCreatedTime ? '1' : '0')
+    ..write(';blankTemplate:')
+    ..write(data.blankTemplate ? '1' : '0')
     ..write(';obs:')
     ..write(data.observations)
     ..write(';supplier:')
@@ -1862,12 +1674,8 @@ String _pdfCacheKey(OrderPdfData data, PdfPageFormat? format) {
     ..write(data.direccionGeneralName ?? '')
     ..write('|')
     ..write(data.direccionGeneralArea ?? '')
-    ..write(';alm:')
-    ..write(data.almacenName ?? '')
-    ..write('|')
-    ..write(data.almacenArea ?? '')
-    ..write('|')
-    ..write(data.almacenComment ?? '')
+    ..write(';urgentJustification:')
+    ..write(data.urgentJustification ?? '')
     ..write(';reqDate:')
     ..write(data.requestedDeliveryDate?.millisecondsSinceEpoch.toString() ?? '')
     ..write(';eta:')
@@ -1896,6 +1704,8 @@ String _pdfCacheKey(OrderPdfData data, PdfPageFormat? format) {
       ..write(item.unit)
       ..write('|')
       ..write(item.customer ?? '')
+      ..write('|')
+      ..write(item.internalOrder ?? '')
       ..write('|')
       ..write(item.supplier ?? '')
       ..write('|')
@@ -2107,7 +1917,7 @@ OrderPdfData _buildPdfWarmupData(CompanyBranding branding) {
     requesterName: 'CACHE',
     requesterArea: 'CACHE',
     areaName: 'CACHE',
-    urgency: PurchaseOrderUrgency.media,
+    urgency: PurchaseOrderUrgency.normal,
     items: const [
       OrderItemDraft(
         line: 1,
@@ -2120,7 +1930,6 @@ OrderPdfData _buildPdfWarmupData(CompanyBranding branding) {
     ],
     createdAt: now,
     observations: 'Warmup session template',
-    requestedDeliveryDate: now.add(const Duration(days: 7)),
     cacheSalt: '__pdf-template-warmup__',
   );
 }
@@ -2190,9 +1999,7 @@ OrderPdfData _sanitizePdfData(OrderPdfData data) {
     processedByArea: _sanitizePdfOptional(data.processedByArea),
     direccionGeneralName: _sanitizePdfOptional(data.direccionGeneralName),
     direccionGeneralArea: _sanitizePdfOptional(data.direccionGeneralArea),
-    almacenName: _sanitizePdfOptional(data.almacenName),
-    almacenArea: _sanitizePdfOptional(data.almacenArea),
-    almacenComment: _sanitizePdfOptional(data.almacenComment),
+    urgentJustification: _sanitizePdfOptional(data.urgentJustification),
     requestedDeliveryDate: data.requestedDeliveryDate,
     etaDate: data.etaDate,
     resubmissionDates: data.resubmissionDates,
@@ -2200,6 +2007,7 @@ OrderPdfData _sanitizePdfData(OrderPdfData data) {
       data.pendingResubmissionLabel,
     ),
     suppressCreatedTime: data.suppressCreatedTime,
+    blankTemplate: data.blankTemplate,
     cacheSalt: data.cacheSalt,
   );
 }
@@ -2213,6 +2021,7 @@ OrderItemDraft _sanitizePdfItem(OrderItemDraft item) {
     quantity: item.quantity,
     unit: _sanitizePdfTableText(item.unit),
     customer: _sanitizePdfOptionalTable(item.customer),
+    internalOrder: _sanitizePdfOptionalTable(item.internalOrder),
     supplier: _sanitizePdfOptionalTable(item.supplier),
     budget: item.budget,
     estimatedDate: item.estimatedDate,
@@ -2345,6 +2154,7 @@ Map<String, dynamic> _serializePdfPayload(
             'quantity': item.quantity,
             'unit': item.unit,
             'customer': item.customer,
+            'internalOrder': item.internalOrder,
             'supplier': item.supplier,
             'budget': item.budget,
             'estimatedDate': item.estimatedDate?.millisecondsSinceEpoch,
@@ -2358,6 +2168,7 @@ Map<String, dynamic> _serializePdfPayload(
     'createdAt': data.createdAt.millisecondsSinceEpoch,
     'updatedAt': data.updatedAt?.millisecondsSinceEpoch,
     'suppressCreatedTime': data.suppressCreatedTime,
+    'blankTemplate': data.blankTemplate,
     'observations': data.observations,
     'folio': data.folio,
     'supplier': data.supplier,
@@ -2371,9 +2182,7 @@ Map<String, dynamic> _serializePdfPayload(
     'processedByArea': data.processedByArea,
     'direccionGeneralName': data.direccionGeneralName,
     'direccionGeneralArea': data.direccionGeneralArea,
-    'almacenName': data.almacenName,
-    'almacenArea': data.almacenArea,
-    'almacenComment': data.almacenComment,
+    'urgentJustification': data.urgentJustification,
     'requestedDeliveryDate': data.requestedDeliveryDate?.millisecondsSinceEpoch,
     'etaDate': data.etaDate?.millisecondsSinceEpoch,
     'pendingResubmissionLabel': data.pendingResubmissionLabel,
@@ -2468,6 +2277,7 @@ OrderPdfData _deserializeOrderPdfData(
             quantity: (raw['quantity'] as num?) ?? 0,
             unit: (raw['unit'] as String?) ?? '',
             customer: raw['customer'] as String?,
+            internalOrder: raw['internalOrder'] as String?,
             supplier: raw['supplier'] as String?,
             budget: raw['budget'] as num?,
             estimatedDate: _parseMillis(raw['estimatedDate']),
@@ -2491,6 +2301,7 @@ OrderPdfData _deserializeOrderPdfData(
     createdAt: _parseMillis(payload['createdAt']) ?? DateTime.now(),
     updatedAt: _parseMillis(payload['updatedAt']),
     suppressCreatedTime: (payload['suppressCreatedTime'] as bool?) ?? false,
+    blankTemplate: (payload['blankTemplate'] as bool?) ?? false,
     observations: (payload['observations'] as String?) ?? '',
     folio: payload['folio'] as String?,
     supplier: payload['supplier'] as String?,
@@ -2504,9 +2315,7 @@ OrderPdfData _deserializeOrderPdfData(
     processedByArea: payload['processedByArea'] as String?,
     direccionGeneralName: payload['direccionGeneralName'] as String?,
     direccionGeneralArea: payload['direccionGeneralArea'] as String?,
-    almacenName: payload['almacenName'] as String?,
-    almacenArea: payload['almacenArea'] as String?,
-    almacenComment: payload['almacenComment'] as String?,
+    urgentJustification: payload['urgentJustification'] as String?,
     requestedDeliveryDate: _parseMillis(payload['requestedDeliveryDate']),
     etaDate: _parseMillis(payload['etaDate']),
     pendingResubmissionLabel: payload['pendingResubmissionLabel'] as String?,
@@ -2516,10 +2325,10 @@ OrderPdfData _deserializeOrderPdfData(
 }
 
 PurchaseOrderUrgency _urgencyFromName(String? raw) {
-  if (raw == null) return PurchaseOrderUrgency.media;
+  if (raw == null) return PurchaseOrderUrgency.normal;
   return PurchaseOrderUrgency.values.firstWhere(
     (e) => e.name == raw,
-    orElse: () => PurchaseOrderUrgency.media,
+    orElse: () => PurchaseOrderUrgency.normal,
   );
 }
 

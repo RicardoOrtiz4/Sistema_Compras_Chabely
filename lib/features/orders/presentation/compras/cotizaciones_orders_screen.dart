@@ -20,14 +20,16 @@ import 'package:sistema_compras/features/orders/application/create_order_control
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
-import 'package:sistema_compras/features/orders/domain/shared_quote.dart';
+import 'package:sistema_compras/features/orders/domain/supplier_quote.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_inline_view.dart';
-import 'package:sistema_compras/features/orders/presentation/compras/cotizaciones_dashboard_screen.dart';
+import 'package:sistema_compras/features/orders/presentation/compras/supplier_quotes_dashboard_screen.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_pdf_preload_gate.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_rejection_history.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_search.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_status_duration.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_urgency_controls.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_csv_export.dart';
 import 'package:sistema_compras/features/partners/data/partner_repository.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
@@ -54,9 +56,12 @@ class _CotizacionesOrdersScreenState
   final OrderSearchCache _searchCache = OrderSearchCache();
   Timer? _searchDebounce;
   String _searchQuery = '';
+  OrderUrgencyFilter _urgencyFilter = OrderUrgencyFilter.all;
+  DateTimeRange? _createdDateRangeFilter;
   int _limit = defaultOrderPageSize;
   late final int _initialTabIndex;
   late bool _dashboardActivated;
+  late int _activeTabIndex;
 
   @override
   void initState() {
@@ -66,6 +71,7 @@ class _CotizacionesOrdersScreenState
         ? 0
         : (widget.initialTab > 1 ? 1 : widget.initialTab);
     _dashboardActivated = _initialTabIndex == 1;
+    _activeTabIndex = _initialTabIndex;
     _tabController = TabController(
       length: 2,
       vsync: this,
@@ -84,8 +90,16 @@ class _CotizacionesOrdersScreenState
   }
 
   void _handleTabChange() {
-    if (_tabController.index != 1 || _dashboardActivated) return;
-    setState(() => _dashboardActivated = true);
+    final nextIndex = _tabController.index;
+    if (nextIndex == _activeTabIndex && (nextIndex != 1 || _dashboardActivated)) {
+      return;
+    }
+    setState(() {
+      _activeTabIndex = nextIndex;
+      if (nextIndex == 1) {
+        _dashboardActivated = true;
+      }
+    });
   }
 
   void _updateSearch(String value) {
@@ -102,6 +116,40 @@ class _CotizacionesOrdersScreenState
     _searchDebounce = null;
     _searchController.clear();
     setState(() => _searchQuery = '');
+  }
+
+  void _setUrgencyFilter(OrderUrgencyFilter filter) {
+    setState(() {
+      _urgencyFilter = filter;
+      _limit = defaultOrderPageSize;
+    });
+  }
+
+  Future<void> _pickCreatedDateFilter() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(1900, 1, 1),
+      lastDate: DateTime(2100, 12, 31),
+      currentDate: now,
+      initialDateRange: _createdDateRangeFilter,
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _createdDateRangeFilter = DateTimeRange(
+        start: DateTime(picked.start.year, picked.start.month, picked.start.day),
+        end: DateTime(picked.end.year, picked.end.month, picked.end.day),
+      );
+      _limit = defaultOrderPageSize;
+    });
+  }
+
+  void _clearCreatedDateFilter() {
+    if (_createdDateRangeFilter == null) return;
+    setState(() {
+      _createdDateRangeFilter = null;
+      _limit = defaultOrderPageSize;
+    });
   }
 
   void _loadMore() {
@@ -121,9 +169,26 @@ class _CotizacionesOrdersScreenState
 
   @override
   Widget build(BuildContext context) {
+    final pendingOrdersAsync = ref.watch(cotizacionesOrdersProvider);
+    final compactAppBar = useCompactOrderModuleAppBar(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Cotizaciones'),
+        title: _activeTabIndex == 0
+            ? pendingOrdersAsync.when(
+                data: (orders) {
+                  return compactAppBar
+                      ? const Text('Cotizaciones')
+                      : OrderModuleAppBarTitle(
+                          title: 'Cotizaciones',
+                          counts: OrderUrgencyCounts.fromOrders(orders),
+                          filter: _urgencyFilter,
+                          onSelected: _setUrgencyFilter,
+                        );
+                },
+                loading: () => const Text('Cotizaciones'),
+                error: (_, __) => const Text('Cotizaciones'),
+              )
+            : const Text('Dashboard de cotizaciones'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () {
@@ -134,7 +199,28 @@ class _CotizacionesOrdersScreenState
             }
           },
         ),
-        bottom: _CotizacionesTabBar(controller: _tabController),
+        bottom: PreferredSize(
+          preferredSize: Size.fromHeight(
+            (compactAppBar && _activeTabIndex == 0 ? 60 : 0) + kTextTabBarHeight,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (compactAppBar && _activeTabIndex == 0)
+                pendingOrdersAsync.maybeWhen(
+                  data: (orders) {
+                    return OrderModuleAppBarBottom(
+                      counts: OrderUrgencyCounts.fromOrders(orders),
+                      filter: _urgencyFilter,
+                      onSelected: _setUrgencyFilter,
+                    );
+                  },
+                  orElse: () => const SizedBox.shrink(),
+                ),
+              _CotizacionesTabBar(controller: _tabController),
+            ],
+          ),
+        ),
       ),
       body: TabBarView(
         controller: _tabController,
@@ -155,9 +241,6 @@ class _CotizacionesOrdersScreenState
     final ordersAsync = ref.watch(cotizacionesOrdersProvider);
     return ordersAsync.when(
       data: (orders) {
-        if (orders.isEmpty) {
-          return const Center(child: Text('No hay ordenes en cotizaciones.'));
-        }
 
         _searchCache.retainFor(orders);
         final filteredOrders = _resolveVisibleOrders(orders);
@@ -168,20 +251,49 @@ class _CotizacionesOrdersScreenState
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-              child: TextField(
-                controller: _searchController,
-                decoration: InputDecoration(
-                  labelText:
-                      'Buscar por folio (000001), solicitante, cliente, fecha...',
-                  prefixIcon: const Icon(Icons.search),
-                  suffixIcon: _searchQuery.isEmpty
-                      ? null
-                      : IconButton(
-                          icon: const Icon(Icons.clear),
-                          onPressed: _clearSearch,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final isNarrow = constraints.maxWidth < 720;
+                  final searchField = TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      labelText: 'Buscar por folio (000001), solicitante, cliente...',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _searchQuery.isEmpty
+                          ? null
+                          : IconButton(
+                              icon: const Icon(Icons.clear),
+                              onPressed: _clearSearch,
+                            ),
+                    ),
+                    onChanged: _updateSearch,
+                  );
+                  final dateFilter = OrderDateRangeFilterButton(
+                    selectedRange: _createdDateRangeFilter,
+                    onPickDate: _pickCreatedDateFilter,
+                    onClearDate: _clearCreatedDateFilter,
+                  );
+                  if (isNarrow) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        searchField,
+                        const SizedBox(height: 12),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: dateFilter,
                         ),
-                ),
-                onChanged: _updateSearch,
+                      ],
+                    );
+                  }
+                  return Row(
+                    children: [
+                      Expanded(child: searchField),
+                      const SizedBox(width: 12),
+                      dateFilter,
+                    ],
+                  );
+                },
               ),
             ),
             const SizedBox(height: 12),
@@ -219,6 +331,7 @@ class _CotizacionesOrdersScreenState
                         return _CotizacionOrderCard(
                           order: order,
                           onPreview: () => _openOrderPreview(order.id),
+                          onDownloadCsv: () => exportOrderCsv(context, order),
                         );
                       },
                     ),
@@ -250,7 +363,7 @@ class _CotizacionesOrdersScreenState
     }
 
     final trimmedQuery = _searchQuery.trim();
-    final pendingOnly = orders.where((order) => order.cotizacionReady != true);
+    final pendingOnly = orders;
     final resolved = trimmedQuery.isEmpty
         ? pendingOnly.toList(growable: false)
         : pendingOnly
@@ -259,18 +372,27 @@ class _CotizacionesOrdersScreenState
                   order,
                   trimmedQuery,
                   cache: _searchCache,
+                  includeDates: false,
                 ),
               )
               .toList(growable: false);
+    final dateFiltered = resolved
+        .where((order) => matchesOrderCreatedDateRange(order, _createdDateRangeFilter))
+        .toList(growable: false);
+    final urgencyFiltered = dateFiltered
+        .where((order) => matchesOrderUrgencyFilter(order, _urgencyFilter))
+        .toList(growable: false);
     _cachedSourceOrders = orders;
     _cachedVisibleKey = key;
-    _cachedVisibleOrders = resolved;
-    return resolved;
+    _cachedVisibleOrders = urgencyFiltered;
+    return urgencyFiltered;
   }
 
   String _visibleOrdersKey() {
     final trimmedQuery = _searchQuery.trim().toLowerCase();
-    return trimmedQuery.isEmpty ? '$trimmedQuery|$_limit' : trimmedQuery;
+    return '$trimmedQuery|${_urgencyFilter.name}|'
+        '${_createdDateRangeFilter?.start.millisecondsSinceEpoch ?? ''}|'
+        '${_createdDateRangeFilter?.end.millisecondsSinceEpoch ?? ''}';
   }
 }
 
@@ -286,31 +408,24 @@ class _CotizacionesTabBar extends ConsumerWidget
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final ordersAsync = ref.watch(cotizacionesOrdersProvider);
-    final allOrdersAsync = ref.watch(comprasDashboardAllOrdersProvider);
-    final bundlesAsync = ref.watch(sharedQuotesProvider);
+    final dashboardOrdersAsync = ref.watch(dataCompleteOrdersProvider);
+    final quotesAsync = ref.watch(supplierQuotesProvider);
     final scheme = Theme.of(context).colorScheme;
     final orders = ordersAsync.valueOrNull ?? const <PurchaseOrder>[];
-    final allOrders = allOrdersAsync.valueOrNull ?? orders;
-    final bundles = bundlesAsync.valueOrNull ?? const <SharedQuote>[];
-    var pendingCount = 0;
-    var dashboardCount = 0;
-    for (final order in orders) {
-      if (order.cotizacionReady == true) {
-        dashboardCount += 1;
-      } else {
-        pendingCount += 1;
-      }
-    }
-    final ordersById = {for (final order in allOrders) order.id: order};
-    final rejectedBundleCount = bundles
+    final dashboardOrders =
+        dashboardOrdersAsync.valueOrNull ?? const <PurchaseOrder>[];
+    final quotes = quotesAsync.valueOrNull ?? const [];
+    final pendingCount = orders.length;
+    final dashboardPendingCount =
+        dashboardOrders.where(_orderNeedsQuoteBatch).length;
+    final activeQuotesCount = quotes
         .where(
-          (bundle) =>
-              bundle.needsUpdate &&
-              bundle.rejectedOrderIds.isNotEmpty &&
-              bundle.orderIds.any(ordersById.containsKey),
+          (quote) =>
+              quote.status == SupplierQuoteStatus.draft ||
+              quote.status == SupplierQuoteStatus.rejected,
         )
         .length;
-    dashboardCount += rejectedBundleCount;
+    final dashboardCount = dashboardPendingCount + activeQuotesCount;
 
     return TabBar(
       controller: controller,
@@ -334,15 +449,34 @@ class _CotizacionesTabBar extends ConsumerWidget
   }
 }
 
+bool _orderNeedsQuoteBatch(PurchaseOrder order) {
+  if (order.items.isEmpty) return false;
+  return order.items.any((item) {
+    final supplier = (item.supplier ?? '').trim();
+    final budget = item.budget ?? 0;
+    final missingAssignment = supplier.isEmpty || budget <= 0;
+    final missingQuote =
+        item.quoteId == null ||
+        item.quoteStatus == PurchaseOrderItemQuoteStatus.rejected;
+    return missingAssignment || missingQuote;
+  });
+}
+
 class _CotizacionOrderCard extends StatelessWidget {
-  const _CotizacionOrderCard({required this.order, required this.onPreview});
+  const _CotizacionOrderCard({
+    required this.order,
+    required this.onPreview,
+    required this.onDownloadCsv,
+  });
 
   final PurchaseOrder order;
   final VoidCallback onPreview;
+  final VoidCallback onDownloadCsv;
 
   @override
   Widget build(BuildContext context) {
     final createdLabel = order.createdAt?.toFullDateTime() ?? 'Pendiente';
+    final urgentJustification = (order.urgentJustification ?? '').trim();
 
     final returnCount = order.returnCount;
     final wasReturned =
@@ -363,6 +497,15 @@ class _CotizacionOrderCard extends StatelessWidget {
               children: [
                 _FolioPill(folio: order.id),
                 _UrgencyPill(urgency: order.urgency),
+                if (order.urgency == PurchaseOrderUrgency.urgente &&
+                    urgentJustification.isNotEmpty)
+                  Text(
+                    urgentJustification,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Colors.red.shade900,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 if (wasReturned)
                   Container(
                     padding: const EdgeInsets.symmetric(
@@ -386,8 +529,7 @@ class _CotizacionOrderCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
-            Text('Solicitante: ${order.requesterName}'),
-            Text('Área: ${order.areaName}'),
+            Text('Solicitante / Area: ${order.requesterName} | ${order.areaName}'),
             Text('Creada: $createdLabel'),
             const SizedBox(height: 8),
             if (resubmissions.isNotEmpty)
@@ -396,12 +538,26 @@ class _CotizacionOrderCard extends StatelessWidget {
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             const SizedBox(height: 6),
-            if (wasReturned) _CotizacionPendingTimePill(orderId: order.id),
+            _CotizacionPendingTimePill(orderId: order.id),
             const SizedBox(height: 12),
-            OutlinedButton.icon(
-              onPressed: onPreview,
-              icon: const Icon(Icons.picture_as_pdf_outlined),
-              label: const Text('Revisar PDF'),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: onPreview,
+                    icon: const Icon(Icons.picture_as_pdf_outlined),
+                    label: const Text('Revisar PDF'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: onDownloadCsv,
+                    icon: const Icon(Icons.download_outlined),
+                    label: const Text('Descargar CSV'),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -618,6 +774,10 @@ class _CotizacionOrderPreviewScreenState
                   builder: (_, constraints) {
                     final completeButton = FilledButton(
                       onPressed: () async {
+                        final shouldContinue = await _confirmOpenCompleteData(
+                          screenContext,
+                        );
+                        if (!mounted || shouldContinue != true) return;
                         final navigator = Navigator.of(screenContext);
                         final result = await guardedPush<_CotizacionSaveResult>(
                           screenContext,
@@ -773,6 +933,28 @@ Future<bool?> _confirmReturnToPending(BuildContext context) {
   );
 }
 
+Future<bool?> _confirmOpenCompleteData(BuildContext context) {
+  return showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Continuar con cotización'),
+      content: const Text(
+        'Para este punto ya debes contar con la cotización externa del proveedor para continuar. ¿Deseas seguir?',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Continuar'),
+        ),
+      ],
+    ),
+  );
+}
+
 class CotizacionOrderReviewScreen extends ConsumerStatefulWidget {
   const CotizacionOrderReviewScreen({
     required this.orderId,
@@ -790,21 +972,18 @@ class CotizacionOrderReviewScreen extends ConsumerStatefulWidget {
 
 class _CotizacionOrderReviewScreenState
     extends ConsumerState<CotizacionOrderReviewScreen> {
-  final _internalController = TextEditingController();
-  final _commentController = TextEditingController();
+  final _itemInternalOrderController = TextEditingController();
   final TextEditingController _supplierController = TextEditingController();
   final TextEditingController _budgetController = TextEditingController();
   final Set<int> _selected = <int>{};
 
   final List<OrderItemDraft> _itemDrafts = [];
 
-  bool _prefilled = false;
   bool _itemsPrefilled = false;
 
   @override
   void dispose() {
-    _internalController.dispose();
-    _commentController.dispose();
+    _itemInternalOrderController.dispose();
     _supplierController.dispose();
     _budgetController.dispose();
 
@@ -827,17 +1006,6 @@ class _CotizacionOrderReviewScreenState
 
           final cachedDraft = SessionDraftStore.cotizacion(order.id);
 
-          if (!_prefilled) {
-            _prefilled = true;
-            if (cachedDraft != null) {
-              _internalController.text = cachedDraft.internalOrder;
-              _commentController.text = cachedDraft.comprasComment;
-            } else {
-              _internalController.text = (order.internalOrder ?? '').trim();
-              _commentController.text = (order.comprasComment ?? '').trim();
-            }
-          }
-
           _syncItems(order, draftItems: cachedDraft?.items);
 
           final pending = _itemDrafts
@@ -856,30 +1024,6 @@ class _CotizacionOrderReviewScreenState
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                     const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _internalController,
-                      decoration: const InputDecoration(
-                        labelText: 'Orden de compra interna',
-                      ),
-                      onChanged: (_) {
-                        setState(() {});
-                        _saveDraft(order.id);
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _commentController,
-                      decoration: const InputDecoration(
-                        labelText: 'Comentarios del área de compras',
-                      ),
-                      minLines: 2,
-                      maxLines: 4,
-                      onChanged: (_) {
-                        setState(() {});
-                        _saveDraft(order.id);
-                      },
-                    ),
-                    const SizedBox(height: 12),
                     Card(
                       child: Padding(
                         padding: const EdgeInsets.all(16),
@@ -887,7 +1031,7 @@ class _CotizacionOrderReviewScreenState
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Selecciona los artículos pendientes y asigna proveedor y presupuesto.',
+                              'Selecciona los artículos pendientes y asigna proveedor y presupuesto. La OC interna se captura por artículo y es opcional en este paso.',
                               style: Theme.of(context).textTheme.bodySmall,
                             ),
                             const SizedBox(height: 12),
@@ -916,6 +1060,16 @@ class _CotizacionOrderReviewScreenState
                                   RegExp(r'[0-9.]'),
                                 ),
                               ],
+                            ),
+                            const SizedBox(height: 8),
+                            TextFormField(
+                              controller: _itemInternalOrderController,
+                              decoration: const InputDecoration(
+                                labelText: 'OC interna por articulo (opcional)',
+                                prefixIcon: Icon(Icons.receipt_long_outlined),
+                              ),
+                              keyboardType: TextInputType.number,
+                              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                             ),
                             const SizedBox(height: 12),
                             Row(
@@ -1015,9 +1169,7 @@ class _CotizacionOrderReviewScreenState
           MaterialPageRoute(
             builder: (_) => _CotizacionDraftPreviewScreen(
               pdfData: pdfData,
-              submitLabel: widget.fromDashboard
-                  ? 'Actualizar'
-                  : 'Enviar al dashboard',
+              submitLabel: 'Guardar',
             ),
           ),
         ),
@@ -1032,9 +1184,7 @@ class _CotizacionOrderReviewScreenState
       final savedPdfData = _buildPdfData(order, payload);
       if (!mounted) return;
       SessionDraftStore.clearCotizacion(order.id);
-      _showMessage(
-        widget.fromDashboard ? 'Datos actualizados.' : 'Datos guardados.',
-      );
+      _showMessage('Datos completos guardados.');
       Navigator.of(
         context,
       ).pop(_CotizacionSaveResult(pdfData: savedPdfData, ready: true));
@@ -1072,16 +1222,11 @@ class _CotizacionOrderReviewScreenState
 
     final supplierBudgets = _supplierBudgetsFromItems();
     final budget = _sumBudgets(supplierBudgets);
-    final internalOrder = _internalController.text.trim();
-    final comprasComment = _commentController.text.trim();
-
     return _CotizacionSaveData(
       supplierBudgets: supplierBudgets,
       budget: budget,
       reviewerName: effectiveReviewerName,
       reviewerArea: effectiveReviewerArea,
-      internalOrder: internalOrder,
-      comprasComment: comprasComment,
       items: List<OrderItemDraft>.from(_itemDrafts),
     );
   }
@@ -1095,8 +1240,6 @@ class _CotizacionOrderReviewScreenState
     return buildPdfDataFromOrder(
       order,
       branding: branding,
-      internalOrder: payload.internalOrder,
-      comprasComment: payload.comprasComment,
       supplierBudgets: payload.supplierBudgets,
       budget: payload.budget,
       comprasReviewerName: payload.reviewerName,
@@ -1119,14 +1262,13 @@ class _CotizacionOrderReviewScreenState
     await repo.updateApprovalData(
       orderId: order.id,
       supplier: order.supplier,
-      internalOrder: payload.internalOrder,
+      internalOrder: null,
       budget: payload.budget,
       supplierBudgets: payload.supplierBudgets,
-      comprasComment: payload.comprasComment,
       comprasReviewerName: payload.reviewerName,
       comprasReviewerArea: payload.reviewerArea,
       items: payload.items.map((item) => item.toModel()).toList(),
-      markReady: markReady,
+      markReady: markReady, comprasComment: '',
     );
 
     return payload;
@@ -1207,6 +1349,7 @@ class _CotizacionOrderReviewScreenState
       _showMessage('Ingresa un presupuesto válido.');
       return;
     }
+    final internalOrder = _itemInternalOrderController.text.trim();
 
     setState(() {
       for (final index in _selected) {
@@ -1214,11 +1357,13 @@ class _CotizacionOrderReviewScreenState
         _itemDrafts[index] = _itemDrafts[index].copyWith(
           supplier: supplier,
           budget: budget,
+          internalOrder: internalOrder.isEmpty ? null : internalOrder,
         );
       }
       _selected.clear();
       _supplierController.clear();
       _budgetController.clear();
+      _itemInternalOrderController.clear();
     });
     _saveDraft(widget.orderId);
   }
@@ -1228,6 +1373,7 @@ class _CotizacionOrderReviewScreenState
       _itemDrafts[index] = _itemDrafts[index].copyWith(
         clearBudget: true,
         clearSupplier: true,
+        clearInternalOrder: true,
       );
     });
     _saveDraft(widget.orderId);
@@ -1339,8 +1485,6 @@ class _CotizacionOrderReviewScreenState
     SessionDraftStore.saveCotizacion(
       orderId,
       CotizacionDraft(
-        internalOrder: _internalController.text.trim(),
-        comprasComment: _commentController.text.trim(),
         items: List<OrderItemDraft>.from(_itemDrafts),
       ),
     );
@@ -1547,6 +1691,7 @@ class _AssignmentItemCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final supplier = (item.supplier ?? '').trim();
+    final internalOrder = (item.internalOrder ?? '').trim();
     final budget = item.budget ?? 0;
     final details = <String>[
       if (item.partNumber.trim().isNotEmpty) 'No. parte: ${item.partNumber}',
@@ -1594,6 +1739,12 @@ class _AssignmentItemCard extends StatelessWidget {
                 supplier.isEmpty
                     ? 'Proveedor: pendiente'
                     : 'Proveedor: $supplier',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              Text(
+                internalOrder.isEmpty
+                    ? 'OC interna: opcional'
+                    : 'OC interna: $internalOrder',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               Text(
@@ -1746,8 +1897,6 @@ class _CotizacionSaveData {
     required this.budget,
     required this.reviewerName,
     required this.reviewerArea,
-    required this.internalOrder,
-    required this.comprasComment,
     required this.items,
   });
 
@@ -1755,7 +1904,5 @@ class _CotizacionSaveData {
   final num? budget;
   final String reviewerName;
   final String reviewerArea;
-  final String internalOrder;
-  final String comprasComment;
   final List<OrderItemDraft> items;
 }

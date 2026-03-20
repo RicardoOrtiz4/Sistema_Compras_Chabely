@@ -1,7 +1,6 @@
 const direccionGeneralLabel = 'Direcci\u00f3n General';
 const contabilidadLabel = 'Contabilidad';
 const comprasLabel = 'Compras';
-const almacenLabel = 'Almac\u00e9n';
 
 String normalizeAreaLabel(String? value) {
   if (value == null) return '';
@@ -14,9 +13,6 @@ String normalizeAreaLabel(String? value) {
       lower == 'direcci\u00f3n general') {
     return direccionGeneralLabel;
   }
-  if (lower == 'almacen' || lower == 'almac\u00e9n') {
-    return almacenLabel;
-  }
   return trimmed;
 }
 
@@ -27,6 +23,3 @@ bool isContabilidadLabel(String? value) =>
     normalizeAreaLabel(value) == contabilidadLabel;
 
 bool isComprasLabel(String? value) => normalizeAreaLabel(value) == comprasLabel;
-
-bool isAlmacenLabel(String? value) =>
-    normalizeAreaLabel(value) == almacenLabel;

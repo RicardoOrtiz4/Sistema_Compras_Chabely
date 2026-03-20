@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:sistema_compras/core/business_calendar.dart';
 import 'package:sistema_compras/core/area_labels.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
@@ -14,7 +15,6 @@ import 'package:sistema_compras/core/widgets/searchable_select.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
-import 'package:sistema_compras/features/orders/domain/order_folio.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/partners/data/partner_repository.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
@@ -34,9 +34,7 @@ const _unitOptions = <String>[
 ];
 
 const _urgencyOrder = <PurchaseOrderUrgency>[
-  PurchaseOrderUrgency.baja,
-  PurchaseOrderUrgency.media,
-  PurchaseOrderUrgency.alta,
+  PurchaseOrderUrgency.normal,
   PurchaseOrderUrgency.urgente,
 ];
 
@@ -59,6 +57,7 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
   bool _copyRequested = false;
 
   late final TextEditingController _notesController;
+  late final TextEditingController _urgentJustificationController;
   ScaffoldMessengerState? _messenger;
   ProviderSubscription<CreateOrderState>? _controllerSubscription;
 
@@ -66,14 +65,13 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
   void initState() {
     super.initState();
     _notesController = TextEditingController();
+    _urgentJustificationController = TextEditingController();
     _controllerSubscription =
         ref.listenManual<CreateOrderState>(createOrderControllerProvider, (
       previous,
       next,
     ) {
       if (!mounted) return;
-
-      _syncUrgencyForState(next);
 
       final route = ModalRoute.of(context);
       if (route != null && !route.isCurrent) return;
@@ -97,6 +95,7 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
   void dispose() {
     _controllerSubscription?.close();
     _notesController.dispose();
+    _urgentJustificationController.dispose();
     super.dispose();
   }
 
@@ -128,8 +127,11 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
       _resetRequested = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         final state = ref.read(createOrderControllerProvider);
-        final shouldReset =
-            state.draftId != null || state.notes.isNotEmpty || state.items.length != 1;
+        final shouldReset = state.draftId != null ||
+            state.requestedDeliveryDate != null ||
+            state.notes.isNotEmpty ||
+            state.urgentJustification.isNotEmpty ||
+            state.items.length != 1;
         if (shouldReset) {
           ref.read(createOrderControllerProvider.notifier).reset();
         }
@@ -145,25 +147,13 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
     final userAsync = ref.watch(currentUserProfileProvider);
 
     final scheme = Theme.of(context).colorScheme;
-
-    final maxDeliveryDate =
-        controller.items.isEmpty ? null : controller.items.first.estimatedDate;
-
-    final displayUrgency = maxDeliveryDate == null
-        ? controller.urgency
-        : notifier.urgencyFromDate(maxDeliveryDate);
-
-    final folio = _folioFromDraft(controller.draftId);
-
-    final urgencyColor = displayUrgency.color(scheme);
+    final urgencyColor = controller.urgency.color(scheme);
     final urgencyTextColor =
         ThemeData.estimateBrightnessForColor(urgencyColor) == Brightness.dark
             ? Colors.white
             : Colors.black;
 
     final isLastAttempt = controller.returnCount == _maxCorrections - 1;
-    final requiresScheduleChange = controller.requiresScheduleChange;
-    final hasScheduleChange = controller.hasScheduleChange;
 
     return Scaffold(
       appBar: AppBar(
@@ -182,18 +172,22 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
               composing: TextRange.empty,
             );
           }
+          if (_urgentJustificationController.text != controller.urgentJustification) {
+            _urgentJustificationController.value =
+                _urgentJustificationController.value.copyWith(
+              text: controller.urgentJustification,
+              selection: TextSelection.collapsed(
+                offset: controller.urgentJustification.length,
+              ),
+              composing: TextRange.empty,
+            );
+          }
 
           return Form(
             key: _formKey,
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                _OrderHeader(
-                  userName: user.name,
-                  area: user.areaDisplay,
-                  folio: folio,
-                ),
-
                 if (isLastAttempt) ...[
                   const SizedBox(height: 12),
                   _LastAttemptWarning(
@@ -226,72 +220,78 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                   ),
                 ],
 
-                const SizedBox(height: 12),
-                Text('Fecha máxima solicitada', style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        maxDeliveryDate != null
-                            ? 'Fecha máxima solicitada: ${maxDeliveryDate.toShortDate()}'
-                            : 'Selecciona fecha máxima solicitada',
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: () async {
-                        final date = await showDatePicker(
-                          context: context,
-                          firstDate: DateTime.now(),
-                          lastDate: DateTime.now().add(const Duration(days: 365)),
-                          initialDate: maxDeliveryDate ?? DateTime.now(),
-                        );
-                        if (date != null) {
-                          ref
-                              .read(createOrderControllerProvider.notifier)
-                              .setMaxDeliveryDate(date);
-                        }
-                      },
-                      child: const Text('Seleccionar'),
-                    ),
-                  ],
-                ),
-
                 const SizedBox(height: 8),
                 Text('Urgencia', style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),
-                SegmentedButton<PurchaseOrderUrgency>(
-                  segments: _urgencyOrder
-                      .map(
-                        (urgency) => ButtonSegment(
-                          value: urgency,
-                          label: Text(urgency.label),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SegmentedButton<PurchaseOrderUrgency>(
+                      segments: _urgencyOrder
+                          .map(
+                            (urgency) => ButtonSegment(
+                              value: urgency,
+                              label: Text(urgency.label),
+                            ),
+                          )
+                          .toList(),
+                      selected: <PurchaseOrderUrgency>{controller.urgency},
+                      showSelectedIcon: false,
+                      style: ButtonStyle(
+                        backgroundColor: WidgetStateProperty.resolveWith((states) {
+                          if (states.contains(WidgetState.selected)) return urgencyColor;
+                          return null;
+                        }),
+                        foregroundColor: WidgetStateProperty.resolveWith((states) {
+                          if (states.contains(WidgetState.selected)) return urgencyTextColor;
+                          return null;
+                        }),
+                      ),
+                      onSelectionChanged: (value) => notifier.setUrgency(value.first),
+                    ),
+                    if (controller.urgency == PurchaseOrderUrgency.urgente) ...[
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextFormField(
+                          controller: _urgentJustificationController,
+                          decoration: const InputDecoration(
+                            labelText: 'Justificacion de urgencia',
+                            helperText:
+                                'Describe por que este item impide seguir trabajando o puede parar produccion.',
+                          ),
+                          minLines: 3,
+                          maxLines: 5,
+                          validator: (_) => notifier.urgentJustificationError(),
+                          onChanged: notifier.setUrgentJustification,
                         ),
-                      )
-                      .toList(),
-                  selected: <PurchaseOrderUrgency>{displayUrgency},
-                  showSelectedIcon: false,
-                  style: ButtonStyle(
-                    backgroundColor: WidgetStateProperty.resolveWith((states) {
-                      if (states.contains(WidgetState.selected)) return urgencyColor;
-                      return null;
-                    }),
-                    foregroundColor: WidgetStateProperty.resolveWith((states) {
-                      if (states.contains(WidgetState.selected)) return urgencyTextColor;
-                      return null;
-                    }),
+                      ),
+                    ],
+                  ],
+                ),
+                if (controller.urgency == PurchaseOrderUrgency.urgente) ...[
+                  const SizedBox(height: 12),
+                  _UrgentGuidanceBox(
+                    scheme: Theme.of(context).colorScheme,
                   ),
-                  onSelectionChanged: (value) => notifier.setUrgency(value.first),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Al cambiar la fecha o la urgencia, se actualiza la otra.',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
+                ],
 
                 const SizedBox(height: 24),
                 Text('Artículos', style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 12),
+                _RequestedDeliveryDateSection(
+                  urgency: controller.urgency,
+                  requestedDeliveryDate: controller.requestedDeliveryDate,
+                  onPickDate: () => _pickRequestedDeliveryDate(
+                    controller.requestedDeliveryDate,
+                    controller.urgency,
+                    notifier,
+                  ),
+                  onClearDate: controller.requestedDeliveryDate == null
+                      ? null
+                      : () => notifier.setRequestedDeliveryDate(null),
+                ),
+
+                const SizedBox(height: 24),
                 Row(
                   children: [
                     Expanded(
@@ -354,15 +354,6 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                                   );
                                   return;
                                 }
-                                if (requiresScheduleChange && !hasScheduleChange) {
-                                  final confirmed =
-                                      await _confirmRequestedDateRefresh();
-                                  if (confirmed != true) return;
-                                  ref
-                                      .read(createOrderControllerProvider.notifier)
-                                      .refreshRequestedDateForCurrentUrgency();
-                                  if (!mounted) return;
-                                }
                                 guardedPdfPush(context, '/orders/preview');
                               },
                     child: controller.isSubmitting
@@ -390,6 +381,31 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _pickRequestedDeliveryDate(
+    DateTime? currentValue,
+    PurchaseOrderUrgency urgency,
+    CreateOrderController notifier,
+  ) async {
+    final now = DateTime.now();
+    final normalizedNow = normalizeCalendarDate(now);
+    final urgentDates = nextBusinessDaysAfter(normalizedNow);
+    final isUrgent = urgency == PurchaseOrderUrgency.urgente;
+    final initialDate = isUrgent
+        ? _resolveUrgentInitialDate(currentValue, urgentDates)
+        : normalizeCalendarDate(currentValue ?? normalizedNow);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: isUrgent ? urgentDates.first : DateTime(1900, 1, 1),
+      lastDate: isUrgent ? urgentDates.last : DateTime(2100, 12, 31),
+      selectableDayPredicate: isUrgent
+          ? (day) => isAllowedUrgentRequestedDeliveryDate(day, today: normalizedNow)
+          : null,
+    );
+    if (picked == null) return;
+    notifier.setRequestedDeliveryDate(picked);
   }
 
   Future<void> _importCsvItems(CreateOrderController notifier) async {
@@ -423,28 +439,6 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
         const SnackBar(content: Text('No se pudo importar el CSV.')),
       );
     }
-  }
-
-  Future<bool?> _confirmRequestedDateRefresh() {
-    return showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Actualizar fecha maxima solicitada'),
-        content: const Text(
-          'No cambiaste la urgencia. Para continuar, se actualizara la fecha maxima solicitada con base en la urgencia actual.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Continuar'),
-          ),
-        ],
-      ),
-    );
   }
 
   Future<String?> _addClientFromSearch(String query) async {
@@ -526,50 +520,110 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
     return result ?? false;
   }
 
-  void _syncUrgencyForState(CreateOrderState state) {
-    final maxDeliveryDate =
-        state.items.isEmpty ? null : state.items.first.estimatedDate;
-    if (maxDeliveryDate == null) return;
-
-    final notifier = ref.read(createOrderControllerProvider.notifier);
-    final expectedUrgency = notifier.urgencyFromDate(maxDeliveryDate);
-    if (expectedUrgency == state.urgency) return;
-    notifier.syncUrgencyFromDate(maxDeliveryDate);
-  }
-
 }
 
-class _OrderHeader extends StatelessWidget {
-  const _OrderHeader({required this.userName, required this.area, this.folio});
+class _UrgentGuidanceBox extends StatelessWidget {
+  const _UrgentGuidanceBox({required this.scheme});
 
-  final String userName;
-  final String area;
-  final String? folio;
+  final ColorScheme scheme;
 
   @override
   Widget build(BuildContext context) {
-    final now = DateTime.now();
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (folio == null) ...[
-              Text(
-                'Folio: Se asignará al enviar',
-                style: Theme.of(context).textTheme.bodyLarge,
-              ),
-              const SizedBox(height: 8),
-            ],
-            Text('Solicitante: $userName'),
-            Text('Área: $area'),
-            Text('Fecha: ${now.toFullDateTime()}'),
-          ],
-        ),
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: scheme.errorContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        'El estado urgente solo es para items importantes que, sin ellos, no se pueda seguir trabajando o paren la produccion.',
+        style: TextStyle(color: scheme.onErrorContainer),
       ),
     );
   }
+}
+
+class _RequestedDeliveryDateSection extends StatelessWidget {
+  const _RequestedDeliveryDateSection({
+    required this.urgency,
+    required this.requestedDeliveryDate,
+    required this.onPickDate,
+    required this.onClearDate,
+  });
+
+  final PurchaseOrderUrgency urgency;
+  final DateTime? requestedDeliveryDate;
+  final VoidCallback onPickDate;
+  final VoidCallback? onClearDate;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final hasDate = requestedDeliveryDate != null;
+    final helperText = hasDate
+        ? 'Fecha requerida: ${requestedDeliveryDate!.toShortDate()}'
+        : 'Sin fecha capturada. Define para cuando se requiere lo solicitado.';
+    final urgencyHelpText = urgency == PurchaseOrderUrgency.urgente
+        ? 'Para urgencia solo se permiten los próximos '
+            '$urgentRequestedDeliveryBusinessDays días hábiles después de hoy.'
+        : 'Con urgencia normal puedes elegir cualquier fecha.';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Fecha requerida por el solicitante',
+            style: theme.textTheme.titleSmall,
+          ),
+          const SizedBox(height: 4),
+          Text(helperText, style: theme.textTheme.bodyMedium),
+          const SizedBox(height: 4),
+          Text(urgencyHelpText, style: theme.textTheme.bodySmall),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: onPickDate,
+                icon: const Icon(Icons.event_outlined),
+                label: Text(
+                  requestedDeliveryDate == null
+                      ? 'Definir fecha'
+                      : 'Cambiar fecha',
+                ),
+              ),
+              if (onClearDate != null)
+                TextButton(
+                  onPressed: onClearDate,
+                  child: const Text('Limpiar'),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+DateTime _resolveUrgentInitialDate(
+  DateTime? currentValue,
+  List<DateTime> urgentDates,
+) {
+  final normalizedCurrent = currentValue == null ? null : normalizeCalendarDate(currentValue);
+  if (normalizedCurrent != null &&
+      urgentDates.any((date) => isSameCalendarDate(date, normalizedCurrent))) {
+    return normalizedCurrent;
+  }
+  return urgentDates.first;
 }
 
 class _LastAttemptWarning extends ConsumerWidget {
@@ -878,8 +932,6 @@ class _OrderItemCardState extends State<_OrderItemCard> {
   }
 }
 
-String? _folioFromDraft(String? draftId) => normalizeFolio(draftId);
-
 String _lastAttemptMessage(String? contactArea) {
   final area = contactArea?.trim().isNotEmpty == true ? contactArea!.trim() : 'Compras';
   return 'Advertencia: este es el último intento para enviar la requisición. '
@@ -927,9 +979,7 @@ const _csvHeaderAliases = <String, String>{
   'descripcion': 'description',
   'description': 'description',
 
-  // Piezas / Cantidad
-  'piezas': 'pieces',
-  'pieces': 'pieces',
+  // Cantidad
   'cantidad': 'quantity',
   'quantity': 'quantity',
 
@@ -977,8 +1027,8 @@ List<OrderItemDraft> _parseCsvItems(String content) {
   if (!headerMap.containsKey('description')) {
     throw const FormatException('Falta la columna "descripción" en el CSV.');
   }
-  if (!headerMap.containsKey('pieces') && !headerMap.containsKey('quantity')) {
-    throw const FormatException('Falta la columna "piezas" o "cantidad" en el CSV.');
+  if (!headerMap.containsKey('quantity')) {
+    throw const FormatException('Falta la columna "cantidad" en el CSV.');
   }
 
   final items = <OrderItemDraft>[];
@@ -995,8 +1045,7 @@ List<OrderItemDraft> _parseCsvItems(String content) {
     final customer = _cleanText(_cellValue(row, headerMap, 'customer'));
     final supplier = _cleanText(_cellValue(row, headerMap, 'supplier'));
 
-    final pieces = _parsePieces(
-          _cellValue(row, headerMap, 'pieces'),
+    final pieces = _parseQuantity(
           _cellValue(row, headerMap, 'quantity'),
         ) ??
         1;
@@ -1056,10 +1105,7 @@ bool _isRowEmpty(List<dynamic> row) {
 
 String _cleanText(String value) => value.trim();
 
-int? _parsePieces(String piecesRaw, String quantityRaw) {
-  final pieces = _parseInt(piecesRaw);
-  if (pieces != null && pieces > 0) return pieces;
-
+int? _parseQuantity(String quantityRaw) {
   final quantity = _parseInt(quantityRaw);
   if (quantity != null && quantity > 0) return quantity;
 

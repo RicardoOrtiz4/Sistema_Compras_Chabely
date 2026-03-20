@@ -9,9 +9,8 @@ import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 
 Future<void> exportOrderCsv(BuildContext context, PurchaseOrder order) async {
   final csv = buildOrderCsv(order);
-  // BOM para que Excel lea bien acentos/UTF-8
   final bytes = Uint8List.fromList(utf8.encode('\uFEFF$csv'));
-  final fileName = 'orden_${order.id}.csv';
+  final fileName = 'requisicion_${order.id}.csv';
 
   try {
     final location = await getSaveLocation(suggestedName: fileName);
@@ -30,7 +29,7 @@ Future<void> exportOrderCsv(BuildContext context, PurchaseOrder order) async {
         const SnackBar(content: Text('CSV descargado.')),
       );
     }
-  } catch (error) {
+  } catch (_) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No se pudo descargar el CSV.')),
@@ -45,19 +44,16 @@ String buildOrderCsv(PurchaseOrder order) {
     for (final item in order.items) _itemRow(item),
   ];
 
-  // Si quieres separador ; para Excel en es-MX, cambia a fieldDelimiter: ';'
   const converter = ListToCsvConverter();
   return converter.convert(rows);
 }
 
 const _csvHeader = <String>[
-  'línea',
+  'linea',
   'noParte',
-  'descripción',
-  'piezas',
+  'descripcion',
   'cantidad',
   'unidad',
-  'proveedor',
   'cliente',
   'fechaEstimada',
 ];
@@ -67,13 +63,17 @@ List<String> _itemRow(PurchaseOrderItem item) {
     item.line.toString(),
     item.partNumber,
     item.description,
-    item.pieces.toString(),
-    item.quantity.toString(),
+    _formatQuantity(item.quantity),
     item.unit,
-    (item.supplier ?? '').trim(),
     (item.customer ?? '').trim(),
     _formatDate(item.estimatedDate),
   ];
+}
+
+String _formatQuantity(num value) {
+  final asInt = value.toInt();
+  if (value == asInt) return asInt.toString();
+  return value.toString();
 }
 
 String _formatDate(DateTime? value) {

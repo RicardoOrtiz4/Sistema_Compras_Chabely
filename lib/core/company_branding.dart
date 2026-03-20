@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/legacy.dart';
 
 enum Company { chabely, acerpro }
 
+const sharedCompanyDataId = 'shared';
+
 class CompanyBranding {
   const CompanyBranding({
     required this.company,

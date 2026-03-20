@@ -8,6 +8,7 @@ import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
+import 'package:sistema_compras/features/orders/domain/supplier_quote.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_pdf_thumbnail.dart';
 
 import 'order_timeline.dart';
@@ -48,15 +49,16 @@ class OrderDetailScreen extends ConsumerWidget {
         padding: const EdgeInsets.all(16),
         children: [
           _OrderSummaryHeader(order: order, compact: false),
+          const SizedBox(height: 16),
+          _OrderItemProgressSection(order: order),
+          const SizedBox(height: 16),
           _OrderTimelineSection(order: order, orderId: orderId),
           const SizedBox(height: 16),
           _OrderPdfSection(order: order),
           const SizedBox(height: 16),
-          _CotizacionSection(links: detailData.cotizacionLinks),
+          _CotizacionSection(orderId: order.id),
           const SizedBox(height: 16),
           _FacturaSection(links: detailData.facturaLinks),
-          const SizedBox(height: 16),
-          _AlmacenDiffSection(summary: detailData.diffSummary),
         ],
       ),
     );
@@ -79,6 +81,8 @@ class _OrderSummaryHeader extends StatelessWidget {
     final createdLabel = order.createdAt?.toFullDateTime() ?? 'Pendiente';
     final updatedLabel = order.updatedAt?.toFullDateTime();
     final folio = order.id; // Si existe otro folio, ajustalo aqui.
+    final urgentJustification = (order.urgentJustification ?? '').trim();
+    final requestedDeliveryDate = resolveRequestedDeliveryDate(order);
 
     return Card(
       child: Padding(
@@ -92,9 +96,10 @@ class _OrderSummaryHeader extends StatelessWidget {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Chip(label: Text(order.urgency.label)),
+                if (order.urgency == PurchaseOrderUrgency.urgente &&
+                    urgentJustification.isNotEmpty)
+                  Chip(label: Text(urgentJustification)),
                 Chip(label: Text(order.status.label)),
-                if (order.almacenHasDifferences)
-                  const Chip(label: Text('Descuadre en recepcion')),
               ],
             ),
             const SizedBox(height: 12),
@@ -106,16 +111,9 @@ class _OrderSummaryHeader extends StatelessWidget {
 
             const SizedBox(height: 8),
             Text(
-              'Solicitante: ${order.requesterName}',
+              'Solicitante / Area: ${order.requesterName}${(order.areaName).trim().isNotEmpty ? ' | ${order.areaName}' : ''}',
               style: theme.textTheme.bodyMedium,
             ),
-            if ((order.areaName).trim().isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Text(
-                'Area: ${order.areaName}',
-                style: theme.textTheme.bodyMedium,
-              ),
-            ],
             if ((order.supplier ?? '').trim().isNotEmpty) ...[
               const SizedBox(height: 4),
               Text(
@@ -123,7 +121,13 @@ class _OrderSummaryHeader extends StatelessWidget {
                 style: theme.textTheme.bodyMedium,
               ),
             ],
-
+            if (requestedDeliveryDate != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                'Fecha requerida: ${requestedDeliveryDate.toShortDate()}',
+                style: theme.textTheme.bodyMedium,
+              ),
+            ],
             const SizedBox(height: 8),
             Text(
               'Creada: $createdLabel',
@@ -179,14 +183,16 @@ class _OrderPdfSection extends StatelessWidget {
   }
 }
 
-class _CotizacionSection extends StatelessWidget {
-  const _CotizacionSection({required this.links});
+class _CotizacionSection extends ConsumerWidget {
+  const _CotizacionSection({required this.orderId});
 
-  final List<CotizacionLink> links;
+  final String orderId;
 
   @override
-  Widget build(BuildContext context) {
-    final hasLink = links.isNotEmpty;
+  Widget build(BuildContext context, WidgetRef ref) {
+    final quotesAsync = ref.watch(supplierQuotesByOrderIdProvider(orderId));
+    final quotes = quotesAsync.valueOrNull ?? const <SupplierQuote>[];
+    final hasLink = quotes.any((quote) => quote.links.isNotEmpty);
 
     return Card(
       child: Padding(
@@ -196,36 +202,111 @@ class _CotizacionSection extends StatelessWidget {
           children: [
             Text('Cotizacion', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
-            if (hasLink)
-              for (final link in links)
+            if (quotesAsync.isLoading && quotes.isEmpty)
+              const AppSplash(compact: true)
+            else if (hasLink)
+              for (final quote in quotes)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (link.supplier.trim().isNotEmpty)
+                      Text(
+                        'Proveedor: ${quote.supplier.trim().isEmpty ? 'Sin proveedor' : quote.supplier.trim()}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      Text(
+                        'Estado: ${quote.status.label}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      for (final link in quote.links)
                         Text(
-                          'Proveedor: ${link.supplier.trim()}',
+                          link,
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
-                      Text(link.url, style: Theme.of(context).textTheme.bodySmall),
                     ],
                   ),
                 )
             else
               const Text('Sin link de cotizacion.'),
             if (hasLink) ...[
-              for (final link in links) ...[
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: OutlinedButton.icon(
-                    onPressed: () => _openExternalLink(context, link.url),
-                    icon: const Icon(Icons.open_in_new),
-                    label: const Text('Abrir link'),
+              for (final quote in quotes)
+                for (final link in quote.links) ...[
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: OutlinedButton.icon(
+                      onPressed: () => _openExternalLink(context, link),
+                      icon: const Icon(Icons.open_in_new),
+                      label: const Text('Abrir link'),
+                    ),
                   ),
+                  const SizedBox(height: 8),
+                ],
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _OrderItemProgressSection extends StatelessWidget {
+  const _OrderItemProgressSection({required this.order});
+
+  final PurchaseOrder order;
+
+  @override
+  Widget build(BuildContext context) {
+    final committedCount = countItemsWithCommittedDeliveryDate(order);
+    final committedDate = resolveCommittedDeliveryDate(order);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Proceso por item',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Items con fecha estimada de entrega: $committedCount/${order.items.length}',
+            ),
+            if (committedDate != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                'Ultima fecha estimada de entrega: ${committedDate.toShortDate()}',
+              ),
+            ],
+            const SizedBox(height: 12),
+            for (final item in order.items) ...[
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text('Item ${item.line}: ${item.description}'),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 4),
+                    Text('Proceso: ${_itemProgressLabel(order, item)}'),
+                    if ((item.supplier ?? '').trim().isNotEmpty)
+                      Text('Proveedor: ${item.supplier!.trim()}'),
+                    if (item.estimatedDate != null)
+                      Text(
+                        'Fecha requerida: ${item.estimatedDate!.toShortDate()}',
+                      ),
+                    if (item.deliveryEtaDate != null)
+                      Text(
+                        'Fecha estimada de entrega: ${item.deliveryEtaDate!.toShortDate()}',
+                      ),
+                  ],
                 ),
-                const SizedBox(height: 8),
-              ],
+                trailing: Chip(
+                  label: Text(_itemProgressLabel(order, item)),
+                ),
+              ),
+              const Divider(height: 1),
             ],
           ],
         ),
@@ -321,28 +402,32 @@ class _OrderTimelineSection extends ConsumerWidget {
   }
 }
 
-List<CotizacionLink> _cotizacionLinks(PurchaseOrder order) {
-  if (order.cotizacionLinks.isNotEmpty) {
-    return order.cotizacionLinks;
+String _itemProgressLabel(PurchaseOrder order, PurchaseOrderItem item) {
+  if (order.status == PurchaseOrderStatus.eta) {
+    return 'Finalizada';
+  }
+  if (order.status == PurchaseOrderStatus.contabilidad) {
+    return 'En Contabilidad';
+  }
+  if (item.deliveryEtaDate != null) {
+    return 'Fecha estimada definida';
   }
 
-  final links = <CotizacionLink>[];
-
-  for (final url in order.cotizacionPdfUrls) {
-    final trimmed = url.trim();
-    if (trimmed.isNotEmpty) {
-      links.add(CotizacionLink(supplier: '', url: trimmed));
-    }
+  switch (item.quoteStatus) {
+    case PurchaseOrderItemQuoteStatus.pending:
+      if (order.status == PurchaseOrderStatus.pendingCompras) {
+        return 'Ordenes por confirmar';
+      }
+      return 'Pendiente de cotizacion';
+    case PurchaseOrderItemQuoteStatus.draft:
+      return 'En dashboard de cotizaciones';
+    case PurchaseOrderItemQuoteStatus.pendingDireccion:
+      return 'En Direccion General';
+    case PurchaseOrderItemQuoteStatus.approved:
+      return 'Aprobado, pendiente fecha estimada';
+    case PurchaseOrderItemQuoteStatus.rejected:
+      return 'Rechazado';
   }
-
-  final single = order.cotizacionPdfUrl?.trim();
-  if (single != null &&
-      single.isNotEmpty &&
-      !links.any((link) => link.url == single)) {
-    links.insert(0, CotizacionLink(supplier: '', url: single));
-  }
-
-  return links;
 }
 
 List<String> _facturaLinks(PurchaseOrder order) {
@@ -363,158 +448,16 @@ List<String> _facturaLinks(PurchaseOrder order) {
   return links;
 }
 
-class _AlmacenDiffSection extends StatelessWidget {
-  const _AlmacenDiffSection({required this.summary});
-
-  final _ItemDiffSummary summary;
-
-  @override
-  Widget build(BuildContext context) {
-    final diffs = summary.diffs;
-    final hasReceived = summary.hasReceived;
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Recepcion en almacen',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 12),
-            if (!hasReceived)
-              const Text('Sin recepcion registrada.')
-            else if (diffs.isEmpty)
-              const Text('Recepcion cuadrada. No hay descuadres registrados.')
-            else
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Se detecto descuadre entre lo solicitado y lo recibido.',
-                  ),
-                  const SizedBox(height: 12),
-                  for (var index = 0; index < diffs.length; index++) ...[
-                    _DiffRow(diff: diffs[index]),
-                    if (index + 1 < diffs.length) const SizedBox(height: 8),
-                  ],
-                ],
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 _OrderDetailData _buildOrderDetailData(PurchaseOrder order) {
   return _OrderDetailData(
-    cotizacionLinks: _cotizacionLinks(order),
     facturaLinks: _facturaLinks(order),
-    diffSummary: _buildItemDiffSummary(order.items),
   );
-}
-
-class _DiffRow extends StatelessWidget {
-  const _DiffRow({required this.diff});
-
-  final _ItemDiff diff;
-
-  @override
-  Widget build(BuildContext context) {
-    final diffLabel = diff.delta > 0 ? '+${diff.delta}' : diff.delta.toString();
-
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(diff.title, style: Theme.of(context).textTheme.titleSmall),
-            const SizedBox(height: 6),
-            Text('Solicitado: ${diff.requested} ${diff.unit}'),
-            Text('Recibido: ${diff.received} ${diff.unit}'),
-            Text('Diferencia: $diffLabel'),
-            if (diff.comment.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Text('Comentario: ${diff.comment}'),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-_ItemDiffSummary _buildItemDiffSummary(List<PurchaseOrderItem> items) {
-  final diffs = <_ItemDiff>[];
-  var hasReceived = false;
-
-  for (final item in items) {
-    final received = item.receivedQuantity;
-    if (received == null) continue;
-    hasReceived = true;
-
-    final delta = received - item.quantity;
-    if (delta == 0) continue;
-
-    diffs.add(
-      _ItemDiff(
-        title: 'Item ${item.line}: ${item.description}',
-        unit: item.unit,
-        requested: item.quantity,
-        received: received,
-        delta: delta,
-        comment: (item.receivedComment ?? '').trim(),
-      ),
-    );
-  }
-
-  return _ItemDiffSummary(
-    hasReceived: hasReceived,
-    diffs: diffs,
-  );
-}
-
-class _ItemDiff {
-  _ItemDiff({
-    required this.title,
-    required this.unit,
-    required this.requested,
-    required this.received,
-    required this.delta,
-    required this.comment,
-  });
-
-  final String title;
-  final String unit;
-  final num requested;
-  final num received;
-  final num delta;
-  final String comment;
-}
-
-class _ItemDiffSummary {
-  const _ItemDiffSummary({
-    required this.hasReceived,
-    required this.diffs,
-  });
-
-  final bool hasReceived;
-  final List<_ItemDiff> diffs;
 }
 
 class _OrderDetailData {
   const _OrderDetailData({
-    required this.cotizacionLinks,
     required this.facturaLinks,
-    required this.diffSummary,
   });
 
-  final List<CotizacionLink> cotizacionLinks;
   final List<String> facturaLinks;
-  final _ItemDiffSummary diffSummary;
 }

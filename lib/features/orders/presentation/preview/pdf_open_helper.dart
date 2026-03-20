@@ -12,6 +12,7 @@ import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_pdf_preload_gate.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_search.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_status_duration.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_urgency_controls.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
 
 class RejectedOrdersScreen extends ConsumerStatefulWidget {
@@ -31,6 +32,8 @@ class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
   final OrderSearchCache _searchCache = OrderSearchCache();
   Timer? _searchDebounce;
   String _searchQuery = '';
+  OrderUrgencyFilter _urgencyFilter = OrderUrgencyFilter.all;
+  DateTimeRange? _createdDateRangeFilter;
   int _limit = defaultOrderPageSize;
 
   @override
@@ -62,6 +65,40 @@ class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
     setState(() => _searchQuery = '');
   }
 
+  void _setUrgencyFilter(OrderUrgencyFilter filter) {
+    setState(() {
+      _urgencyFilter = filter;
+      _limit = defaultOrderPageSize;
+    });
+  }
+
+  Future<void> _pickCreatedDateFilter() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(1900, 1, 1),
+      lastDate: DateTime(2100, 12, 31),
+      currentDate: now,
+      initialDateRange: _createdDateRangeFilter,
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _createdDateRangeFilter = DateTimeRange(
+        start: DateTime(picked.start.year, picked.start.month, picked.start.day),
+        end: DateTime(picked.end.year, picked.end.month, picked.end.day),
+      );
+      _limit = defaultOrderPageSize;
+    });
+  }
+
+  void _clearCreatedDateFilter() {
+    if (_createdDateRangeFilter == null) return;
+    setState(() {
+      _createdDateRangeFilter = null;
+      _limit = defaultOrderPageSize;
+    });
+  }
+
   void _loadMore() {
     setState(() => _limit += orderPageSizeStep);
   }
@@ -72,13 +109,19 @@ class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Ordenes rechazadas'),
+        title: ordersAsync.when(
+          data: (orders) => OrderModuleAppBarTitle(
+            title: 'Ordenes rechazadas',
+            counts: OrderUrgencyCounts.fromOrders(orders),
+            filter: _urgencyFilter,
+            onSelected: _setUrgencyFilter,
+          ),
+          loading: () => const Text('Ordenes rechazadas'),
+          error: (_, __) => const Text('Ordenes rechazadas'),
+        ),
       ),
       body: ordersAsync.when(
         data: (orders) {
-          if (orders.isEmpty) {
-            return const Center(child: Text('No hay órdenes rechazadas.'));
-          }
 
           _searchCache.retainFor(orders);
           final filtered = _resolveVisibleOrders(orders);
@@ -89,20 +132,49 @@ class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                child: TextField(
-                  controller: _searchController,
-                  decoration: InputDecoration(
-                    labelText:
-                        'Buscar por folio (000001), solicitante, cliente, fecha...',
-                    prefixIcon: const Icon(Icons.search),
-                    suffixIcon: _searchQuery.isEmpty
-                        ? null
-                        : IconButton(
-                            icon: const Icon(Icons.clear),
-                            onPressed: _clearSearch,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isNarrow = constraints.maxWidth < 720;
+                    final searchField = TextField(
+                      controller: _searchController,
+                      decoration: InputDecoration(
+                        labelText: 'Buscar por folio (000001), solicitante, cliente...',
+                        prefixIcon: const Icon(Icons.search),
+                        suffixIcon: _searchQuery.isEmpty
+                            ? null
+                            : IconButton(
+                                icon: const Icon(Icons.clear),
+                                onPressed: _clearSearch,
+                              ),
+                      ),
+                      onChanged: _updateSearch,
+                    );
+                    final dateFilter = OrderDateRangeFilterButton(
+                      selectedRange: _createdDateRangeFilter,
+                      onPickDate: _pickCreatedDateFilter,
+                      onClearDate: _clearCreatedDateFilter,
+                    );
+                    if (isNarrow) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          searchField,
+                          const SizedBox(height: 12),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: dateFilter,
                           ),
-                  ),
-                  onChanged: _updateSearch,
+                        ],
+                      );
+                    }
+                    return Row(
+                      children: [
+                        Expanded(child: searchField),
+                        const SizedBox(width: 12),
+                        dateFilter,
+                      ],
+                    );
+                  },
                 ),
               ),
               const Padding(
@@ -124,7 +196,7 @@ class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
                             OutlinedButton.icon(
                               onPressed: _loadMore,
                               icon: const Icon(Icons.expand_more),
-                              label: const Text('Ver más'),
+                              label: const Text('Ver mÃ¡s'),
                             ),
                           ],
                         ],
@@ -139,7 +211,7 @@ class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
                               child: OutlinedButton.icon(
                                 onPressed: _loadMore,
                                 icon: const Icon(Icons.expand_more),
-                                label: const Text('Ver más'),
+                                label: const Text('Ver mÃ¡s'),
                               ),
                             );
                           }
@@ -186,16 +258,26 @@ class _RejectedOrdersScreenState extends ConsumerState<RejectedOrdersScreen> {
                   order,
                   trimmedQuery,
                   cache: _searchCache,
+                  includeDates: false,
                 ),
               )
               .toList(growable: false);
+    final dateFiltered = resolved
+        .where((order) => matchesOrderCreatedDateRange(order, _createdDateRangeFilter))
+        .toList(growable: false);
+    final urgencyFiltered = dateFiltered
+        .where((order) => matchesOrderUrgencyFilter(order, _urgencyFilter))
+        .toList(growable: false);
     _cachedSourceOrders = orders;
     _cachedVisibleKey = key;
-    _cachedVisibleOrders = resolved;
-    return resolved;
+    _cachedVisibleOrders = urgencyFiltered;
+    return urgencyFiltered;
   }
 
-  String _visibleOrdersKey() => _searchQuery.trim().toLowerCase();
+  String _visibleOrdersKey() =>
+      '${_searchQuery.trim().toLowerCase()}|${_urgencyFilter.name}|'
+      '${_createdDateRangeFilter?.start.millisecondsSinceEpoch ?? ''}|'
+      '${_createdDateRangeFilter?.end.millisecondsSinceEpoch ?? ''}';
 }
 
 class _RejectedOrderCard extends ConsumerWidget {
@@ -230,7 +312,7 @@ class _RejectedOrderCard extends ConsumerWidget {
         PurchaseOrderEvent? lastReturn;
         for (final event in events) {
           if (event.type == 'return') {
-            lastReturn = event; // quedarnos con el último
+            lastReturn = event; // quedarnos con el Ãºltimo
           }
         }
         return _rejectedByLabel(lastReturn?.byRole);
@@ -284,7 +366,7 @@ String _rejectedByLabel(String? rawRole) {
     return 'Compras';
   }
   if (isDireccionGeneralLabel(normalized)) {
-    return 'Dirección General';
+    return 'DirecciÃ³n General';
   }
 
   return normalized;
@@ -296,14 +378,14 @@ String _rejectedFromLabel(PurchaseOrderStatus? status) {
       return 'ordenes por confirmar';
     case PurchaseOrderStatus.cotizaciones:
       return 'cotizaciones';
+    case PurchaseOrderStatus.dataComplete:
+      return 'datos completos';
     case PurchaseOrderStatus.authorizedGerencia:
       return 'Direccion General';
     case PurchaseOrderStatus.paymentDone:
-      return 'pendientes de fecha estimada';
+      return 'en proceso';
     case PurchaseOrderStatus.contabilidad:
       return 'contabilidad';
-    case PurchaseOrderStatus.almacen:
-      return 'almacen';
     case PurchaseOrderStatus.orderPlaced:
       return 'orden realizada';
     case PurchaseOrderStatus.eta:

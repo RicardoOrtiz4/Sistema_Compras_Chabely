@@ -1,10 +1,10 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sistema_compras/app/router.dart';
 import 'package:sistema_compras/core/app_logger.dart';
+import 'package:sistema_compras/core/app_auth.dart';
 import 'package:sistema_compras/core/app_theme.dart';
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/optimistic_action.dart';
@@ -22,7 +22,7 @@ class SistemaComprasApp extends ConsumerStatefulWidget {
 }
 
 class _SistemaComprasAppState extends ConsumerState<SistemaComprasApp> {
-  ProviderSubscription<AsyncValue<User?>>? _authSubscription;
+  ProviderSubscription<AsyncValue<AppAuthUser?>>? _authSubscription;
   ProviderSubscription<Company>? _companySubscription;
 
   @override
@@ -30,7 +30,7 @@ class _SistemaComprasAppState extends ConsumerState<SistemaComprasApp> {
     super.initState();
     ref.read(notificationServiceProvider);
     _authSubscription =
-        ref.listenManual<AsyncValue<User?>>(authStateChangesProvider, (
+        ref.listenManual<AsyncValue<AppAuthUser?>>(authStateChangesProvider, (
       previous,
       next,
     ) {

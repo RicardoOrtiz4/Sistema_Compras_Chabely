@@ -1,46 +1,37 @@
+flutter pub get
+Resolving dependencies... (1.4s)
+Because no versions of firebase_messaging match >15.2.10
+  <16.0.0 and firebase_messaging >=14.7.0 <15.0.1 depends on
+  firebase_core_platform_interface ^5.0.0, firebase_messaging    
+  >=14.7.0 <15.0.1-∞ or >15.2.10 <16.0.0 requires
+  firebase_core_platform_interface ^5.0.0.
+And because firebase_messaging >=15.0.1 <15.0.4 depends on       
+  firebase_core_platform_interface ^5.1.0 and firebase_messaging 
+  >=15.0.4 <15.1.0 depends on firebase_core_platform_interface   
+  ^5.2.0, firebase_messaging >=14.7.0 <15.1.0-∞ or >15.2.10      
+  <16.0.0 requires firebase_core_platform_interface ^5.0.0.      
+And because firebase_messaging >=15.1.0 <15.1.2 depends on       
+  firebase_core_platform_interface ^5.2.1 and firebase_messaging 
+  >=15.1.2 <15.1.6 depends on firebase_core_platform_interface   
+  ^5.3.0, firebase_messaging >=14.7.0 <15.1.6-∞ or >15.2.10      
+  <16.0.0 requires firebase_core_platform_interface ^5.0.0.      
+And because firebase_messaging >=15.1.6 <15.2.8 depends on       
+  firebase_core_platform_interface ^5.3.1 and firebase_messaging 
+  >=15.2.8 <15.2.9 depends on firebase_core_platform_interface   
+  ^5.4.1, firebase_messaging >=14.7.0 <15.2.9-∞ or >15.2.10      
+  <16.0.0 requires firebase_core_platform_interface ^5.0.0.      
+Because firebase_messaging 15.2.10 depends on firebase_core      
+  ^3.15.2 and firebase_messaging >=15.2.9 <15.2.10 depends on    
+  firebase_core ^3.15.1, firebase_messaging >=15.2.9 <=15.2.10   
+  requires firebase_core ^3.15.1.
+Thus, firebase_messaging >=14.7.0 <16.0.0 requires
+  firebase_core from hosted or firebase_core_platform_interface  
+  ^5.0.0.
+And because every version of firebase_core from path depends on  
+  firebase_core_platform_interface ^6.0.0, firebase_core from    
+  path is incompatible with firebase_messaging >=14.7.0 <16.0.0. 
+So, because sistema_compras depends on both firebase_core from   
+  path and firebase_messaging ^15.0.0, version solving failed.   
+Failed to update packages.
 
-[2026-03-13T11:01:20.736] ══╡ EXCEPTION CAUGHT BY RENDERING LIBRARY
-╞═════════════════════════════════════════════════════════
-The following assertion was thrown during layout:
-A RenderFlex overflowed by 27 pixels on the right.
-
-The relevant error-causing widget was:
-  Row
-  Row:file:///D:/chabely/Sistema_Compras_Chabely/lib/features/orders/presentation/compras/cotiz
-  aciones_orders_screen.dart:1709:12
-
-The overflowing RenderFlex has an orientation of Axis.horizontal.
-The edge of the RenderFlex that is overflowing has been marked in the rendering with a yellow  
-and
-black striped pattern. This is usually caused by the contents being too big for the RenderFlex.
-Consider applying a flex factor (e.g. using an Expanded widget) to force the children of the   
-RenderFlex to fit within the available space instead of being sized to their natural size.     
-This is considered an error condition because it indicates that there is content that cannot be
-seen. If the content is legitimately bigger than the available space, consider clipping it with
-a
-ClipRect widget before putting it in the flex, or using a scrollable container rather than a   
-Flex,
-like a ListView.
-The specific RenderFlex in question is: RenderFlex#28f76 relayoutBoundary=up24 OVERFLOWING:    
-  creator: Row ← _TabWithBadge ← Center ← SizedBox ← Tab ← KeyedSubtree-[GlobalKey#3dd82] ←    
-  Padding ←
-    Center ← IconTheme ← Builder ← DefaultTextStyle ← _TabStyle ← ⋯
-  parentData: offset=Offset(0.0, 12.0) (can use size)
-  constraints: BoxConstraints(0.0<=w<=74.0, 0.0<=h<=46.0)
-  size: Size(74.0, 22.0)
-  direction: horizontal
-  mainAxisAlignment: start
-  mainAxisSize: min
-  crossAxisAlignment: center
-  textDirection: ltr
-  verticalDirection: down
-  spacing: 0.0
-◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢
-◤◢◤◢◤
-═══════════════════════════════════════════════════════════════════════════════════════════════
-═════
-[2026-03-13T11:01:20.784] ERROR [FlutterError]: FlutterError message=A RenderFlex overflowed by
-25 pixels on the right.
-[2026-03-13T11:01:20.859] ===== END APP LOG DUMP =====
-[2026-03-13T11:01:20.862] Another exception was thrown: A RenderFlex overflowed by 25 pixels on
-the right.
+The include file 'package:flutter_lints/flutter.yaml' in 'D:\chabely\Sistema_Compras_Chabely\analysis_options.yaml' can't be found when analyzing 'D:\chabely\Sistema_Compras_Chabely\third_party\firebase_core'.dart(include_file_not_found)

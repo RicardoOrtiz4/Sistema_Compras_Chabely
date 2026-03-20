@@ -1,6 +1,31 @@
 import 'package:sistema_compras/core/area_labels.dart';
 import 'package:sistema_compras/core/constants.dart';
 
+enum PurchaseOrderItemQuoteStatus {
+  pending,
+  draft,
+  pendingDireccion,
+  approved,
+  rejected,
+}
+
+extension PurchaseOrderItemQuoteStatusX on PurchaseOrderItemQuoteStatus {
+  String get label {
+    switch (this) {
+      case PurchaseOrderItemQuoteStatus.pending:
+        return 'Pendiente de cotizacion';
+      case PurchaseOrderItemQuoteStatus.draft:
+        return 'En cotizacion';
+      case PurchaseOrderItemQuoteStatus.pendingDireccion:
+        return 'En Direccion General';
+      case PurchaseOrderItemQuoteStatus.approved:
+        return 'Aprobado';
+      case PurchaseOrderItemQuoteStatus.rejected:
+        return 'Rechazado';
+    }
+  }
+}
+
 class PurchaseOrderItem {
   const PurchaseOrderItem({
     required this.line,
@@ -12,7 +37,12 @@ class PurchaseOrderItem {
     this.customer,
     this.supplier,
     this.budget,
+    this.internalOrder,
+    this.quoteId,
+    this.quoteStatus = PurchaseOrderItemQuoteStatus.pending,
     this.estimatedDate,
+    this.deliveryEtaDate,
+    this.sentToContabilidadAt,
     this.reviewFlagged = false,
     this.reviewComment,
     this.receivedQuantity,
@@ -28,7 +58,12 @@ class PurchaseOrderItem {
   final String? customer;
   final String? supplier;
   final num? budget;
+  final String? internalOrder;
+  final String? quoteId;
+  final PurchaseOrderItemQuoteStatus quoteStatus;
   final DateTime? estimatedDate;
+  final DateTime? deliveryEtaDate;
+  final DateTime? sentToContabilidadAt;
   final bool reviewFlagged;
   final String? reviewComment;
   final num? receivedQuantity;
@@ -44,10 +79,19 @@ class PurchaseOrderItem {
     String? customer,
     String? supplier,
     num? budget,
+    String? internalOrder,
+    String? quoteId,
+    PurchaseOrderItemQuoteStatus? quoteStatus,
     DateTime? estimatedDate,
+    DateTime? deliveryEtaDate,
+    DateTime? sentToContabilidadAt,
     bool? reviewFlagged,
     String? reviewComment,
     bool clearReviewComment = false,
+    bool clearInternalOrder = false,
+    bool clearQuoteId = false,
+    bool clearDeliveryEtaDate = false,
+    bool clearSentToContabilidadAt = false,
     num? receivedQuantity,
     String? receivedComment,
     bool clearReceivedQuantity = false,
@@ -63,7 +107,16 @@ class PurchaseOrderItem {
       customer: customer ?? this.customer,
       supplier: supplier ?? this.supplier,
       budget: budget ?? this.budget,
+      internalOrder: clearInternalOrder ? null : (internalOrder ?? this.internalOrder),
+      quoteId: clearQuoteId ? null : (quoteId ?? this.quoteId),
+      quoteStatus: quoteStatus ?? this.quoteStatus,
       estimatedDate: estimatedDate ?? this.estimatedDate,
+      deliveryEtaDate: clearDeliveryEtaDate
+          ? null
+          : (deliveryEtaDate ?? this.deliveryEtaDate),
+      sentToContabilidadAt: clearSentToContabilidadAt
+          ? null
+          : (sentToContabilidadAt ?? this.sentToContabilidadAt),
       reviewFlagged: reviewFlagged ?? this.reviewFlagged,
       reviewComment: clearReviewComment ? null : (reviewComment ?? this.reviewComment),
       receivedQuantity: clearReceivedQuantity ? null : (receivedQuantity ?? this.receivedQuantity),
@@ -82,7 +135,12 @@ class PurchaseOrderItem {
       'customer': customer,
       'supplier': supplier,
       'budget': budget,
+      'internalOrder': internalOrder,
+      'quoteId': quoteId,
+      'quoteStatus': quoteStatus.name,
       'estimatedDate': estimatedDate?.millisecondsSinceEpoch,
+      'deliveryEtaDate': deliveryEtaDate?.millisecondsSinceEpoch,
+      'sentToContabilidadAt': sentToContabilidadAt?.millisecondsSinceEpoch,
       'reviewFlagged': reviewFlagged,
       'reviewComment': reviewComment,
       'receivedQuantity': receivedQuantity,
@@ -108,63 +166,17 @@ class PurchaseOrderItem {
       customer: data['customer'] as String?,
       supplier: data['supplier'] as String?,
       budget: budget,
+      internalOrder: data['internalOrder'] as String?,
+      quoteId: data['quoteId'] as String?,
+      quoteStatus: _itemQuoteStatusFromString(data['quoteStatus'] as String?) ??
+          PurchaseOrderItemQuoteStatus.pending,
       estimatedDate: _parseDateTime(data['estimatedDate']),
+      deliveryEtaDate: _parseDateTime(data['deliveryEtaDate']),
+      sentToContabilidadAt: _parseDateTime(data['sentToContabilidadAt']),
       reviewFlagged: _parseBool(data['reviewFlagged']),
       reviewComment: data['reviewComment'] as String?,
       receivedQuantity: data['receivedQuantity'] as num?,
       receivedComment: data['receivedComment'] as String?,
-    );
-  }
-}
-
-class CotizacionLink {
-  const CotizacionLink({
-    required this.supplier,
-    required this.url,
-    this.quoteId,
-  });
-
-  final String supplier;
-  final String url;
-  final String? quoteId;
-
-  Map<String, dynamic> toMap() {
-    return {
-      'supplier': supplier,
-      'url': url,
-      'quoteId': quoteId,
-    };
-  }
-
-  factory CotizacionLink.fromMap(Map<String, dynamic> data) {
-    return CotizacionLink(
-      supplier: (data['supplier'] as String?) ?? '',
-      url: (data['url'] as String?) ?? '',
-      quoteId: data['quoteId'] as String?,
-    );
-  }
-}
-
-class SharedQuoteRef {
-  const SharedQuoteRef({
-    required this.supplier,
-    required this.quoteId,
-  });
-
-  final String supplier;
-  final String quoteId;
-
-  Map<String, dynamic> toMap() {
-    return {
-      'supplier': supplier,
-      'quoteId': quoteId,
-    };
-  }
-
-  factory SharedQuoteRef.fromMap(Map<String, dynamic> data) {
-    return SharedQuoteRef(
-      supplier: (data['supplier'] as String?) ?? '',
-      quoteId: (data['quoteId'] as String?) ?? '',
     );
   }
 }
@@ -219,6 +231,7 @@ class PurchaseOrder {
     required this.items,
     this.companyId,
     this.clientNote,
+    this.urgentJustification,
     this.createdAt,
     this.updatedAt,
     this.lastReturnReason,
@@ -234,13 +247,8 @@ class PurchaseOrder {
     this.direccionGeneralName,
     this.direccionGeneralArea,
     this.direccionComment,
+    this.requestedDeliveryDate,
     this.etaDate,
-    this.cotizacionPdfUrl,
-    this.cotizacionPdfUrls = const [],
-    this.cotizacionLinks = const [],
-    this.sharedQuoteRefs = const [],
-    this.primaryQuoteId,
-    this.cotizacionReady,
     this.restoredToCotizacionesOrders = false,
     this.facturaPdfUrl,
     this.facturaPdfUrls = const [],
@@ -253,13 +261,10 @@ class PurchaseOrder {
     this.contabilidadName,
     this.contabilidadArea,
     this.facturaUploadedAt,
-    this.almacenName,
-    this.almacenArea,
-    this.almacenComment,
-    this.almacenHasDifferences = false,
-    this.almacenDifferenceSummary,
-    this.almacenReceivedAt,
     this.completedAt,
+    this.requesterReceivedAt,
+    this.requesterReceivedName,
+    this.requesterReceivedArea,
     this.isDraft = false,
   });
 
@@ -273,6 +278,7 @@ class PurchaseOrder {
   final List<PurchaseOrderItem> items;
   final String? companyId;
   final String? clientNote;
+  final String? urgentJustification;
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final String? lastReturnReason;
@@ -288,13 +294,8 @@ class PurchaseOrder {
   final String? direccionGeneralName;
   final String? direccionGeneralArea;
   final String? direccionComment;
+  final DateTime? requestedDeliveryDate;
   final DateTime? etaDate;
-  final String? cotizacionPdfUrl;
-  final List<String> cotizacionPdfUrls;
-  final List<CotizacionLink> cotizacionLinks;
-  final List<SharedQuoteRef> sharedQuoteRefs;
-  final String? primaryQuoteId;
-  final bool? cotizacionReady;
   final bool restoredToCotizacionesOrders;
   final String? facturaPdfUrl;
   final List<String> facturaPdfUrls;
@@ -307,16 +308,16 @@ class PurchaseOrder {
   final String? contabilidadName;
   final String? contabilidadArea;
   final DateTime? facturaUploadedAt;
-  final String? almacenName;
-  final String? almacenArea;
-  final String? almacenComment;
-  final bool almacenHasDifferences;
-  final String? almacenDifferenceSummary;
-  final DateTime? almacenReceivedAt;
   final DateTime? completedAt;
+  final DateTime? requesterReceivedAt;
+  final String? requesterReceivedName;
+  final String? requesterReceivedArea;
   final bool isDraft;
 
   bool get canEdit => isDraft || status == PurchaseOrderStatus.draft;
+  bool get isRequesterReceiptConfirmed => requesterReceivedAt != null;
+  bool get isAwaitingRequesterReceipt =>
+      status == PurchaseOrderStatus.eta && !isRequesterReceiptConfirmed;
 
   Map<String, dynamic> toMap() {
     return {
@@ -329,6 +330,7 @@ class PurchaseOrder {
       'status': status.name,
       'items': items.map((item) => item.toMap()).toList(),
       'clientNote': clientNote,
+      'urgentJustification': urgentJustification,
       'createdAt': createdAt?.millisecondsSinceEpoch,
       'updatedAt': updatedAt?.millisecondsSinceEpoch,
       'lastReturnReason': lastReturnReason,
@@ -344,18 +346,8 @@ class PurchaseOrder {
       'direccionGeneralName': direccionGeneralName,
       'direccionGeneralArea': direccionGeneralArea,
       'direccionComment': direccionComment,
+      'requestedDeliveryDate': requestedDeliveryDate?.millisecondsSinceEpoch,
       'etaDate': etaDate?.millisecondsSinceEpoch,
-      'cotizacionPdfUrl':
-          cotizacionLinks.isNotEmpty ? cotizacionLinks.first.url : cotizacionPdfUrl,
-      'cotizacionPdfUrls': _urlsFromLinks(cotizacionLinks),
-      'cotizacionLinks': cotizacionLinks.isEmpty
-          ? null
-          : cotizacionLinks.map((link) => link.toMap()).toList(),
-      'sharedQuoteRefs': sharedQuoteRefs.isEmpty
-          ? null
-          : sharedQuoteRefs.map((ref) => ref.toMap()).toList(),
-      'primaryQuoteId': primaryQuoteId?.trim().isEmpty ?? true ? null : primaryQuoteId?.trim(),
-      'cotizacionReady': cotizacionReady,
       'restoredToCotizacionesOrders': restoredToCotizacionesOrders,
       'facturaPdfUrl': facturaPdfUrl,
       'facturaPdfUrls': facturaPdfUrls,
@@ -370,13 +362,10 @@ class PurchaseOrder {
       'contabilidadName': contabilidadName,
       'contabilidadArea': contabilidadArea,
       'facturaUploadedAt': facturaUploadedAt?.millisecondsSinceEpoch,
-      'almacenName': almacenName,
-      'almacenArea': almacenArea,
-      'almacenComment': almacenComment,
-      'almacenHasDifferences': almacenHasDifferences,
-      'almacenDifferenceSummary': almacenDifferenceSummary,
-      'almacenReceivedAt': almacenReceivedAt?.millisecondsSinceEpoch,
       'completedAt': completedAt?.millisecondsSinceEpoch,
+      'requesterReceivedAt': requesterReceivedAt?.millisecondsSinceEpoch,
+      'requesterReceivedName': requesterReceivedName,
+      'requesterReceivedArea': requesterReceivedArea,
       'isDraft': isDraft,
     };
   }
@@ -399,15 +388,6 @@ class PurchaseOrder {
       }
     }
 
-    final urls = _parseStringList(data['cotizacionPdfUrls']);
-    final singleUrl = data['cotizacionPdfUrl'] as String?;
-    if (singleUrl != null && singleUrl.trim().isNotEmpty && !urls.contains(singleUrl)) {
-      urls.insert(0, singleUrl);
-    }
-
-    final linkEntries = _parseCotizacionLinks(data['cotizacionLinks']);
-    final mergedLinks = _mergeCotizacionLinks(linkEntries, urls);
-
     final facturaUrls = _parseStringList(data['facturaPdfUrls']);
     final singleFactura = data['facturaPdfUrl'] as String?;
     if (singleFactura != null &&
@@ -423,10 +403,11 @@ class PurchaseOrder {
       areaId: (data['areaId'] as String?) ?? '',
       areaName: normalizeAreaLabel((data['areaName'] as String?) ?? ''),
       companyId: data['companyId'] as String?,
-      urgency: _urgencyFromString(data['urgency'] as String?) ?? PurchaseOrderUrgency.media,
+      urgency: _urgencyFromString(data['urgency'] as String?) ?? PurchaseOrderUrgency.normal,
       status: _statusFromString(data['status'] as String?) ?? PurchaseOrderStatus.draft,
       items: items,
       clientNote: data['clientNote'] as String?,
+      urgentJustification: data['urgentJustification'] as String?,
       createdAt: _parseDateTime(data['createdAt']),
       updatedAt: _parseDateTime(data['updatedAt']),
       lastReturnReason: data['lastReturnReason'] as String?,
@@ -442,15 +423,8 @@ class PurchaseOrder {
       direccionGeneralName: data['direccionGeneralName'] as String?,
       direccionGeneralArea: data['direccionGeneralArea'] as String?,
       direccionComment: data['direccionComment'] as String?,
+      requestedDeliveryDate: _parseDateTime(data['requestedDeliveryDate']),
       etaDate: _parseDateTime(data['etaDate']),
-      cotizacionPdfUrl: singleUrl,
-      cotizacionPdfUrls: _urlsFromLinks(mergedLinks),
-      cotizacionLinks: mergedLinks,
-      sharedQuoteRefs: _parseSharedQuoteRefs(data['sharedQuoteRefs']),
-      primaryQuoteId: (data['primaryQuoteId'] as String?)?.trim(),
-      cotizacionReady: data['cotizacionReady'] == null
-          ? null
-          : _parseBool(data['cotizacionReady']),
       restoredToCotizacionesOrders: _parseBool(
         data['restoredToCotizacionesOrders'],
       ),
@@ -465,16 +439,58 @@ class PurchaseOrder {
       contabilidadName: data['contabilidadName'] as String?,
       contabilidadArea: data['contabilidadArea'] as String?,
       facturaUploadedAt: _parseDateTime(data['facturaUploadedAt']),
-      almacenName: data['almacenName'] as String?,
-      almacenArea: data['almacenArea'] as String?,
-      almacenComment: data['almacenComment'] as String?,
-      almacenHasDifferences: _parseBool(data['almacenHasDifferences']),
-      almacenDifferenceSummary: data['almacenDifferenceSummary'] as String?,
-      almacenReceivedAt: _parseDateTime(data['almacenReceivedAt']),
       completedAt: _parseDateTime(data['completedAt']),
+      requesterReceivedAt: _parseDateTime(data['requesterReceivedAt']),
+      requesterReceivedName: data['requesterReceivedName'] as String?,
+      requesterReceivedArea: data['requesterReceivedArea'] as String?,
       isDraft: (data['isDraft'] as bool?) ?? false,
     );
   }
+}
+
+DateTime? resolveRequestedDeliveryDate(PurchaseOrder order) {
+  final explicit = order.requestedDeliveryDate;
+  if (explicit != null) {
+    return DateTime(explicit.year, explicit.month, explicit.day);
+  }
+
+  DateTime? selected;
+  for (final item in order.items) {
+    final date = item.estimatedDate;
+    if (date == null) continue;
+    final normalized = DateTime(date.year, date.month, date.day);
+    if (selected == null || normalized.isBefore(selected)) {
+      selected = normalized;
+    }
+  }
+  return selected;
+}
+
+DateTime? resolveCommittedDeliveryDate(PurchaseOrder order) {
+  DateTime? selected;
+  for (final item in order.items) {
+    final date = item.deliveryEtaDate;
+    if (date == null) continue;
+    final normalized = DateTime(date.year, date.month, date.day);
+    if (selected == null || normalized.isAfter(selected)) {
+      selected = normalized;
+    }
+  }
+  return selected;
+}
+
+int countItemsWithCommittedDeliveryDate(PurchaseOrder order) {
+  return order.items.where((item) => item.deliveryEtaDate != null).length;
+}
+
+bool hasAllItemsCommittedDeliveryDate(PurchaseOrder order) {
+  if (order.items.isEmpty) return false;
+  for (final item in order.items) {
+    if (item.deliveryEtaDate == null) {
+      return false;
+    }
+  }
+  return true;
 }
 
 PurchaseOrderStatus? _statusFromString(String? raw) {
@@ -487,8 +503,20 @@ PurchaseOrderStatus? _statusFromString(String? raw) {
 
 PurchaseOrderUrgency? _urgencyFromString(String? raw) {
   if (raw == null) return null;
+  final normalized = raw.trim().toLowerCase();
+  if (normalized == 'alta' || normalized == 'media' || normalized == 'baja') {
+    return PurchaseOrderUrgency.normal;
+  }
   for (final urgency in PurchaseOrderUrgency.values) {
-    if (urgency.name == raw) return urgency;
+    if (urgency.name == normalized) return urgency;
+  }
+  return null;
+}
+
+PurchaseOrderItemQuoteStatus? _itemQuoteStatusFromString(String? raw) {
+  if (raw == null) return null;
+  for (final status in PurchaseOrderItemQuoteStatus.values) {
+    if (status.name == raw) return status;
   }
   return null;
 }
@@ -545,53 +573,6 @@ List<String> _parseStringList(dynamic value) {
     if (text.isNotEmpty) items.add(text);
   }
   return items;
-}
-
-List<CotizacionLink> _parseCotizacionLinks(dynamic value) {
-  final items = <CotizacionLink>[];
-  if (value is List) {
-    for (final entry in value) {
-      if (entry is Map) {
-        items.add(CotizacionLink.fromMap(Map<String, dynamic>.from(entry)));
-      }
-    }
-  } else if (value is Map) {
-    for (final entry in value.values) {
-      if (entry is Map) {
-        items.add(CotizacionLink.fromMap(Map<String, dynamic>.from(entry)));
-      }
-    }
-  }
-  return items;
-}
-
-List<CotizacionLink> _mergeCotizacionLinks(
-  List<CotizacionLink> links,
-  List<String> urls,
-) {
-  final merged = <CotizacionLink>[...links];
-
-  for (final url in urls) {
-    final trimmed = url.trim();
-    if (trimmed.isEmpty) continue;
-
-    final exists = merged.any((entry) => entry.url.trim() == trimmed);
-    if (!exists) {
-      merged.add(CotizacionLink(supplier: '', url: trimmed));
-    }
-  }
-
-  return merged;
-}
-
-List<String> _urlsFromLinks(List<CotizacionLink> links) {
-  final urls = <String>[];
-  for (final link in links) {
-    final url = link.url.trim();
-    if (url.isEmpty) continue;
-    if (!urls.contains(url)) urls.add(url);
-  }
-  return urls;
 }
 
 Map<String, num> _parseSupplierBudgets(dynamic value) {
@@ -654,39 +635,3 @@ List<PurchaseOrderItem> _parseItemsSnapshot(dynamic value) {
   return items;
 }
 
-List<SharedQuoteRef> _parseSharedQuoteRefs(dynamic value) {
-  final refs = <SharedQuoteRef>[];
-
-  if (value is List) {
-    for (final entry in value) {
-      if (entry is Map) {
-        refs.add(SharedQuoteRef.fromMap(Map<String, dynamic>.from(entry)));
-      }
-    }
-    return refs;
-  }
-
-  if (value is Map) {
-    // Soporta:
-    // 1) [{supplier, quoteId}, ...] (ya cubierto arriba)
-    // 2) { "proveedor": {supplier, quoteId}, ... }
-    // 3) { "proveedor": "quoteId", ... }
-    for (final entry in value.entries) {
-      final keySupplier = entry.key.toString().trim();
-
-      final v = entry.value;
-      if (v is Map) {
-        refs.add(SharedQuoteRef.fromMap(Map<String, dynamic>.from(v)));
-        continue;
-      }
-      if (v is String) {
-        final quoteId = v.trim();
-        if (keySupplier.isNotEmpty && quoteId.isNotEmpty) {
-          refs.add(SharedQuoteRef(supplier: keySupplier, quoteId: quoteId));
-        }
-      }
-    }
-  }
-
-  return refs;
-}

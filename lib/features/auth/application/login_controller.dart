@@ -29,7 +29,7 @@ class LoginController extends StateNotifier<LoginState> {
     state = state.copyWith(isLoading: true, clearError: true);
     try {
       await _authRepository.signIn(email: email, password: password);
-      final user = _ref.read(firebaseAuthProvider).currentUser;
+      final user = _ref.read(appAuthProvider).currentUser;
       if (user != null) {
         await _authRepository.ensureUserDocument(user);
       }

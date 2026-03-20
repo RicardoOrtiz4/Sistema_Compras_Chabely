@@ -1,8 +1,9 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
+import 'package:sistema_compras/features/orders/domain/order_event_labels.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_inline_view.dart';
@@ -392,64 +393,68 @@ String? _titleForEvent(
 
   if (_isSubmissionEvent(event)) {
     final next = submissionCount + 1;
-    return next == 1 ? 'Orden original' : 'ReenvÃ­o ${next - 1}';
+    return next == 1 ? 'Orden original' : 'Reenvio ${next - 1}';
   }
 
   if (_isReturnEvent(event)) {
     final next = returnCount + 1;
-    if (toStatus == PurchaseOrderStatus.pendingCompras) {
-      return 'Rechazo $next (Regreso a Compras)';
-    }
-    if (toStatus == PurchaseOrderStatus.draft) {
-      return 'Rechazo $next (Regreso a Solicitante)';
-    }
-    return 'Rechazo $next';
+    return 'Regreso $next';
   }
 
-  if (event.type == 'advance' && toStatus == PurchaseOrderStatus.cotizaciones) {
-    return 'Autorizada por Compras';
-  }
-
-  if (event.type == 'advance' &&
-      toStatus == PurchaseOrderStatus.authorizedGerencia) {
-    return 'DespuÃ©s de Cotizaciones';
-  }
-
-  if (event.type == 'advance') {
-    return 'Estado: ${toStatus.label}';
-  }
-
-  return null;
-}
-
-String _appendRejectionStage(String title, PurchaseOrderEvent? event) {
-  final stage = _rejectionStageLabel(event);
-  if (stage == null) return title;
-  return '$title (rechazada en $stage)';
-}
-
-String? _rejectionStageLabel(PurchaseOrderEvent? event) {
-  final status = event?.fromStatus;
-  if (status == null) return null;
-  switch (status) {
+  switch (toStatus) {
     case PurchaseOrderStatus.pendingCompras:
-      return 'Compras';
+      return 'Enviada a Compras';
     case PurchaseOrderStatus.cotizaciones:
-      return 'Cotizaciones';
+      return 'Enviada a Cotizaciones';
+    case PurchaseOrderStatus.dataComplete:
+      return 'Datos completos';
     case PurchaseOrderStatus.authorizedGerencia:
-      return 'Dirección General';
+      return 'Enviada a Direccion General';
     case PurchaseOrderStatus.paymentDone:
-      return 'Pendientes de fecha estimada';
+      return 'En proceso';
     case PurchaseOrderStatus.contabilidad:
-      return 'Contabilidad';
-    case PurchaseOrderStatus.almacen:
-      return 'Almacén';
+      return 'Enviada a Contabilidad';
     case PurchaseOrderStatus.orderPlaced:
       return 'Orden realizada';
     case PurchaseOrderStatus.eta:
       return 'Orden finalizada';
     case PurchaseOrderStatus.draft:
       return 'Solicitante';
+  }
+}
+
+String _appendRejectionStage(
+  String title,
+  PurchaseOrderEvent? event,
+) {
+  final stage = _rejectionStageLabel(event);
+  if (stage == null || stage.isEmpty) return title;
+  return '$title - $stage';
+}
+
+String? _rejectionStageLabel(PurchaseOrderEvent? event) {
+  final status = event?.fromStatus;
+  if (status == null) return null;
+
+  switch (status) {
+    case PurchaseOrderStatus.pendingCompras:
+      return returnStageLabel(status);
+    case PurchaseOrderStatus.cotizaciones:
+      return returnStageLabel(status);
+    case PurchaseOrderStatus.dataComplete:
+      return returnStageLabel(status);
+    case PurchaseOrderStatus.authorizedGerencia:
+      return returnStageLabel(status);
+    case PurchaseOrderStatus.paymentDone:
+      return returnStageLabel(status);
+    case PurchaseOrderStatus.contabilidad:
+      return returnStageLabel(status);
+    case PurchaseOrderStatus.orderPlaced:
+      return returnStageLabel(status);
+    case PurchaseOrderStatus.eta:
+      return returnStageLabel(status);
+    case PurchaseOrderStatus.draft:
+      return returnStageLabel(status);
   }
 }
 

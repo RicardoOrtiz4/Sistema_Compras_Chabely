@@ -6,7 +6,6 @@ import 'package:sistema_compras/features/orders/presentation/preview/pdf_open_he
 import 'package:sistema_compras/features/screens.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
 import 'package:sistema_compras/core/providers.dart';
-import '../features/orders/presentation/almacen/almacen_orders_screen.dart';
 import 'package:sistema_compras/features/partners/data/partner_repository.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 
@@ -141,7 +140,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/orders/eta',
         name: 'pendingEtaOrders',
-        builder: (context, state) => const PendingEtaOrdersScreen(),
+        builder: (context, state) => const InProcessSupplierEtaScreen(),
+      ),
+      GoRoute(
+        path: '/orders/in-process',
+        name: 'userInProcessOrders',
+        builder: (context, state) => const UserInProcessOrdersScreen(),
       ),
       GoRoute(
         path: '/orders/direccion',
@@ -157,11 +161,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         ),
       ),
       GoRoute(
-        path: '/orders/direccion/:orderId',
-        name: 'direccionOrderReview',
+        path: '/orders/direccion/cotizacion/:quoteId',
+        name: 'direccionQuoteReview',
         builder: (context, state) {
-          final orderId = state.pathParameters['orderId']!;
-          return DireccionOrderReviewScreen(orderId: orderId);
+          final quoteId = state.pathParameters['quoteId']!;
+          return DireccionQuoteReviewScreen(quoteId: quoteId);
         },
       ),
       GoRoute(
@@ -186,9 +190,27 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const RejectedOrdersScreen(),
       ),
       GoRoute(
+        path: '/orders/rejected/all',
+        name: 'globalActionMonitoring',
+        builder: (context, state) => const GlobalActionMonitoringScreen(),
+      ),
+      GoRoute(
+        path: '/orders/monitoring',
+        name: 'orderMonitoring',
+        builder: (context, state) => const OrderMonitoringScreen(),
+      ),
+      GoRoute(
         path: '/orders/contabilidad',
         name: 'contabilidadOrders',
-        builder: (context, state) => const ContabilidadOrdersScreen(),
+        builder: (context, state) => const ContabilidadSupplierGroupsScreen(),
+      ),
+      GoRoute(
+        path: '/orders/contabilidad/group/:quoteId',
+        name: 'contabilidadGroupReview',
+        builder: (context, state) {
+          final quoteId = state.pathParameters['quoteId']!;
+          return ContabilidadSupplierGroupReviewScreen(quoteId: quoteId);
+        },
       ),
       GoRoute(
         path: '/orders/contabilidad/:orderId',
@@ -196,19 +218,6 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) {
           final orderId = state.pathParameters['orderId']!;
           return ContabilidadOrderReviewScreen(orderId: orderId);
-        },
-      ),
-      GoRoute(
-        path: '/orders/almacen',
-        name: 'almacenOrders',
-        builder: (context, state) => const AlmacenOrdersScreen(),
-      ),
-      GoRoute(
-        path: '/orders/almacen/:orderId',
-        name: 'almacenOrderReview',
-        builder: (context, state) {
-          final orderId = state.pathParameters['orderId']!;
-          return AlmacenOrderReviewScreen(orderId: orderId);
         },
       ),
       GoRoute(

@@ -4,7 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:sistema_compras/features/orders/domain/order_dashboard_counts.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
-import 'package:sistema_compras/features/orders/domain/shared_quote.dart';
+import 'package:sistema_compras/features/orders/domain/supplier_quote.dart';
 
 class OrderLocalSnapshotStore {
   static const _ordersPrefix = 'orders.snapshot.';
@@ -52,25 +52,25 @@ class OrderLocalSnapshotStore {
     ]);
   }
 
-  static Future<List<SharedQuote>?> readSharedQuotes(String key) async {
+  static Future<List<SupplierQuote>?> readSupplierQuotes(String key) async {
     final raw = await _readJson('$_quotesPrefix$key', ttl: _quotesTtl);
     if (raw is! List) return null;
 
-    final quotes = <SharedQuote>[];
+    final quotes = <SupplierQuote>[];
     for (final entry in raw) {
       if (entry is! Map) continue;
       final map = Map<String, dynamic>.from(entry);
       final id = (map['id'] as String?)?.trim() ?? '';
       final data = map['data'];
       if (id.isEmpty || data is! Map) continue;
-      quotes.add(SharedQuote.fromMap(id, Map<String, dynamic>.from(data)));
+      quotes.add(SupplierQuote.fromMap(id, Map<String, dynamic>.from(data)));
     }
     return quotes;
   }
 
-  static Future<void> writeSharedQuotes(
+  static Future<void> writeSupplierQuotes(
     String key,
-    List<SharedQuote> quotes,
+    List<SupplierQuote> quotes,
   ) async {
     await _writeJson('$_quotesPrefix$key', [
       for (final quote in quotes.take(_maxCachedQuotes))

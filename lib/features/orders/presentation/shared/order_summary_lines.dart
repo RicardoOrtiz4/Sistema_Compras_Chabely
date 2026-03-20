@@ -9,6 +9,7 @@ class OrderSummaryLines extends StatelessWidget {
     this.includeRequester = false,
     this.includeArea = false,
     this.includeBudget = false,
+    this.includeUrgentJustification = true,
     this.includeComprasComment = false,
     this.includeClientNote = false,
     this.emptyLabel = 'Sin detalles.',
@@ -18,6 +19,7 @@ class OrderSummaryLines extends StatelessWidget {
   final bool includeRequester;
   final bool includeArea;
   final bool includeBudget;
+  final bool includeUrgentJustification;
   final bool includeComprasComment;
   final bool includeClientNote;
   final String emptyLabel;
@@ -26,9 +28,16 @@ class OrderSummaryLines extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final supplier = (order.supplier ?? '').trim();
-    final internalOrder = (order.internalOrder ?? '').trim();
-    final comprasComment = (order.comprasComment ?? '').trim();
+    final itemInternalOrders = order.items
+        .map((item) => (item.internalOrder ?? '').trim())
+        .where((value) => value.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final internalOrder = itemInternalOrders.isNotEmpty
+        ? itemInternalOrders.join(', ')
+        : (order.internalOrder ?? '').trim();
     final clientNote = (order.clientNote ?? '').trim();
+    final urgentJustification = (order.urgentJustification ?? '').trim();
 
     final lines = <String>[
       if (includeRequester && order.requesterName.trim().isNotEmpty)
@@ -36,11 +45,14 @@ class OrderSummaryLines extends StatelessWidget {
       if (includeArea && order.areaName.trim().isNotEmpty)
         'Área: ${order.areaName.trim()}',
       if (supplier.isNotEmpty) 'Proveedor: $supplier',
-      if (internalOrder.isNotEmpty) 'OC interna: $internalOrder',
+      if (internalOrder.isNotEmpty)
+        itemInternalOrders.length > 1
+            ? 'OC internas: $internalOrder'
+            : 'OC interna: $internalOrder',
       if (includeBudget && order.budget != null) 'Presupuesto: ${order.budget}',
-      if (includeComprasComment && comprasComment.isNotEmpty)
-        'Compras: $comprasComment',
       if (includeClientNote && clientNote.isNotEmpty) 'Nota: $clientNote',
+      if (includeUrgentJustification && urgentJustification.isNotEmpty)
+        'Urgente: $urgentJustification',
     ];
 
     if (lines.isEmpty) {

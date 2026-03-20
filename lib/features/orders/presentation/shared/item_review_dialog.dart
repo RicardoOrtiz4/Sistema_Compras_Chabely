@@ -248,7 +248,7 @@ class _ItemReviewSheetState extends State<_ItemReviewSheet> {
                       onPressed: () {
                         if (_flaggedCount == 0) {
                           setState(() {
-                            _errorText = 'Selecciona al menos un artÃ­culo.';
+                            _errorText = 'Selecciona al menos un artículo.';
                           });
                           return;
                         }
@@ -258,7 +258,7 @@ class _ItemReviewSheetState extends State<_ItemReviewSheet> {
                           if (_comments[i].trim().isEmpty) {
                             setState(() {
                               _errorText =
-                                  'Agrega un motivo en todos los artÃ­culos marcados.';
+                                  'Agrega un motivo en todos los artí­culos marcados.';
                             });
                             return;
                           }
@@ -335,7 +335,7 @@ class _ReviewHeaderRow extends StatelessWidget {
       child: Row(
         children: [
           const SizedBox(width: 36),
-          Expanded(flex: 3, child: Text('ArtÃ­culo', style: labelStyle)),
+          Expanded(flex: 3, child: Text('Artí­culo', style: labelStyle)),
           const SizedBox(width: 8),
           Expanded(flex: 4, child: Text('Motivo', style: labelStyle)),
         ],

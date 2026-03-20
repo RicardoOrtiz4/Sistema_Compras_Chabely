@@ -1,10 +1,10 @@
 import 'dart:async';
 
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:sistema_compras/core/app_auth.dart';
 import 'package:sistema_compras/core/providers.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
@@ -14,7 +14,7 @@ class NotificationService {
 
   final FirebaseMessaging? _messaging;
   final ProfileRepository _profileRepository;
-  final FirebaseAuth _auth;
+  final AppAuthClient _auth;
 
   StreamSubscription<String>? _tokenSubscription;
   String? _lastSentToken;
@@ -49,7 +49,7 @@ class NotificationService {
     });
   }
 
-  Future<void> _handleAuthUser(User? user) async {
+  Future<void> _handleAuthUser(AppAuthUser? user) async {
     final messaging = _messaging;
     if (user == null || messaging == null) return;
 
@@ -85,7 +85,7 @@ class NotificationService {
     _lastUserId = null;
   }
 
-  Future<void> handleAuthChanged(User? previous, User? current) async {
+  Future<void> handleAuthChanged(AppAuthUser? previous, AppAuthUser? current) async {
     if (previous?.uid != null && previous?.uid != current?.uid) {
       _lastUserId = previous!.uid;
       await clearToken();
@@ -126,7 +126,7 @@ final notificationServiceProvider = Provider<NotificationService>((ref) {
   }
 
   final profileRepository = ref.watch(profileRepositoryProvider);
-  final auth = ref.watch(firebaseAuthProvider);
+  final auth = ref.watch(appAuthProvider);
 
   final service = NotificationService(messaging, profileRepository, auth);
 

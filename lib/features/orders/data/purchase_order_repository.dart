@@ -1,24 +1,27 @@
-import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
+import 'package:sistema_compras/core/firebase_database_compat.dart';
 import 'package:sistema_compras/core/providers.dart';
 import 'package:sistema_compras/features/auth/domain/app_user.dart';
 import 'package:sistema_compras/features/orders/domain/order_dashboard_counts.dart';
 import 'package:sistema_compras/features/orders/domain/order_folio.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
-import 'package:sistema_compras/features/orders/domain/shared_quote.dart';
+import 'package:sistema_compras/features/orders/domain/supplier_quote.dart';
+import 'package:sistema_compras/features/orders/domain/supplier_quote_history_entry.dart';
 
 class PurchaseOrderRepository {
   PurchaseOrderRepository(this._database, this._company);
 
-  final FirebaseDatabase _database;
+  final AppDatabase _database;
   final Company _company;
 
-  DatabaseReference get _ordersRef => _database.ref('purchaseOrders');
-  DatabaseReference get _sharedQuotesRef => _database.ref('sharedQuotes');
-  DatabaseReference get _orderCountersRef => _database.ref('purchaseOrderCounters');
+  AppDatabaseRef get _ordersRef => _database.ref('purchaseOrders');
+  AppDatabaseRef get _supplierQuotesRef => _database.ref('supplierQuotes');
+  AppDatabaseRef get _supplierQuoteHistoryRef =>
+      _database.ref('supplierQuoteHistory');
+  AppDatabaseRef get _orderCountersRef => _database.ref('purchaseOrderCounters');
 
   PurchaseOrder? _parseOrderEntry(String id, Object? raw) {
     if (raw is! Map) return null;
@@ -49,7 +52,7 @@ class PurchaseOrderRepository {
   }
 
   Stream<List<PurchaseOrder>> watchOrdersForUser(String uid, {int? limit}) {
-    Query query = _ordersRef.orderByChild('requesterId').equalTo(uid);
+    AppDatabaseQuery query = _ordersRef.orderByChild('requesterId').equalTo(uid);
     if (limit != null && limit > 0) {
       query = query.limitToLast(limit);
     }
@@ -57,7 +60,7 @@ class PurchaseOrderRepository {
   }
 
   Stream<List<PurchaseOrder>> watchAllOrders({int? limit}) {
-    Query query = _ordersRef;
+    AppDatabaseQuery query = _ordersRef;
     if (limit != null && limit > 0) {
       query = query.limitToLast(limit);
     }
@@ -96,7 +99,7 @@ class PurchaseOrderRepository {
     PurchaseOrderStatus status, {
     int? limit,
   }) {
-    Query query = _ordersRef.orderByChild('status').equalTo(status.name);
+    AppDatabaseQuery query = _ordersRef.orderByChild('status').equalTo(status.name);
     if (limit != null && limit > 0) {
       query = query.limitToLast(limit);
     }
@@ -131,7 +134,9 @@ class PurchaseOrderRepository {
     required AppUser requester,
     required PurchaseOrderUrgency urgency,
     required List<PurchaseOrderItem> items,
+    DateTime? requestedDeliveryDate,
     String? clientNote,
+    String? urgentJustification,
   }) async {
     final trimmedDraftId = draftId?.trim();
     if (_isFolioId(trimmedDraftId)) {
@@ -149,18 +154,20 @@ class PurchaseOrderRepository {
         final timingUpdate = existing == null ? const <String, Object?>{} : _statusTimingUpdate(existing);
 
         await orderRef.update({
-          'companyId': _company.name,
+          'companyId': sharedCompanyDataId,
           'requesterId': requester.id,
           'requesterName': requester.name,
           'areaId': requester.areaId,
           'areaName': requester.areaDisplay,
           'urgency': urgency.name,
           'clientNote': clientNote,
+          'urgentJustification': urgentJustification,
+          'requestedDeliveryDate': requestedDeliveryDate?.millisecondsSinceEpoch,
           'items': items.map((item) => item.toMap()).toList(),
           'resubmissions': resubmissions,
           'status': PurchaseOrderStatus.pendingCompras.name,
           'isDraft': false,
-          'updatedAt': ServerValue.timestamp,
+          'updatedAt': appServerTimestamp,
           'visibility': {
             'contabilidad': false,
           },
@@ -184,13 +191,15 @@ class PurchaseOrderRepository {
     final orderId = nextFolio;
 
     final payload = <String, dynamic>{
-      'companyId': _company.name,
+      'companyId': sharedCompanyDataId,
       'requesterId': requester.id,
       'requesterName': requester.name,
       'areaId': requester.areaId,
       'areaName': requester.areaDisplay,
       'urgency': urgency.name,
       'clientNote': clientNote,
+      'urgentJustification': urgentJustification,
+      'requestedDeliveryDate': requestedDeliveryDate?.millisecondsSinceEpoch,
       'items': items.map((item) => item.toMap()).toList(),
       'status': PurchaseOrderStatus.pendingCompras.name,
       'isDraft': false,
@@ -198,8 +207,8 @@ class PurchaseOrderRepository {
       'returnCount': 0,
       'resubmissions': <int>[],
       'direccionReturnCount': 0,
-      'updatedAt': ServerValue.timestamp,
-      'statusEnteredAt': ServerValue.timestamp,
+      'updatedAt': appServerTimestamp,
+      'statusEnteredAt': appServerTimestamp,
       'statusDurations': <String, int>{},
       'visibility': {
         'contabilidad': false,
@@ -209,7 +218,7 @@ class PurchaseOrderRepository {
     final orderRef = _ordersRef.child(orderId);
     await orderRef.set({
       ...payload,
-      'createdAt': ServerValue.timestamp,
+      'createdAt': appServerTimestamp,
     });
 
     await _appendEvent(
@@ -244,7 +253,7 @@ class PurchaseOrderRepository {
       'lastReturnReason': comment.trim().isEmpty ? null : comment.trim(),
       'returnCount': nextReturnCount,
       'items': items.map((item) => item.toMap()).toList(),
-      'updatedAt': ServerValue.timestamp,
+      'updatedAt': appServerTimestamp,
       ...timingUpdate,
     });
 
@@ -259,7 +268,6 @@ class PurchaseOrderRepository {
       comment: comment.trim().isEmpty ? null : comment.trim(),
     );
 
-    await _markSharedQuotesNeedsUpdate(order);
   }
 
   Future<void> updateApprovalData({
@@ -278,6 +286,7 @@ class PurchaseOrderRepository {
     final trimmedComment = comprasComment?.trim();
     final trimmedReviewer = comprasReviewerName?.trim();
     final trimmedInternal = internalOrder?.trim();
+    final currentOrder = markReady ? await fetchOrderById(orderId) : null;
 
     final normalizedBudgets = _normalizeSupplierBudgets(supplierBudgets);
     final effectiveBudget = normalizedBudgets.isNotEmpty ? _sumBudgets(normalizedBudgets) : budget;
@@ -292,52 +301,20 @@ class PurchaseOrderRepository {
       'comprasReviewerArea': (comprasReviewerArea == null || comprasReviewerArea.trim().isEmpty)
           ? null
           : comprasReviewerArea.trim(),
-      'cotizacionReady': markReady ? true : false,
-      'updatedAt': ServerValue.timestamp,
+      'updatedAt': appServerTimestamp,
     };
 
     if (items != null) {
       payload['items'] = items.map((item) => item.toMap()).toList();
     }
+    if (markReady) {
+      payload['status'] = PurchaseOrderStatus.dataComplete.name;
+      if (currentOrder != null && currentOrder.status != PurchaseOrderStatus.dataComplete) {
+        payload.addAll(_statusTimingUpdate(currentOrder));
+      }
+    }
 
     await _ordersRef.child(orderId).update(payload);
-  }
-
-  Future<void> setCotizacionReady({
-    required String orderId,
-    required bool ready,
-  }) async {
-    await _ordersRef.child(orderId).update({
-      'cotizacionReady': ready,
-      'updatedAt': ServerValue.timestamp,
-    });
-  }
-
-  Future<void> markPaymentDone({
-    required PurchaseOrder order,
-    required AppUser actor,
-  }) async {
-    final orderRef = _ordersRef.child(order.id);
-    final trimmedName = actor.name.trim();
-    final trimmedArea = actor.areaDisplay.trim();
-    final timingUpdate = _statusTimingUpdate(order);
-
-    await orderRef.update({
-      'status': PurchaseOrderStatus.paymentDone.name,
-      'direccionGeneralName': trimmedName.isEmpty ? null : trimmedName,
-      'direccionGeneralArea': trimmedArea.isEmpty ? null : trimmedArea,
-      'updatedAt': ServerValue.timestamp,
-      ...timingUpdate,
-    });
-
-    await _appendEvent(
-      orderRef,
-      fromStatus: order.status,
-      toStatus: PurchaseOrderStatus.paymentDone,
-      byUserId: actor.id,
-      byRole: _actorRoleLabel(actor),
-      type: 'advance',
-    );
   }
 
   Future<void> setEstimatedDeliveryDate({
@@ -351,7 +328,7 @@ class PurchaseOrderRepository {
     await orderRef.update({
       'status': PurchaseOrderStatus.contabilidad.name,
       'etaDate': etaDate.millisecondsSinceEpoch,
-      'updatedAt': ServerValue.timestamp,
+      'updatedAt': appServerTimestamp,
       ...timingUpdate,
     });
 
@@ -365,10 +342,11 @@ class PurchaseOrderRepository {
     );
   }
 
-  Future<void> sendFacturaToAlmacen({
+  Future<void> completeFromContabilidad({
     required PurchaseOrder order,
     required List<String> facturaUrls,
     required AppUser actor,
+    List<PurchaseOrderItem>? items,
   }) async {
     final cleaned = facturaUrls.map((url) => url.trim()).where((url) => url.isNotEmpty).toList();
     if (cleaned.isEmpty) throw StateError('Link de factura requerido.');
@@ -378,59 +356,24 @@ class PurchaseOrderRepository {
     final trimmedArea = actor.areaDisplay.trim();
     final timingUpdate = _statusTimingUpdate(order);
 
-    await orderRef.update({
-      'status': PurchaseOrderStatus.almacen.name,
+    final payload = <String, dynamic>{
+      'status': PurchaseOrderStatus.eta.name,
       'facturaPdfUrls': cleaned,
       'facturaPdfUrl': cleaned.first,
       'contabilidadName': trimmedName.isEmpty ? null : trimmedName,
       'contabilidadArea': trimmedArea.isEmpty ? null : trimmedArea,
-      'facturaUploadedAt': ServerValue.timestamp,
-      'updatedAt': ServerValue.timestamp,
+      'facturaUploadedAt': appServerTimestamp,
+      'completedAt': appServerTimestamp,
+      'updatedAt': appServerTimestamp,
       ...timingUpdate,
-    });
+    };
+    if (items != null) {
+      payload['items'] = items.map((item) => item.toMap()).toList();
+      payload['internalOrder'] = null;
+    }
 
-    await _appendEvent(
-      orderRef,
-      fromStatus: order.status,
-      toStatus: PurchaseOrderStatus.almacen,
-      byUserId: actor.id,
-      byRole: _actorRoleLabel(actor),
-      type: 'advance',
-    );
-  }
+    await orderRef.update(payload);
 
-  Future<void> finalizeFromAlmacen({
-    required PurchaseOrder order,
-    required List<PurchaseOrderItem> items,
-    required AppUser actor,
-    String? comment,
-  }) async {
-    final orderRef = _ordersRef.child(order.id);
-    final trimmedName = actor.name.trim();
-    final trimmedArea = actor.areaDisplay.trim();
-    final trimmedComment = comment?.trim() ?? '';
-    final differenceSummary = _almacenDifferenceSummary(items);
-    final hasDifferences = differenceSummary.isNotEmpty;
-    final timingUpdate = _statusTimingUpdate(order);
-
-    await orderRef.update({
-      'status': PurchaseOrderStatus.eta.name,
-      'items': items.map((item) => item.toMap()).toList(),
-      'almacenName': trimmedName.isEmpty ? null : trimmedName,
-      'almacenArea': trimmedArea.isEmpty ? null : trimmedArea,
-      'almacenComment': trimmedComment.isEmpty ? null : trimmedComment,
-      'almacenHasDifferences': hasDifferences,
-      'almacenDifferenceSummary': hasDifferences ? differenceSummary : null,
-      'almacenReceivedAt': ServerValue.timestamp,
-      'completedAt': ServerValue.timestamp,
-      'updatedAt': ServerValue.timestamp,
-      ...timingUpdate,
-    });
-
-    final eventComment = _joinEventComments(
-      trimmedComment.isEmpty ? null : trimmedComment,
-      hasDifferences ? differenceSummary : null,
-    );
     await _appendEvent(
       orderRef,
       fromStatus: order.status,
@@ -438,49 +381,39 @@ class PurchaseOrderRepository {
       byUserId: actor.id,
       byRole: _actorRoleLabel(actor),
       type: 'advance',
-      itemsSnapshot: items,
-      comment: eventComment,
     );
   }
 
-  Future<void> returnToContabilidad({
+  Future<void> confirmRequesterReceived({
     required PurchaseOrder order,
     required AppUser actor,
   }) async {
-    final orderRef = _ordersRef.child(order.id);
-    final timingUpdate = _statusTimingUpdate(order);
-    final clearedItems = order.items
-        .map(
-          (item) => item.copyWith(
-            clearReceivedQuantity: true,
-            clearReceivedComment: true,
-          ),
-        )
-        .toList(growable: false);
+    if (order.status != PurchaseOrderStatus.eta) {
+      throw StateError('La orden aun no esta lista para confirmar recibido.');
+    }
+    if (order.isRequesterReceiptConfirmed) {
+      return;
+    }
 
+    final trimmedName = actor.name.trim();
+    final trimmedArea = actor.areaDisplay.trim();
+    final orderRef = _ordersRef.child(order.id);
     await orderRef.update({
-      'status': PurchaseOrderStatus.contabilidad.name,
-      'items': clearedItems.map((item) => item.toMap()).toList(),
-      'almacenName': null,
-      'almacenArea': null,
-      'almacenComment': null,
-      'almacenHasDifferences': false,
-      'almacenDifferenceSummary': null,
-      'almacenReceivedAt': null,
-      'completedAt': null,
-      'updatedAt': ServerValue.timestamp,
-      ...timingUpdate,
+      'requesterReceivedAt': appServerTimestamp,
+      'requesterReceivedName': trimmedName.isEmpty ? null : trimmedName,
+      'requesterReceivedArea': trimmedArea.isEmpty ? null : trimmedArea,
+      'completedAt': appServerTimestamp,
+      'updatedAt': appServerTimestamp,
     });
 
     await _appendEvent(
       orderRef,
       fromStatus: order.status,
-      toStatus: PurchaseOrderStatus.contabilidad,
+      toStatus: null,
       byUserId: actor.id,
       byRole: _actorRoleLabel(actor),
-      type: 'return',
-      itemsSnapshot: clearedItems,
-      comment: 'Regresada de almacen a contabilidad.',
+      type: 'received',
+      comment: 'Orden confirmada como recibida por el solicitante.',
     );
   }
 
@@ -508,7 +441,7 @@ class PurchaseOrderRepository {
       'direccionGeneralArea': null,
       'direccionReturnCount': nextDireccionReturnCount,
       'items': items.map((item) => item.toMap()).toList(),
-      'updatedAt': ServerValue.timestamp,
+      'updatedAt': appServerTimestamp,
       ...timingUpdate,
     });
 
@@ -523,7 +456,6 @@ class PurchaseOrderRepository {
       comment: trimmed.isEmpty ? null : trimmed,
     );
 
-    await _markSharedQuotesNeedsUpdate(order);
   }
 
   Future<void> returnToCotizaciones({
@@ -537,32 +469,18 @@ class PurchaseOrderRepository {
     final nextDireccionReturnCount = order.direccionReturnCount + 1;
     final timingUpdate = _statusTimingUpdate(order);
 
-    final updates = <String, Object?>{
-      'purchaseOrders/${order.id}/status': PurchaseOrderStatus.cotizaciones.name,
-      'purchaseOrders/${order.id}/direccionComment':
-          trimmed.isEmpty ? null : trimmed,
-      'purchaseOrders/${order.id}/processedByName': null,
-      'purchaseOrders/${order.id}/processedByArea': null,
-      'purchaseOrders/${order.id}/direccionGeneralName': null,
-      'purchaseOrders/${order.id}/direccionGeneralArea': null,
-      'purchaseOrders/${order.id}/direccionReturnCount': nextDireccionReturnCount,
-      'purchaseOrders/${order.id}/cotizacionReady': false,
-      'purchaseOrders/${order.id}/items': items.map((item) => item.toMap()).toList(),
-      'purchaseOrders/${order.id}/updatedAt': ServerValue.timestamp,
-      ...timingUpdate.map(
-        (key, value) => MapEntry('purchaseOrders/${order.id}/$key', value),
-      ),
-    };
-
-    for (final ref in order.sharedQuoteRefs) {
-      final quoteId = ref.quoteId.trim();
-      if (quoteId.isEmpty) continue;
-      updates['sharedQuotes/$quoteId/approvedAt'] = null;
-      updates['sharedQuotes/$quoteId/approvedOrderIds'] = null;
-      updates['sharedQuotes/$quoteId/updatedAt'] = ServerValue.timestamp;
-    }
-
-    await _database.ref().update(updates);
+    await orderRef.update({
+      'status': PurchaseOrderStatus.cotizaciones.name,
+      'direccionComment': trimmed.isEmpty ? null : trimmed,
+      'processedByName': null,
+      'processedByArea': null,
+      'direccionGeneralName': null,
+      'direccionGeneralArea': null,
+      'direccionReturnCount': nextDireccionReturnCount,
+      'items': items.map((item) => item.toMap()).toList(),
+      'updatedAt': appServerTimestamp,
+      ...timingUpdate,
+    });
 
     await _appendEvent(
       orderRef,
@@ -575,93 +493,18 @@ class PurchaseOrderRepository {
       comment: trimmed.isEmpty ? null : trimmed,
     );
 
-    await _markSharedQuotesNeedsUpdate(order);
   }
 
-  Future<void> rejectSharedQuoteFromDireccion({
-    required SharedQuote quote,
-    required List<PurchaseOrder> orders,
-    required Set<String> rejectedOrderIds,
-    required String comment,
-    required AppUser actor,
-  }) async {
-    final validOrderIds = orders.map((order) => order.id.trim()).where((id) => id.isNotEmpty).toSet();
-    final targetOrderIds = rejectedOrderIds
-        .map((id) => id.trim())
-        .where((id) => id.isNotEmpty && validOrderIds.contains(id))
-        .toSet();
-    if (targetOrderIds.isEmpty) return;
-
-    final trimmedComment = comment.trim();
-    final trimmedName = actor.name.trim();
-    final trimmedArea = actor.areaDisplay.trim();
-    final approvedSet = quote.approvedOrderIds.map((id) => id.trim()).where((id) => id.isNotEmpty).toSet();
-    approvedSet.removeAll(targetOrderIds);
-
-    await _sharedQuotesRef.child(quote.id).update({
-      'approvedOrderIds': approvedSet.isEmpty
-          ? null
-          : {for (final id in approvedSet) id: true},
-      'approvedAt': null,
-      'approvedByName': null,
-      'approvedByArea': null,
-      'rejectedOrderIds': {for (final id in targetOrderIds) id: true},
-      'rejectionComment': trimmedComment.isEmpty ? null : trimmedComment,
-      'rejectedAt': ServerValue.timestamp,
-      'rejectedByName': trimmedName.isEmpty ? null : trimmedName,
-      'rejectedByArea': trimmedArea.isEmpty ? null : trimmedArea,
-      'needsUpdate': true,
-      'updatedAt': ServerValue.timestamp,
-    });
-  }
-
-  Future<void> approveSharedQuoteFromDireccion({
-    required SharedQuote quote,
-    required AppUser actor,
-    required List<String> approvedOrderIds,
-  }) async {
-    final trimmedName = actor.name.trim();
-    final trimmedArea = actor.areaDisplay.trim();
-    final mergedApproved = {
-      ...quote.approvedOrderIds.map((id) => id.trim()).where((id) => id.isNotEmpty),
-      ...approvedOrderIds.map((id) => id.trim()).where((id) => id.isNotEmpty),
-    };
-    final remainingRejected = quote.rejectedOrderIds
-        .map((id) => id.trim())
-        .where((id) => id.isNotEmpty)
-        .where((id) => !approvedOrderIds.contains(id))
-        .toSet();
-    final totalIds = quote.orderIds.map((id) => id.trim()).where((id) => id.isNotEmpty);
-    final allApproved = totalIds.every(mergedApproved.contains);
-
-    await _sharedQuotesRef.child(quote.id).update({
-      'approvedOrderIds': mergedApproved.isEmpty
-          ? null
-          : {for (final id in mergedApproved) id: true},
-      'approvedAt': allApproved ? ServerValue.timestamp : null,
-      'approvedByName': allApproved && trimmedName.isNotEmpty ? trimmedName : null,
-      'approvedByArea': allApproved && trimmedArea.isNotEmpty ? trimmedArea : null,
-      'rejectedOrderIds': remainingRejected.isEmpty
-          ? null
-          : {for (final id in remainingRejected) id: true},
-      'rejectionComment': remainingRejected.isEmpty ? null : quote.rejectionComment,
-      'rejectedAt': remainingRejected.isEmpty ? null : quote.rejectedAt?.millisecondsSinceEpoch,
-      'rejectedByName': remainingRejected.isEmpty ? null : quote.rejectedByName,
-      'rejectedByArea': remainingRejected.isEmpty ? null : quote.rejectedByArea,
-      'updatedAt': ServerValue.timestamp,
-    });
-  }
-
-  Stream<List<SharedQuote>> watchSharedQuotes() {
-    return _sharedQuotesRef.onValue.map((event) {
+  Stream<List<SupplierQuote>> watchSupplierQuotes() {
+    return _supplierQuotesRef.onValue.map((event) {
       final value = event.snapshot.value;
-      if (value is! Map) return <SharedQuote>[];
+      if (value is! Map) return <SupplierQuote>[];
 
-      final quotes = <SharedQuote>[];
+      final quotes = <SupplierQuote>[];
       value.forEach((key, raw) {
         if (raw is Map) {
           quotes.add(
-            SharedQuote.fromMap(
+            SupplierQuote.fromMap(
               key.toString(),
               Map<String, dynamic>.from(raw),
             ),
@@ -669,208 +512,748 @@ class PurchaseOrderRepository {
         }
       });
 
-      quotes.sort((a, b) => a.supplier.compareTo(b.supplier));
+      quotes.sort((a, b) {
+        final aTime = (a.updatedAt ?? a.createdAt)?.millisecondsSinceEpoch ?? 0;
+        final bTime = (b.updatedAt ?? b.createdAt)?.millisecondsSinceEpoch ?? 0;
+        return bTime.compareTo(aTime);
+      });
       return quotes;
     });
   }
 
-  Stream<SharedQuote?> watchSharedQuoteById(String quoteId) {
-    return _sharedQuotesRef.child(quoteId).onValue.map((event) {
+  Stream<SupplierQuote?> watchSupplierQuoteById(String quoteId) {
+    return _supplierQuotesRef.child(quoteId).onValue.map((event) {
       final value = event.snapshot.value;
       if (value is! Map) return null;
-      return SharedQuote.fromMap(quoteId, Map<String, dynamic>.from(value));
+      return SupplierQuote.fromMap(quoteId, Map<String, dynamic>.from(value));
     });
   }
 
-  Future<SharedQuote?> fetchSharedQuoteById(String quoteId) async {
-    final snapshot = await _sharedQuotesRef.child(quoteId).get();
-    if (!snapshot.exists || snapshot.value is! Map) return null;
-    return SharedQuote.fromMap(
-      quoteId,
-      Map<String, dynamic>.from(snapshot.value as Map),
-    );
+  Stream<List<SupplierQuoteHistoryEntry>> watchSupplierQuoteHistory(
+    String quoteId,
+  ) {
+    return _supplierQuoteHistoryRef.child(quoteId).onValue.map((event) {
+      final value = event.snapshot.value;
+      if (value is! Map) return <SupplierQuoteHistoryEntry>[];
+
+      final entries = <SupplierQuoteHistoryEntry>[];
+      value.forEach((key, raw) {
+        if (raw is Map) {
+          entries.add(
+            SupplierQuoteHistoryEntry.fromMap(
+              key.toString(),
+              Map<String, dynamic>.from(raw),
+            ),
+          );
+        }
+      });
+
+      entries.sort((a, b) {
+        final left = a.timestamp?.millisecondsSinceEpoch ??
+            a.updatedAt?.millisecondsSinceEpoch ??
+            a.createdAt?.millisecondsSinceEpoch ??
+            0;
+        final right = b.timestamp?.millisecondsSinceEpoch ??
+            b.updatedAt?.millisecondsSinceEpoch ??
+            b.createdAt?.millisecondsSinceEpoch ??
+            0;
+        return right.compareTo(left);
+      });
+      return entries;
+    });
   }
 
-  Future<SharedQuote> createSharedQuote({
+  Future<SupplierQuote> createSupplierQuote({
     required String supplier,
-    required List<String> orderIds,
-    String? pdfUrl,
+    required List<SupplierQuoteItemRef> items,
+    required List<String> links,
+    String? comprasComment,
+    AppUser? actor,
   }) async {
-    final ref = _sharedQuotesRef.push();
+    final ref = _supplierQuotesRef.push();
     final quoteId = ref.key;
     if (quoteId == null || quoteId.isEmpty) {
-      throw StateError('No se pudo crear la cotización compartida.');
+      throw StateError('No se pudo crear la cotizacion del proveedor.');
     }
+    final folio = await _reserveNextSupplierQuoteFolio(_database);
 
-    final cleanedUrl = pdfUrl?.trim() ?? '';
-    final hasUrl = cleanedUrl.isNotEmpty;
-
-    await ref.set({
-      'supplier': supplier.trim(),
-      'orderIds': {for (final id in orderIds) id: true},
-      'pdfUrl': hasUrl ? cleanedUrl : null,
-      'needsUpdate': !hasUrl,
-      'version': 1,
-      'createdAt': ServerValue.timestamp,
-      'updatedAt': ServerValue.timestamp,
-    });
-
-    return SharedQuote(
+    final quote = SupplierQuote(
       id: quoteId,
+      folio: folio,
       supplier: supplier.trim(),
-      orderIds: orderIds,
-      pdfUrl: cleanedUrl,
-      approvedOrderIds: const [],
-      needsUpdate: !hasUrl,
+      items: items,
+      links: _sanitizeQuoteLinks(links),
+      comprasComment: comprasComment,
+      status: SupplierQuoteStatus.draft,
       version: 1,
     );
-  }
-
-  Future<void> linkOrdersToSharedQuote({
-    required SharedQuote quote,
-    required List<String> orderIds,
-  }) async {
-    if (orderIds.isEmpty) return;
-
-    final updates = <String, Object?>{};
-    for (final orderId in orderIds) {
-      updates['sharedQuotes/${quote.id}/orderIds/$orderId'] = true;
-    }
-    updates['sharedQuotes/${quote.id}/updatedAt'] = ServerValue.timestamp;
-    await _database.ref().update(updates);
-
-    for (final orderId in orderIds) {
-      final order = await fetchOrderById(orderId);
-      if (order == null) continue;
-      await _updateOrderSharedQuote(order: order, quote: quote);
-    }
-  }
-
-  Future<void> restoreOrdersToCotizacionesOrders({
-    required List<String> orderIds,
-  }) async {
-    if (orderIds.isEmpty) return;
-
-    final updates = <String, Object?>{};
-    for (final orderId in orderIds) {
-      updates[
-        'purchaseOrders/$orderId/restoredToCotizacionesOrders'
-      ] = true;
-    }
-
-    if (updates.isEmpty) return;
-    await _database.ref().update(updates);
-  }
-
-  Future<void> unlinkOrderFromSharedQuote({
-    required PurchaseOrder order,
-    required SharedQuote quote,
-  }) async {
-    final updatedRefs = _removeSharedQuoteRef(order.sharedQuoteRefs, quote.id);
-    final nextLinks = _removeQuoteLink(order.cotizacionLinks, quote.id);
-    final primaryId = order.primaryQuoteId?.trim();
-    final nextPrimary = primaryId == quote.id
-        ? (updatedRefs.isNotEmpty ? updatedRefs.first.quoteId : null)
-        : primaryId;
-
-    await _ordersRef.child(order.id).update({
-      'sharedQuoteRefs': updatedRefs.isEmpty ? null : updatedRefs.map((ref) => ref.toMap()).toList(),
-      'cotizacionLinks': nextLinks.isEmpty ? null : nextLinks.map((link) => link.toMap()).toList(),
-      'cotizacionPdfUrls': nextLinks.map((link) => link.url).toList(),
-      'cotizacionPdfUrl': nextLinks.isEmpty ? null : nextLinks.first.url,
-      'primaryQuoteId': nextPrimary?.trim().isEmpty ?? true ? null : nextPrimary?.trim(),
-      'updatedAt': ServerValue.timestamp,
+    await ref.set({
+      ...quote.toMap(),
+      'createdAt': appServerTimestamp,
+      'updatedAt': appServerTimestamp,
     });
-
-    await _sharedQuotesRef.child(quote.id).child('orderIds').child(order.id).remove();
-    await _sharedQuotesRef.child(quote.id).update({
-      'updatedAt': ServerValue.timestamp,
-    });
-
-    final refreshed = await fetchSharedQuoteById(quote.id);
-    if (refreshed != null && refreshed.orderIds.isEmpty) {
-      await _sharedQuotesRef.child(quote.id).remove();
-    }
-  }
-
-  Future<void> updateSharedQuoteLink({
-    required SharedQuote quote,
-    required String pdfUrl,
-  }) async {
-    final cleaned = pdfUrl.trim();
-    if (cleaned.isEmpty) throw StateError('Link de cotización requerido.');
-
-    final nextVersion = quote.version + 1;
-
-    await _sharedQuotesRef.child(quote.id).update({
-      'pdfUrl': cleaned,
-      'needsUpdate': false,
-      'version': nextVersion,
-      'updatedAt': ServerValue.timestamp,
-    });
-
-    final orderIds = quote.orderIds;
-    if (orderIds.isEmpty) return;
-
-    final updatedQuote = SharedQuote(
-      id: quote.id,
-      supplier: quote.supplier,
-      orderIds: orderIds,
-      pdfUrl: cleaned,
-      approvedOrderIds: quote.approvedOrderIds,
-      approvedAt: quote.approvedAt,
-      rejectedOrderIds: quote.rejectedOrderIds,
-      rejectionComment: quote.rejectionComment,
-      rejectedAt: quote.rejectedAt,
-      rejectedByName: quote.rejectedByName,
-      rejectedByArea: quote.rejectedByArea,
-      needsUpdate: false,
-      version: nextVersion,
+    await _appendSupplierQuoteHistorySnapshot(
+      quote: quote,
+      eventType: 'created',
+      actor: actor,
     );
-
-    for (final orderId in orderIds) {
-      final order = await fetchOrderById(orderId);
-      if (order == null) continue;
-      await _updateOrderSharedQuote(order: order, quote: updatedQuote);
-    }
+    await _syncQuoteItemsOnOrders(
+      quote: quote,
+      itemStatus: PurchaseOrderItemQuoteStatus.draft,
+      clearRemovedItems: false,
+    );
+    return quote;
   }
 
-  Future<void> _markSharedQuotesNeedsUpdate(PurchaseOrder order) async {
-    if (order.sharedQuoteRefs.isEmpty) return;
-
-    final updates = <String, Object?>{};
-    for (final ref in order.sharedQuoteRefs) {
-      if (ref.quoteId.trim().isEmpty) continue;
-      updates['sharedQuotes/${ref.quoteId}/needsUpdate'] = true;
-      updates['sharedQuotes/${ref.quoteId}/updatedAt'] = ServerValue.timestamp;
-    }
-
-    if (updates.isEmpty) return;
-    await _database.ref().update(updates);
-  }
-
-  Future<void> _updateOrderSharedQuote({
-    required PurchaseOrder order,
-    required SharedQuote quote,
+  Future<void> updateSupplierQuoteDraft({
+    required SupplierQuote quote,
+    required List<SupplierQuoteItemRef> items,
+    required List<String> links,
+    String? comprasComment,
+    AppUser? actor,
   }) async {
-    final nextRefs = _upsertSharedQuoteRef(order.sharedQuoteRefs, quote);
-    final nextLinks = _upsertQuoteLink(order.cotizacionLinks, quote);
-    final existingPrimary = order.primaryQuoteId?.trim();
-    final nextPrimary = (existingPrimary != null && existingPrimary.isNotEmpty)
-        ? existingPrimary
-        : (order.sharedQuoteRefs.isNotEmpty
-            ? order.sharedQuoteRefs.first.quoteId
-            : quote.id);
+    final next = SupplierQuote(
+      id: quote.id,
+      folio: quote.folio,
+      supplier: quote.supplier.trim(),
+      items: items,
+      links: _sanitizeQuoteLinks(links),
+      comprasComment: comprasComment,
+      status: SupplierQuoteStatus.draft,
+      createdAt: quote.createdAt,
+      updatedAt: quote.updatedAt,
+      version: quote.version + 1,
+    );
+    await _supplierQuotesRef.child(quote.id).update({
+      ...next.toMap(),
+      'updatedAt': appServerTimestamp,
+      'approvedAt': null,
+      'approvedByName': null,
+      'approvedByArea': null,
+      'rejectionComment': null,
+      'rejectedAt': null,
+      'rejectedByName': null,
+      'rejectedByArea': null,
+      'processedByName': null,
+      'processedByArea': null,
+      'sentToDireccionAt': null,
+    });
+    await _appendSupplierQuoteHistorySnapshot(
+      quote: next,
+      eventType: 'draft_updated',
+      actor: actor,
+    );
+    await _syncQuoteItemsOnOrders(
+      quote: next,
+      itemStatus: PurchaseOrderItemQuoteStatus.draft,
+      clearRemovedItems: true,
+    );
+  }
+
+  Future<void> sendSupplierQuoteToDireccion({
+    required SupplierQuote quote,
+    required AppUser actor,
+  }) async {
+    final links = _sanitizeQuoteLinks(quote.links);
+    if (links.isEmpty) {
+      throw StateError('Agrega al menos un link de cotizacion.');
+    }
+    final refsByOrder = <String, Set<int>>{};
+    for (final ref in quote.items) {
+      final orderId = ref.orderId.trim();
+      if (orderId.isEmpty) continue;
+      refsByOrder.putIfAbsent(orderId, () => <int>{}).add(ref.line);
+    }
+
+    final relatedOrders = await _fetchOrdersByIds(_database, refsByOrder.keys);
+    for (final entry in refsByOrder.entries) {
+      final orderId = entry.key;
+      final order = relatedOrders[orderId];
+      if (order == null) {
+        throw StateError(
+          'No se encontro la orden $orderId para enviar a Direccion General.',
+        );
+      }
+
+      for (final line in entry.value) {
+        PurchaseOrderItem? item;
+        for (final candidate in order.items) {
+          if (candidate.line == line) {
+            item = candidate;
+            break;
+          }
+        }
+        if (item == null) {
+          throw StateError(
+            'No se encontro el item $line de la orden $orderId en esta cotizacion.',
+          );
+        }
+        if (!_hasQuoteAssignmentData(item)) {
+          throw StateError(
+            'La orden $orderId aun tiene items seleccionados sin proveedor o presupuesto.',
+          );
+        }
+        final quoteId = item.quoteId?.trim() ?? '';
+        if (quoteId != quote.id ||
+            item.quoteStatus == PurchaseOrderItemQuoteStatus.rejected) {
+          throw StateError(
+            'La orden $orderId aun tiene items seleccionados sin una cotizacion valida para enviar a Direccion General.',
+          );
+        }
+      }
+    }
+    await _supplierQuotesRef.child(quote.id).update({
+      'status': SupplierQuoteStatus.pendingDireccion.name,
+      'links': links,
+      'pdfUrls': links,
+      'pdfUrl': links.first,
+      'comprasComment': (quote.comprasComment?.trim().isEmpty ?? true)
+          ? null
+          : quote.comprasComment!.trim(),
+      'processedByName': actor.name.trim().isEmpty ? null : actor.name.trim(),
+      'processedByArea': actor.areaDisplay.trim().isEmpty
+          ? null
+          : actor.areaDisplay.trim(),
+      'sentToDireccionAt': appServerTimestamp,
+      'updatedAt': appServerTimestamp,
+    });
+    await _syncQuoteItemsOnOrders(
+      quote: SupplierQuote(
+        id: quote.id,
+        folio: quote.folio,
+        supplier: quote.supplier,
+        items: quote.items,
+        links: links,
+        facturaLinks: quote.facturaLinks,
+        comprasComment: quote.comprasComment,
+        status: SupplierQuoteStatus.pendingDireccion,
+        createdAt: quote.createdAt,
+        updatedAt: quote.updatedAt,
+        processedByName: actor.name,
+        processedByArea: actor.areaDisplay,
+        version: quote.version + 1,
+      ),
+      itemStatus: PurchaseOrderItemQuoteStatus.pendingDireccion,
+      clearRemovedItems: false,
+    );
+    await _appendSupplierQuoteHistorySnapshot(
+      quote: SupplierQuote(
+        id: quote.id,
+        folio: quote.folio,
+        supplier: quote.supplier,
+        items: quote.items,
+        links: links,
+        facturaLinks: quote.facturaLinks,
+        comprasComment: quote.comprasComment,
+        status: SupplierQuoteStatus.pendingDireccion,
+        createdAt: quote.createdAt,
+        updatedAt: quote.updatedAt,
+        processedByName: actor.name,
+        processedByArea: actor.areaDisplay,
+        sentToDireccionAt: DateTime.now(),
+        version: quote.version + 1,
+      ),
+      eventType: 'sent_to_direccion',
+      actor: actor,
+    );
+  }
+
+  Future<void> approveSupplierQuote({
+    required SupplierQuote quote,
+    required AppUser actor,
+  }) async {
+    await _supplierQuotesRef.child(quote.id).update({
+      'status': SupplierQuoteStatus.approved.name,
+      'approvedAt': appServerTimestamp,
+      'approvedByName': actor.name.trim().isEmpty ? null : actor.name.trim(),
+      'approvedByArea': actor.areaDisplay.trim().isEmpty
+          ? null
+          : actor.areaDisplay.trim(),
+      'updatedAt': appServerTimestamp,
+    });
+    final approvedQuote = SupplierQuote(
+      id: quote.id,
+      folio: quote.folio,
+      supplier: quote.supplier,
+      items: quote.items,
+      links: quote.links,
+      facturaLinks: quote.facturaLinks,
+      comprasComment: quote.comprasComment,
+      status: SupplierQuoteStatus.approved,
+      createdAt: quote.createdAt,
+      updatedAt: quote.updatedAt,
+      approvedAt: DateTime.now(),
+      approvedByName: actor.name,
+      approvedByArea: actor.areaDisplay,
+      processedByName: quote.processedByName,
+      processedByArea: quote.processedByArea,
+      sentToDireccionAt: quote.sentToDireccionAt,
+      version: quote.version + 1,
+    );
+    await _syncQuoteItemsOnOrders(
+      quote: approvedQuote,
+      itemStatus: PurchaseOrderItemQuoteStatus.approved,
+      clearRemovedItems: false,
+      approver: actor,
+    );
+    await _appendSupplierQuoteHistorySnapshot(
+      quote: approvedQuote,
+      eventType: 'approved',
+      actor: actor,
+    );
+  }
+
+  Future<void> setSupplierQuoteDeliveryEta({
+    required SupplierQuote quote,
+    required DateTime etaDate,
+    required AppUser actor,
+  }) async {
+    final normalizedEta = DateTime(etaDate.year, etaDate.month, etaDate.day);
+    final refsByOrder = <String, Set<int>>{};
+    for (final ref in quote.items) {
+      final orderId = ref.orderId.trim();
+      if (orderId.isEmpty) continue;
+      refsByOrder.putIfAbsent(orderId, () => <int>{}).add(ref.line);
+    }
+
+    for (final entry in refsByOrder.entries) {
+      final order = await fetchOrderById(entry.key);
+      if (order == null) continue;
+
+      final targetLines = entry.value;
+      var changed = false;
+      final updatedItems = <PurchaseOrderItem>[];
+      for (final item in order.items) {
+        if (targetLines.contains(item.line) &&
+            (item.quoteId?.trim() ?? '') == quote.id &&
+            item.quoteStatus == PurchaseOrderItemQuoteStatus.approved) {
+          changed = true;
+          updatedItems.add(
+            item.copyWith(
+              deliveryEtaDate: normalizedEta,
+              clearSentToContabilidadAt: true,
+            ),
+          );
+          continue;
+        }
+        updatedItems.add(item);
+      }
+      if (!changed) continue;
+
+      final nextStatus = _statusForDeliveryEtaProgress(updatedItems);
+      final committedEta = _resolveCommittedDeliveryDate(updatedItems);
+      final updates = <String, Object?>{
+        'items': updatedItems.map((item) => item.toMap()).toList(),
+        'etaDate': committedEta?.millisecondsSinceEpoch,
+        'status': nextStatus.name,
+        'updatedAt': appServerTimestamp,
+      };
+      if (nextStatus != order.status) {
+        updates.addAll(_statusTimingUpdate(order));
+      }
+
+      final orderRef = _ordersRef.child(order.id);
+      await orderRef.update(updates);
+
+      if (nextStatus != order.status) {
+        await _appendEvent(
+          orderRef,
+          fromStatus: order.status,
+          toStatus: nextStatus,
+          byUserId: actor.id,
+          byRole: _actorRoleLabel(actor),
+          type: 'advance',
+          itemsSnapshot: updatedItems,
+          comment: nextStatus == PurchaseOrderStatus.contabilidad
+              ? 'Todos los items ya tienen fecha estimada de entrega.'
+              : 'Fecha estimada de entrega actualizada por proveedor.',
+        );
+      }
+    }
+  }
+
+  Future<void> sendSupplierQuoteItemsToContabilidad({
+    required SupplierQuote quote,
+    required DateTime etaDate,
+    required AppUser actor,
+    required Map<String, Set<int>> selectedLinesByOrder,
+  }) async {
+    final normalizedEta = DateTime(etaDate.year, etaDate.month, etaDate.day);
+    final sentAt = DateTime.now();
+    var sentItemsCount = 0;
+
+    for (final entry in selectedLinesByOrder.entries) {
+      final order = await fetchOrderById(entry.key);
+      if (order == null) continue;
+
+      final targetLines = entry.value;
+      if (targetLines.isEmpty) continue;
+
+      var changed = false;
+      final updatedItems = <PurchaseOrderItem>[];
+      for (final item in order.items) {
+        final matchesTarget = targetLines.contains(item.line) &&
+            (item.quoteId?.trim() ?? '') == quote.id &&
+            item.quoteStatus == PurchaseOrderItemQuoteStatus.approved;
+        if (matchesTarget) {
+          changed = true;
+          sentItemsCount += 1;
+          updatedItems.add(
+            item.copyWith(
+              deliveryEtaDate: normalizedEta,
+              sentToContabilidadAt: sentAt,
+            ),
+          );
+          continue;
+        }
+        updatedItems.add(item);
+      }
+      if (!changed) continue;
+
+      final nextStatus = _statusForDeliveryEtaProgress(updatedItems);
+      final committedEta = _resolveCommittedDeliveryDate(updatedItems);
+      final orderRef = _ordersRef.child(order.id);
+      await orderRef.update({
+        'items': updatedItems.map((item) => item.toMap()).toList(),
+        'etaDate': committedEta?.millisecondsSinceEpoch,
+        'status': nextStatus.name,
+        'updatedAt': appServerTimestamp,
+        if (nextStatus != order.status) ..._statusTimingUpdate(order),
+      });
+
+      await _appendEvent(
+        orderRef,
+        fromStatus: order.status,
+        toStatus: nextStatus,
+        byUserId: actor.id,
+        byRole: _actorRoleLabel(actor),
+        type: 'advance',
+        itemsSnapshot: updatedItems,
+        comment:
+            '${targetLines.length} item(s) enviados a Contabilidad con fecha estimada.',
+      );
+    }
+
+    if (sentItemsCount > 0) {
+      await _appendSupplierQuoteHistorySnapshot(
+        quote: SupplierQuote(
+          id: quote.id,
+          folio: quote.folio,
+          supplier: quote.supplier,
+          items: quote.items,
+          links: quote.links,
+          facturaLinks: quote.facturaLinks,
+          comprasComment: quote.comprasComment,
+          status: quote.status,
+          createdAt: quote.createdAt,
+          updatedAt: sentAt,
+          processedByName: quote.processedByName,
+          processedByArea: quote.processedByArea,
+          sentToDireccionAt: quote.sentToDireccionAt,
+          approvedAt: quote.approvedAt,
+          approvedByName: quote.approvedByName,
+          approvedByArea: quote.approvedByArea,
+          rejectionComment: quote.rejectionComment,
+          rejectedAt: quote.rejectedAt,
+          rejectedByName: quote.rejectedByName,
+          rejectedByArea: quote.rejectedByArea,
+          version: quote.version,
+        ),
+        eventType: 'items_sent_to_contabilidad',
+        actor: actor,
+        comment:
+            '$sentItemsCount item(s) enviados a Contabilidad con fecha estimada registrada.',
+      );
+    }
+  }
+
+  Future<void> saveSupplierQuoteFacturaLinks({
+    required SupplierQuote quote,
+    required List<String> links,
+    AppUser? actor,
+  }) async {
+    final cleaned = _sanitizeQuoteLinks(links);
+    await _supplierQuotesRef.child(quote.id).update({
+      'facturaLinks': cleaned.isEmpty ? null : cleaned,
+      'updatedAt': appServerTimestamp,
+    });
+    await _appendSupplierQuoteHistorySnapshot(
+      quote: SupplierQuote(
+        id: quote.id,
+        folio: quote.folio,
+        supplier: quote.supplier,
+        items: quote.items,
+        links: quote.links,
+        facturaLinks: cleaned,
+        comprasComment: quote.comprasComment,
+        status: quote.status,
+        createdAt: quote.createdAt,
+        updatedAt: DateTime.now(),
+        processedByName: quote.processedByName,
+        processedByArea: quote.processedByArea,
+        sentToDireccionAt: quote.sentToDireccionAt,
+        approvedAt: quote.approvedAt,
+        approvedByName: quote.approvedByName,
+        approvedByArea: quote.approvedByArea,
+        rejectionComment: quote.rejectionComment,
+        rejectedAt: quote.rejectedAt,
+        rejectedByName: quote.rejectedByName,
+        rejectedByArea: quote.rejectedByArea,
+        version: quote.version,
+      ),
+      eventType: 'factura_links_updated',
+      actor: actor,
+    );
+  }
+
+  Future<void> returnSupplierQuoteItemsFromContabilidad({
+    required SupplierQuote quote,
+    required AppUser actor,
+    required String comment,
+  }) async {
+    final trimmedComment = comment.trim();
+    final relatedOrders = await _fetchOrdersByIds(_database, quote.orderIds);
+    var returnedItemsCount = 0;
+
+    for (final order in relatedOrders.values) {
+      var changed = false;
+      final updatedItems = <PurchaseOrderItem>[];
+      for (final item in order.items) {
+        final matchesQuote = (item.quoteId?.trim() ?? '') == quote.id &&
+            item.quoteStatus == PurchaseOrderItemQuoteStatus.approved &&
+            item.sentToContabilidadAt != null;
+        if (matchesQuote) {
+          changed = true;
+          returnedItemsCount += 1;
+          updatedItems.add(
+            item.copyWith(
+              clearSentToContabilidadAt: true,
+            ),
+          );
+          continue;
+        }
+        updatedItems.add(item);
+      }
+      if (!changed) continue;
+
+      final nextStatus = _statusForDeliveryEtaProgress(updatedItems);
+      final orderRef = _ordersRef.child(order.id);
+      final baseComment = trimmedComment.isEmpty
+          ? 'Agrupacion regresada desde Contabilidad.'
+          : trimmedComment;
+      final eventComment = nextStatus == order.status
+          ? '$baseComment La orden permanece en Contabilidad por items de otros proveedores.'
+          : baseComment;
+
+      await orderRef.update({
+        'items': updatedItems.map((item) => item.toMap()).toList(),
+        'etaDate': _resolveCommittedDeliveryDate(updatedItems)?.millisecondsSinceEpoch,
+        'status': nextStatus.name,
+        'updatedAt': appServerTimestamp,
+        if (nextStatus != order.status) ..._statusTimingUpdate(order),
+      });
+
+      await _appendEvent(
+        orderRef,
+        fromStatus: order.status,
+        toStatus: nextStatus,
+        byUserId: actor.id,
+        byRole: _actorRoleLabel(actor),
+        type: 'return',
+        itemsSnapshot: updatedItems,
+        comment: eventComment,
+      );
+    }
+
+    if (returnedItemsCount <= 0) return;
+
+    await _supplierQuotesRef.child(quote.id).update({
+      'facturaLinks': null,
+      'updatedAt': appServerTimestamp,
+    });
+
+    await _appendSupplierQuoteHistorySnapshot(
+      quote: SupplierQuote(
+        id: quote.id,
+        folio: quote.folio,
+        supplier: quote.supplier,
+        items: quote.items,
+        links: quote.links,
+        facturaLinks: const <String>[],
+        comprasComment: quote.comprasComment,
+        status: quote.status,
+        createdAt: quote.createdAt,
+        updatedAt: DateTime.now(),
+        processedByName: quote.processedByName,
+        processedByArea: quote.processedByArea,
+        sentToDireccionAt: quote.sentToDireccionAt,
+        approvedAt: quote.approvedAt,
+        approvedByName: quote.approvedByName,
+        approvedByArea: quote.approvedByArea,
+        rejectionComment: quote.rejectionComment,
+        rejectedAt: quote.rejectedAt,
+        rejectedByName: quote.rejectedByName,
+        rejectedByArea: quote.rejectedByArea,
+        version: quote.version,
+      ),
+      eventType: 'returned_from_contabilidad',
+      actor: actor,
+      comment: trimmedComment,
+    );
+  }
+
+  Future<void> saveInternalOrderForItems({
+    required PurchaseOrder order,
+    required Set<int> lines,
+    required String? internalOrder,
+  }) async {
+    if (lines.isEmpty) return;
+    final trimmed = internalOrder?.trim() ?? '';
+    var changed = false;
+    final updatedItems = <PurchaseOrderItem>[];
+    for (final item in order.items) {
+      if (!lines.contains(item.line)) {
+        updatedItems.add(item);
+        continue;
+      }
+      changed = true;
+      updatedItems.add(
+        trimmed.isEmpty
+            ? item.copyWith(clearInternalOrder: true)
+            : item.copyWith(internalOrder: trimmed),
+      );
+    }
+    if (!changed) return;
 
     await _ordersRef.child(order.id).update({
-      'sharedQuoteRefs': nextRefs.isEmpty ? null : nextRefs.map((ref) => ref.toMap()).toList(),
-      'cotizacionLinks': nextLinks.isEmpty ? null : nextLinks.map((link) => link.toMap()).toList(),
-      'cotizacionPdfUrls': nextLinks.map((link) => link.url).toList(),
-      'cotizacionPdfUrl': nextLinks.isEmpty ? null : nextLinks.first.url,
-      'primaryQuoteId': nextPrimary.trim().isEmpty ? null : nextPrimary.trim(),
-      'updatedAt': ServerValue.timestamp,
+      'items': updatedItems.map((item) => item.toMap()).toList(),
+      'updatedAt': appServerTimestamp,
     });
   }
+
+  Future<void> rejectSupplierQuote({
+    required SupplierQuote quote,
+    required String comment,
+    required AppUser actor,
+  }) async {
+    final trimmedComment = comment.trim();
+    final rejectedQuote = SupplierQuote(
+      id: quote.id,
+      folio: quote.folio,
+      supplier: quote.supplier,
+      items: quote.items,
+      links: quote.links,
+      facturaLinks: quote.facturaLinks,
+      comprasComment: quote.comprasComment,
+      status: SupplierQuoteStatus.rejected,
+      createdAt: quote.createdAt,
+      updatedAt: quote.updatedAt,
+      rejectionComment: trimmedComment,
+      rejectedAt: DateTime.now(),
+      rejectedByName: actor.name,
+      rejectedByArea: actor.areaDisplay,
+      processedByName: quote.processedByName,
+      processedByArea: quote.processedByArea,
+      sentToDireccionAt: quote.sentToDireccionAt,
+      version: quote.version + 1,
+    );
+    await _supplierQuotesRef.child(quote.id).update({
+      'status': SupplierQuoteStatus.rejected.name,
+      'rejectionComment': trimmedComment.isEmpty ? null : trimmedComment,
+      'rejectedAt': appServerTimestamp,
+      'rejectedByName': actor.name.trim().isEmpty ? null : actor.name.trim(),
+      'rejectedByArea': actor.areaDisplay.trim().isEmpty
+          ? null
+          : actor.areaDisplay.trim(),
+      'updatedAt': appServerTimestamp,
+    });
+    await _syncQuoteItemsOnOrders(
+      quote: rejectedQuote,
+      itemStatus: PurchaseOrderItemQuoteStatus.rejected,
+      clearRemovedItems: false,
+      eventActor: actor,
+      eventType: 'return',
+      eventComment: trimmedComment,
+    );
+    await _appendSupplierQuoteHistorySnapshot(
+      quote: rejectedQuote,
+      eventType: 'rejected',
+      actor: actor,
+      comment: trimmedComment,
+    );
+  }
+
+  Future<void> deleteSupplierQuote({
+    required SupplierQuote quote,
+  }) async {
+    await _appendSupplierQuoteHistorySnapshot(
+      quote: quote,
+      eventType: 'deleted',
+    );
+    await _clearQuoteItemsOnOrders(quote.id);
+    await _supplierQuotesRef.child(quote.id).remove();
+  }
+
+  Future<void> cancelSupplierQuoteToCotizaciones({
+    required SupplierQuote quote,
+    required AppUser actor,
+  }) async {
+    await _appendSupplierQuoteHistorySnapshot(
+      quote: quote,
+      eventType: 'returned_to_cotizaciones',
+      actor: actor,
+      comment: 'Cotizacion cancelada desde dashboard de compras.',
+    );
+    final relatedOrders = await _fetchOrdersByIds(_database, quote.orderIds);
+    for (final order in relatedOrders.values) {
+      final updatedItems = <PurchaseOrderItem>[];
+      var changed = false;
+      for (final item in order.items) {
+        if (item.quoteId == quote.id) {
+          changed = true;
+          updatedItems.add(
+            item.copyWith(
+              quoteId: null,
+              clearQuoteId: true,
+              quoteStatus: PurchaseOrderItemQuoteStatus.pending,
+              clearDeliveryEtaDate: true,
+              clearSentToContabilidadAt: true,
+            ),
+          );
+        } else {
+          updatedItems.add(item);
+        }
+      }
+      if (!changed) continue;
+
+      final orderRef = _ordersRef.child(order.id);
+      final timingUpdate = _statusTimingUpdate(order);
+      await orderRef.update({
+        'status': PurchaseOrderStatus.cotizaciones.name,
+        'processedByName': null,
+        'processedByArea': null,
+        'direccionGeneralName': null,
+        'direccionGeneralArea': null,
+        'items': updatedItems.map((item) => item.toMap()).toList(),
+        'updatedAt': appServerTimestamp,
+        ...timingUpdate,
+      });
+
+      await _appendEvent(
+        orderRef,
+        fromStatus: order.status,
+        toStatus: PurchaseOrderStatus.cotizaciones,
+        byUserId: actor.id,
+        byRole: _actorRoleLabel(actor),
+        type: 'return',
+        itemsSnapshot: updatedItems,
+        comment: 'Cotizacion cancelada desde dashboard de compras.',
+      );
+    }
+
+    await _supplierQuotesRef.child(quote.id).remove();
+  }
+
 
   Future<void> transitionStatus({
     required PurchaseOrder order,
@@ -887,13 +1270,9 @@ class PurchaseOrderRepository {
     final payload = <String, Object?>{
       'status': targetStatus.name,
       'isDraft': targetStatus == PurchaseOrderStatus.draft,
-      'updatedAt': ServerValue.timestamp,
+      'updatedAt': appServerTimestamp,
       ...timingUpdate,
     };
-    if (targetStatus == PurchaseOrderStatus.cotizaciones) {
-      payload['cotizacionReady'] = false;
-    }
-
     if (trimmedReviewer != null && trimmedReviewer.isNotEmpty) {
       payload['comprasReviewerName'] = trimmedReviewer;
     }
@@ -921,7 +1300,7 @@ class PurchaseOrderRepository {
       'toStatus': targetStatus.name,
       'byUserId': actor.id,
       'byRole': _actorRoleLabel(actor),
-      'timestamp': ServerValue.timestamp,
+      'timestamp': appServerTimestamp,
       'type': 'advance',
     };
 
@@ -934,46 +1313,246 @@ class PurchaseOrderRepository {
     await _database.ref().update(updates);
   }
 
-  Future<void> sendToDireccionWithCotizacion({
-    required PurchaseOrder order,
-    required List<CotizacionLink> cotizacionLinks,
-    required AppUser actor,
+
+  List<String> _sanitizeQuoteLinks(List<String> links) {
+    return links
+        .map((entry) => entry.trim())
+        .where((entry) => entry.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+  }
+
+  Future<void> _appendSupplierQuoteHistorySnapshot({
+    required SupplierQuote quote,
+    required String eventType,
+    AppUser? actor,
+    String? comment,
   }) async {
-    final cleanedLinks = cotizacionLinks
-        .map((link) => CotizacionLink(
-              supplier: link.supplier.trim(),
-              url: link.url.trim(),
-              quoteId: link.quoteId?.trim().isEmpty ?? true ? null : link.quoteId?.trim(),
-            ))
-        .where((link) => link.url.isNotEmpty)
-        .toList();
+    final relatedOrders = await _fetchOrdersByIds(_database, quote.orderIds);
+    final ref = _supplierQuoteHistoryRef.child(quote.id).push();
+    final snapshotKey = ref.key;
+    if (snapshotKey == null || snapshotKey.isEmpty) return;
 
-    if (cleanedLinks.isEmpty) throw StateError('Link de cotización requerido.');
-
-    final orderRef = _ordersRef.child(order.id);
-    final timingUpdate = _statusTimingUpdate(order);
-    final trimmedName = actor.name.trim();
-    final trimmedArea = actor.areaDisplay.trim();
-
-    await orderRef.update({
-      'status': PurchaseOrderStatus.authorizedGerencia.name,
-      'cotizacionLinks': cleanedLinks.map((link) => link.toMap()).toList(),
-      'cotizacionPdfUrls': cleanedLinks.map((link) => link.url).toList(),
-      'cotizacionPdfUrl': cleanedLinks.first.url,
-      'processedByName': trimmedName.isEmpty ? null : trimmedName,
-      'processedByArea': trimmedArea.isEmpty ? null : trimmedArea,
-      'updatedAt': ServerValue.timestamp,
-      ...timingUpdate,
-    });
-
-    await _appendEvent(
-      orderRef,
-      fromStatus: order.status,
-      toStatus: PurchaseOrderStatus.authorizedGerencia,
-      byUserId: actor.id,
-      byRole: _actorRoleLabel(actor),
-      type: 'advance',
+    final ordersPayload = _buildSupplierQuoteHistoryOrders(
+      quote: quote,
+      relatedOrders: relatedOrders,
     );
+    final actorName = actor?.name.trim() ?? '';
+    final actorArea = actor?.areaDisplay.trim() ?? '';
+
+    await ref.set({
+      'quoteId': quote.id,
+      'folio': quote.displayId,
+      'eventType': eventType,
+      'status': quote.status.name,
+      'supplier': quote.supplier.trim(),
+      'links': quote.links.isEmpty ? null : quote.links,
+      'facturaLinks': quote.facturaLinks.isEmpty ? null : quote.facturaLinks,
+      'orderIds': quote.orderIds,
+      'orderCount': ordersPayload.length,
+      'itemCount': quote.items.length,
+      'totalAmount': quote.totalAmount,
+      'version': quote.version,
+      'comprasComment': (quote.comprasComment?.trim().isEmpty ?? true)
+          ? null
+          : quote.comprasComment!.trim(),
+      'comment': comment?.trim().isEmpty ?? true ? null : comment!.trim(),
+      'createdAt': quote.createdAt?.millisecondsSinceEpoch,
+      'updatedAt': quote.updatedAt?.millisecondsSinceEpoch,
+      'sentToDireccionAt': quote.sentToDireccionAt?.millisecondsSinceEpoch,
+      'approvedAt': quote.approvedAt?.millisecondsSinceEpoch,
+      'approvedByName': quote.approvedByName,
+      'approvedByArea': quote.approvedByArea,
+      'rejectedAt': quote.rejectedAt?.millisecondsSinceEpoch,
+      'rejectedByName': quote.rejectedByName,
+      'rejectedByArea': quote.rejectedByArea,
+      'processedByName': quote.processedByName,
+      'processedByArea': quote.processedByArea,
+      'actorName': actorName.isEmpty ? null : actorName,
+      'actorArea': actorArea.isEmpty ? null : actorArea,
+      'pdfSuggestedName': 'cotizacion_${quote.displayId}.pdf',
+      'orders': ordersPayload,
+      'timestamp': appServerTimestamp,
+    });
+  }
+
+  List<Map<String, Object?>> _buildSupplierQuoteHistoryOrders({
+    required SupplierQuote quote,
+    required Map<String, PurchaseOrder> relatedOrders,
+  }) {
+    final refsByOrder = <String, List<SupplierQuoteItemRef>>{};
+    for (final ref in quote.items) {
+      final orderId = ref.orderId.trim();
+      if (orderId.isEmpty) continue;
+      refsByOrder.putIfAbsent(orderId, () => <SupplierQuoteItemRef>[]).add(ref);
+    }
+
+    final ordersPayload = <Map<String, Object?>>[];
+    for (final entry in refsByOrder.entries) {
+      final order = relatedOrders[entry.key];
+      final refs = entry.value;
+      refs.sort((a, b) => a.line.compareTo(b.line));
+      ordersPayload.add({
+        'orderId': entry.key,
+        'requesterName': order?.requesterName,
+        'areaName': order?.areaName,
+        'status': order?.status.name,
+        'items': [
+          for (final ref in refs)
+            {
+              'line': ref.line,
+              'description': ref.description,
+              'quantity': ref.quantity,
+              'unit': ref.unit,
+              'partNumber': ref.partNumber,
+              'amount': ref.amount,
+            },
+        ],
+      });
+    }
+    ordersPayload.sort((a, b) {
+      final left = (a['orderId'] as String? ?? '');
+      final right = (b['orderId'] as String? ?? '');
+      return left.compareTo(right);
+    });
+    return ordersPayload;
+  }
+
+  Future<void> _syncQuoteItemsOnOrders({
+    required SupplierQuote quote,
+    required PurchaseOrderItemQuoteStatus itemStatus,
+    required bool clearRemovedItems,
+    AppUser? approver,
+    AppUser? eventActor,
+    String? eventType,
+    String? eventComment,
+  }) async {
+    final refsByOrder = <String, Map<int, SupplierQuoteItemRef>>{};
+    for (final ref in quote.items) {
+      final orderId = ref.orderId.trim();
+      if (orderId.isEmpty) continue;
+      refsByOrder.putIfAbsent(orderId, () => <int, SupplierQuoteItemRef>{})[ref.line] = ref;
+    }
+
+    for (final entry in refsByOrder.entries) {
+      final order = await fetchOrderById(entry.key);
+      if (order == null) continue;
+
+      final refsByLine = entry.value;
+      final updatedItems = <PurchaseOrderItem>[];
+      for (final item in order.items) {
+        final ref = refsByLine[item.line];
+        if (ref != null) {
+          updatedItems.add(
+            item.copyWith(
+              supplier: quote.supplier.trim().isEmpty ? item.supplier : quote.supplier.trim(),
+              budget: ref.amount ?? item.budget,
+              quoteId: quote.id,
+              quoteStatus: itemStatus,
+              clearDeliveryEtaDate:
+                  itemStatus != PurchaseOrderItemQuoteStatus.approved,
+              clearSentToContabilidadAt:
+                  itemStatus != PurchaseOrderItemQuoteStatus.approved,
+            ),
+          );
+          continue;
+        }
+
+        if (clearRemovedItems && item.quoteId == quote.id) {
+          updatedItems.add(
+            item.copyWith(
+              quoteId: null,
+              clearQuoteId: true,
+              quoteStatus: PurchaseOrderItemQuoteStatus.pending,
+              clearDeliveryEtaDate: true,
+              clearSentToContabilidadAt: true,
+            ),
+          );
+          continue;
+        }
+
+        updatedItems.add(item);
+      }
+
+      final updates = <String, Object?>{
+        'items': updatedItems.map((item) => item.toMap()).toList(),
+        'etaDate': _resolveCommittedDeliveryDate(updatedItems)?.millisecondsSinceEpoch,
+        'updatedAt': appServerTimestamp,
+      };
+      final nextStatus = _statusForQuoteProgress(updatedItems);
+
+      if (itemStatus == PurchaseOrderItemQuoteStatus.pendingDireccion) {
+        updates['processedByName'] = quote.processedByName?.trim().isEmpty ?? true
+            ? null
+            : quote.processedByName!.trim();
+        updates['processedByArea'] = quote.processedByArea?.trim().isEmpty ?? true
+            ? null
+            : quote.processedByArea!.trim();
+      }
+
+      updates['status'] = nextStatus.name;
+      if (nextStatus != order.status) {
+        updates.addAll(_statusTimingUpdate(order));
+      }
+      if (nextStatus == PurchaseOrderStatus.paymentDone) {
+        updates['direccionGeneralName'] = approver?.name.trim().isEmpty ?? true
+            ? null
+            : approver!.name.trim();
+        updates['direccionGeneralArea'] =
+            approver?.areaDisplay.trim().isEmpty ?? true
+                ? null
+                : approver!.areaDisplay.trim();
+      }
+
+      await _ordersRef.child(order.id).update(updates);
+
+      final trimmedEventType = eventType?.trim() ?? '';
+      if (trimmedEventType.isNotEmpty && eventActor != null) {
+        await _appendEvent(
+          _ordersRef.child(order.id),
+          fromStatus: order.status,
+          toStatus: nextStatus,
+          byUserId: eventActor.id,
+          byRole: _actorRoleLabel(eventActor),
+          type: trimmedEventType,
+          itemsSnapshot: updatedItems,
+          comment: eventComment,
+        );
+      }
+    }
+  }
+
+  Future<void> _clearQuoteItemsOnOrders(String quoteId) async {
+    final orders = await watchAllOrders().first;
+    for (final order in orders) {
+      var changed = false;
+      final updatedItems = <PurchaseOrderItem>[];
+      for (final item in order.items) {
+        if (item.quoteId == quoteId) {
+          changed = true;
+          updatedItems.add(
+            item.copyWith(
+              quoteId: null,
+              clearQuoteId: true,
+              quoteStatus: PurchaseOrderItemQuoteStatus.pending,
+              clearDeliveryEtaDate: true,
+              clearSentToContabilidadAt: true,
+            ),
+          );
+        } else {
+          updatedItems.add(item);
+        }
+      }
+      if (!changed) continue;
+      final nextStatus = _statusForQuoteProgress(updatedItems);
+      await _ordersRef.child(order.id).update({
+        'items': updatedItems.map((item) => item.toMap()).toList(),
+        'etaDate': _resolveCommittedDeliveryDate(updatedItems)?.millisecondsSinceEpoch,
+        'status': nextStatus.name,
+        'updatedAt': appServerTimestamp,
+        if (nextStatus != order.status) ..._statusTimingUpdate(order),
+      });
+    }
   }
 
   Future<void> deleteOrder(String orderId) async {
@@ -983,11 +1562,10 @@ class PurchaseOrderRepository {
 
 final purchaseOrderRepositoryProvider = Provider<PurchaseOrderRepository>((ref) {
   final database = ref.watch(firebaseDatabaseProvider);
-  final company = ref.watch(currentCompanyProvider);
-  return PurchaseOrderRepository(database, company);
+  return PurchaseOrderRepository(database, Company.chabely);
 });
 
-Future<String> _reserveNextFolio(FirebaseDatabase database, Company company) async {
+Future<String> _reserveNextFolio(AppDatabase database, Company company) async {
   final counterRef = database.ref('counters/folios/purchaseOrderNext');
   final currentSnapshot = await counterRef.get();
   final snapshotValue = _parseCounterValue(currentSnapshot.value);
@@ -997,7 +1575,7 @@ Future<String> _reserveNextFolio(FirebaseDatabase database, Company company) asy
     final base = _parseCounterValue(current);
     final effective = base > 0 ? base : legacySeed;
     final next = effective + 1;
-    return Transaction.success(next);
+    return next;
   });
 
   if (!result.committed) throw StateError('No se pudo generar el folio.');
@@ -1006,6 +1584,26 @@ Future<String> _reserveNextFolio(FirebaseDatabase database, Company company) asy
   if (nextValue <= 0) throw StateError('Folio inválido.');
 
   return formatFolio(company, nextValue);
+}
+
+Future<String> _reserveNextSupplierQuoteFolio(AppDatabase database) async {
+  final counterRef = database.ref('counters/folios/supplierQuoteNext');
+  final result = await counterRef.runTransaction((current) {
+    final base = _parseCounterValue(current);
+    final next = base + 1;
+    return next;
+  });
+
+  if (!result.committed) {
+    throw StateError('No se pudo generar el folio de cotizacion.');
+  }
+
+  final nextValue = _parseCounterValue(result.snapshot.value);
+  if (nextValue <= 0) {
+    throw StateError('Folio de cotizacion invalido.');
+  }
+
+  return 'CP-${nextValue.toString().padLeft(6, '0')}';
 }
 
 int _parseCounterValue(Object? raw) {
@@ -1037,7 +1635,94 @@ num _sumBudgets(Map<String, num> budgets) {
   return total;
 }
 
-Future<int> _resolveLegacyMax(FirebaseDatabase database) async {
+bool _hasQuoteAssignmentData(PurchaseOrderItem item) {
+  final supplier = (item.supplier ?? '').trim();
+  final budget = item.budget ?? 0;
+  return supplier.isNotEmpty && budget > 0;
+}
+
+
+bool _hasSentToContabilidad(PurchaseOrderItem item) {
+  return item.sentToContabilidadAt != null;
+}
+
+PurchaseOrderStatus _statusForQuoteProgress(List<PurchaseOrderItem> items) {
+  if (items.isEmpty) return PurchaseOrderStatus.cotizaciones;
+  if (items.any((item) => !_hasQuoteAssignmentData(item))) {
+    return PurchaseOrderStatus.cotizaciones;
+  }
+
+  final allApproved = items.every(
+    (item) =>
+        (item.quoteId?.trim().isNotEmpty ?? false) &&
+        item.quoteStatus == PurchaseOrderItemQuoteStatus.approved,
+  );
+  if (allApproved) {
+    return PurchaseOrderStatus.paymentDone;
+  }
+
+  final allSentToDireccion = items.every(
+    (item) =>
+        (item.quoteId?.trim().isNotEmpty ?? false) &&
+        (item.quoteStatus == PurchaseOrderItemQuoteStatus.pendingDireccion ||
+            item.quoteStatus == PurchaseOrderItemQuoteStatus.approved),
+  );
+  if (allSentToDireccion) {
+    return PurchaseOrderStatus.authorizedGerencia;
+  }
+
+  return PurchaseOrderStatus.dataComplete;
+}
+
+PurchaseOrderStatus _statusForDeliveryEtaProgress(List<PurchaseOrderItem> items) {
+  if (items.isEmpty) return PurchaseOrderStatus.paymentDone;
+  final allApproved = items.every(
+    (item) =>
+        (item.quoteId?.trim().isNotEmpty ?? false) &&
+        item.quoteStatus == PurchaseOrderItemQuoteStatus.approved,
+  );
+  if (!allApproved) {
+    return _statusForQuoteProgress(items);
+  }
+
+  final anySentToContabilidad = items.any(_hasSentToContabilidad);
+  return anySentToContabilidad
+      ? PurchaseOrderStatus.contabilidad
+      : PurchaseOrderStatus.paymentDone;
+}
+
+DateTime? _resolveCommittedDeliveryDate(List<PurchaseOrderItem> items) {
+  DateTime? selected;
+  for (final item in items) {
+    final date = item.deliveryEtaDate;
+    if (date == null) continue;
+    final normalized = DateTime(date.year, date.month, date.day);
+    if (selected == null || normalized.isAfter(selected)) {
+      selected = normalized;
+    }
+  }
+  return selected;
+}
+
+Future<Map<String, PurchaseOrder>> _fetchOrdersByIds(
+  AppDatabase database,
+  Iterable<String> orderIds,
+) async {
+  final ordersById = <String, PurchaseOrder>{};
+  for (final rawOrderId in orderIds) {
+    final orderId = rawOrderId.trim();
+    if (orderId.isEmpty) continue;
+    final snapshot = await database.ref('purchaseOrders/$orderId').get();
+    if (!snapshot.exists || snapshot.value is! Map) continue;
+    ordersById[orderId] = PurchaseOrder.fromMap(
+      orderId,
+      Map<String, dynamic>.from(snapshot.value as Map),
+    );
+  }
+  return ordersById;
+}
+
+Future<int> _resolveLegacyMax(AppDatabase database) async {
   var maxValue = 0;
   for (final company in Company.values) {
     final snapshot = await database.ref('counters/folios/${company.name}/purchaseOrderNext').get();
@@ -1057,9 +1742,9 @@ String _actorRoleLabel(AppUser actor) {
 }
 
 Future<void> _appendEvent(
-  DatabaseReference orderRef, {
+  AppDatabaseRef orderRef, {
   required PurchaseOrderStatus? fromStatus,
-  required PurchaseOrderStatus toStatus,
+  required PurchaseOrderStatus? toStatus,
   required String byUserId,
   required String byRole,
   required String type,
@@ -1069,10 +1754,10 @@ Future<void> _appendEvent(
   final eventRef = orderRef.child('events').push();
   final payload = <String, dynamic>{
     'fromStatus': fromStatus?.name,
-    'toStatus': toStatus.name,
+    'toStatus': toStatus?.name,
     'byUserId': byUserId,
     'byRole': byRole,
-    'timestamp': ServerValue.timestamp,
+    'timestamp': appServerTimestamp,
     'type': type,
   };
 
@@ -1104,116 +1789,9 @@ Map<String, Object?> _statusTimingUpdate(PurchaseOrder order) {
   };
 }
 
-String _almacenDifferenceSummary(List<PurchaseOrderItem> items) {
-  final lines = <String>[];
-  for (final item in items) {
-    final received = item.receivedQuantity;
-    if (received == null) continue;
-
-    final delta = received - item.quantity;
-    if (delta == 0) continue;
-
-    final changeLabel = delta > 0 ? '+${_formatDiffNum(delta)}' : _formatDiffNum(delta);
-    final comment = (item.receivedComment ?? '').trim();
-    final description = item.description.trim().isEmpty ? 'Item ${item.line}' : item.description.trim();
-    final suffix = comment.isEmpty ? '' : ' ($comment)';
-    lines.add(
-      'Item ${item.line} - $description: solicitado ${_formatDiffNum(item.quantity)} ${item.unit}, recibido ${_formatDiffNum(received)} ${item.unit}, diferencia $changeLabel$suffix',
-    );
-  }
-  return lines.join('\n');
-}
-
-String? _joinEventComments(String? primary, String? secondary) {
-  final first = primary?.trim() ?? '';
-  final second = secondary?.trim() ?? '';
-  if (first.isEmpty && second.isEmpty) return null;
-  if (first.isEmpty) return second;
-  if (second.isEmpty) return first;
-  return '$first\n\n$second';
-}
-
-String _formatDiffNum(num value) {
-  final asInt = value.toInt();
-  if (value == asInt) return asInt.toString();
-  return value.toString();
-}
 
 const _maxCorrections = 3;
 
-List<SharedQuoteRef> _upsertSharedQuoteRef(
-  List<SharedQuoteRef> existing,
-  SharedQuote quote,
-) {
-  final next = <SharedQuoteRef>[];
-  final seen = <String>{};
-  for (final ref in existing) {
-    if (ref.quoteId.trim() == quote.id) continue;
-    if (ref.quoteId.trim().isEmpty) continue;
-    if (seen.add(ref.quoteId.trim())) {
-      next.add(ref);
-    }
-  }
-  next.add(SharedQuoteRef(supplier: quote.supplier.trim(), quoteId: quote.id));
-  return next;
-}
-
-List<SharedQuoteRef> _removeSharedQuoteRef(
-  List<SharedQuoteRef> existing,
-  String quoteId,
-) {
-  final cleanedId = quoteId.trim();
-  if (cleanedId.isEmpty) return existing;
-  return existing.where((ref) => ref.quoteId.trim() != cleanedId).toList();
-}
-
-List<CotizacionLink> _upsertQuoteLink(
-  List<CotizacionLink> existing,
-  SharedQuote quote,
-) {
-  final cleanedUrl = quote.pdfUrl.trim();
-  final next = <CotizacionLink>[];
-
-  for (final link in existing) {
-    if ((link.quoteId ?? '').trim() == quote.id) {
-      continue;
-    }
-    if ((link.quoteId ?? '').trim().isEmpty &&
-        link.url.trim().isNotEmpty &&
-        link.url.trim() == cleanedUrl) {
-      continue;
-    }
-    next.add(link);
-  }
-
-  if (cleanedUrl.isEmpty) return next;
-
-  next.add(
-    CotizacionLink(
-      supplier: _quoteLabel(quote),
-      url: cleanedUrl,
-      quoteId: quote.id,
-    ),
-  );
-  return next;
-}
-
-List<CotizacionLink> _removeQuoteLink(
-  List<CotizacionLink> existing,
-  String quoteId,
-) {
-  final cleanedId = quoteId.trim();
-  if (cleanedId.isEmpty) return existing;
-  return existing.where((link) => (link.quoteId ?? '').trim() != cleanedId).toList();
-}
-
-String _quoteLabel(SharedQuote quote) {
-  final label = quote.supplier.trim();
-  if (label.isNotEmpty) return label;
-  final id = quote.id.trim();
-  if (id.length <= 6) return 'Cotización $id';
-  return 'Cotización ${id.substring(0, 6)}';
-}
 
 List<int> _mergeResubmissions(Object? snapshotValue) {
   final next = DateTime.now().millisecondsSinceEpoch;

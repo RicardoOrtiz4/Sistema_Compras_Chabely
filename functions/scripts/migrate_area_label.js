@@ -10,10 +10,6 @@ const TARGETS = [
     label: 'Direcci\u00f3n General',
     aliases: new Set(['gerencia general', 'gerencia', 'direccion general']),
   },
-  {
-    label: 'Almac\u00e9n',
-    aliases: new Set(['almacen']),
-  },
 ];
 
 function getArg(flag) {

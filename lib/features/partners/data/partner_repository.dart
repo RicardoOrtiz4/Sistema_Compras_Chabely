@@ -1,8 +1,7 @@
-import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/extensions.dart';
+import 'package:sistema_compras/core/firebase_database_compat.dart';
 import 'package:sistema_compras/core/providers.dart';
 
 enum PartnerType { supplier, client }
@@ -68,13 +67,12 @@ class PartnerEntry {
 }
 
 class PartnerRepository {
-  PartnerRepository(this._database, this._company);
+  PartnerRepository(this._database);
 
-  final FirebaseDatabase _database;
-  final Company _company;
+  final AppDatabase _database;
 
-  DatabaseReference _partnersRef(PartnerType type, String uid) {
-    return _database.ref('companies/${_company.name}/partners/${type.path}/$uid');
+  AppDatabaseRef _partnersRef(PartnerType type, String uid) {
+    return _database.ref('partners/${type.path}/$uid');
   }
 
   Stream<List<PartnerEntry>> watchPartners({
@@ -115,8 +113,8 @@ class PartnerRepository {
     final ref = _partnersRef(type, uid).push();
     await ref.set({
       'name': trimmed,
-      'createdAt': ServerValue.timestamp,
-      'updatedAt': ServerValue.timestamp,
+      'createdAt': appServerTimestamp,
+      'updatedAt': appServerTimestamp,
     });
   }
 
@@ -133,7 +131,7 @@ class PartnerRepository {
 
     await _partnersRef(type, uid).child(id).update({
       'name': trimmed,
-      'updatedAt': ServerValue.timestamp,
+      'updatedAt': appServerTimestamp,
     });
   }
 
@@ -148,8 +146,7 @@ class PartnerRepository {
 
 final partnerRepositoryProvider = Provider<PartnerRepository>((ref) {
   final database = ref.watch(firebaseDatabaseProvider);
-  final company = ref.watch(currentCompanyProvider);
-  return PartnerRepository(database, company);
+  return PartnerRepository(database);
 });
 
 final userSuppliersProvider = StreamProvider<List<PartnerEntry>>((ref) {

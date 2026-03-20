@@ -7,13 +7,18 @@ import 'package:go_router/go_router.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
+import 'package:sistema_compras/core/optimistic_action.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
+import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
+import 'package:sistema_compras/features/auth/domain/app_user.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_pdf_preload_gate.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_status_duration.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_search.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_summary_lines.dart';
+import 'package:sistema_compras/features/orders/presentation/shared/order_urgency_controls.dart';
+import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
 
 class PendingOrdersScreen extends ConsumerStatefulWidget {
@@ -33,7 +38,10 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
   final OrderSearchCache _searchCache = OrderSearchCache();
   Timer? _searchDebounce;
   String _searchQuery = '';
+  OrderUrgencyFilter _urgencyFilter = OrderUrgencyFilter.all;
+  DateTimeRange? _createdDateRangeFilter;
   int _limit = defaultOrderPageSize;
+  bool _isAcceptingAll = false;
 
   @override
   void initState() {
@@ -64,17 +72,144 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
     setState(() => _searchQuery = '');
   }
 
+  void _setUrgencyFilter(OrderUrgencyFilter filter) {
+    setState(() {
+      _urgencyFilter = filter;
+      _limit = defaultOrderPageSize;
+    });
+  }
+
+  Future<void> _pickCreatedDateFilter() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(1900, 1, 1),
+      lastDate: DateTime(2100, 12, 31),
+      currentDate: now,
+      initialDateRange: _createdDateRangeFilter,
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _createdDateRangeFilter = DateTimeRange(
+        start: DateTime(picked.start.year, picked.start.month, picked.start.day),
+        end: DateTime(picked.end.year, picked.end.month, picked.end.day),
+      );
+      _limit = defaultOrderPageSize;
+    });
+  }
+
+  void _clearCreatedDateFilter() {
+    if (_createdDateRangeFilter == null) return;
+    setState(() {
+      _createdDateRangeFilter = null;
+      _limit = defaultOrderPageSize;
+    });
+  }
+
   void _loadMore() {
     setState(() => _limit += orderPageSizeStep);
+  }
+
+  Future<void> _handleAcceptAll(List<PurchaseOrder> orders) async {
+    if (_isAcceptingAll || orders.isEmpty) return;
+
+    final actor = ref.read(currentUserProfileProvider).value;
+    if (actor == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Perfil no disponible.')),
+      );
+      return;
+    }
+
+    final confirmed = await _confirmAcceptAll(actor, orders.length);
+    if (!mounted || !confirmed) return;
+
+    setState(() => _isAcceptingAll = true);
+
+    final reviewerName = actor.name.trim().isEmpty ? actor.id : actor.name.trim();
+    final reviewerArea = actor.areaDisplay.trim().isEmpty
+        ? actor.areaId
+        : actor.areaDisplay.trim();
+    final repo = ref.read(purchaseOrderRepositoryProvider);
+    final count = orders.length;
+
+    await runOptimisticAction(
+      context: context,
+      pendingLabel: 'Enviando $count orden(es) a Cotizaciones...',
+      successMessage: count == 1
+          ? '1 orden enviada a Cotizaciones.'
+          : '$count órdenes enviadas a Cotizaciones.',
+      errorContext: 'PendingOrdersScreen.acceptAll',
+      action: () async {
+        for (final order in orders) {
+          await repo.transitionStatus(
+            order: order,
+            targetStatus: PurchaseOrderStatus.cotizaciones,
+            actor: actor,
+            comprasReviewerName: reviewerName,
+            comprasReviewerArea: reviewerArea,
+          );
+        }
+      },
+    );
+
+    if (mounted) {
+      setState(() => _isAcceptingAll = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final ordersAsync = ref.watch(pendingComprasOrdersProvider);
+    final compactAppBar = useCompactOrderModuleAppBar(context);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Órdenes por confirmar'),
+        title: ordersAsync.when(
+          data: (orders) {
+            final filteredOrders = _resolveVisibleOrders(orders);
+            final acceptAllButton = _PendingOrdersAcceptAllButton(
+              visibleCount: filteredOrders.length,
+              isBusy: _isAcceptingAll,
+              onPressed: filteredOrders.isEmpty || _isAcceptingAll
+                  ? null
+                  : () => _handleAcceptAll(filteredOrders),
+            );
+            if (compactAppBar) {
+              return const Text('Órdenes por confirmar');
+            }
+            return OrderModuleAppBarTitle(
+              title: 'Órdenes por confirmar',
+              counts: OrderUrgencyCounts.fromOrders(orders),
+              filter: _urgencyFilter,
+              onSelected: _setUrgencyFilter,
+              trailing: acceptAllButton,
+            );
+          },
+          loading: () => const Text('Órdenes por confirmar'),
+          error: (_, __) => const Text('Órdenes por confirmar'),
+        ),
+        bottom: !compactAppBar
+            ? null
+            : ordersAsync.maybeWhen(
+                data: (orders) {
+                  final filteredOrders = _resolveVisibleOrders(orders);
+                  return OrderModuleAppBarBottom(
+                    counts: OrderUrgencyCounts.fromOrders(orders),
+                    filter: _urgencyFilter,
+                    onSelected: _setUrgencyFilter,
+                    trailing: _PendingOrdersAcceptAllButton(
+                      visibleCount: filteredOrders.length,
+                      isBusy: _isAcceptingAll,
+                      onPressed: filteredOrders.isEmpty || _isAcceptingAll
+                          ? null
+                          : () => _handleAcceptAll(filteredOrders),
+                    ),
+                  );
+                },
+                orElse: () => null,
+              ),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () {
@@ -88,9 +223,6 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
       ),
       body: ordersAsync.when(
         data: (orders) {
-          if (orders.isEmpty) {
-            return const Center(child: Text('No hay órdenes por confirmar.'));
-          }
 
           _searchCache.retainFor(orders);
           final filtered = _resolveVisibleOrders(orders);
@@ -101,20 +233,52 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                child: TextField(
-                  controller: _searchController,
-                  decoration: InputDecoration(
-                    labelText:
-                        'Buscar por folio (000001), solicitante, cliente, fecha...',
-                    prefixIcon: const Icon(Icons.search),
-                    suffixIcon: _searchQuery.isEmpty
-                        ? null
-                        : IconButton(
-                            icon: const Icon(Icons.clear),
-                            onPressed: _clearSearch,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isNarrow = constraints.maxWidth < 720;
+                    final searchField = TextField(
+                      controller: _searchController,
+                      decoration: InputDecoration(
+                        labelText: 'Buscar por folio (000001), solicitante, cliente...',
+                        prefixIcon: const Icon(Icons.search),
+                        suffixIcon: _searchQuery.isEmpty
+                            ? null
+                            : IconButton(
+                                icon: const Icon(Icons.clear),
+                                onPressed: _clearSearch,
+                              ),
+                      ),
+                      onChanged: _updateSearch,
+                    );
+
+                    final dateFilter = _PendingOrdersDateFilterButton(
+                      selectedRange: _createdDateRangeFilter,
+                      onPickDate: _pickCreatedDateFilter,
+                      onClearDate: _clearCreatedDateFilter,
+                    );
+
+                    if (isNarrow) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          searchField,
+                          const SizedBox(height: 12),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: dateFilter,
                           ),
-                  ),
-                  onChanged: _updateSearch,
+                        ],
+                      );
+                    }
+
+                    return Row(
+                      children: [
+                        Expanded(child: searchField),
+                        const SizedBox(width: 12),
+                        dateFilter,
+                      ],
+                    );
+                  },
                 ),
               ),
               const SizedBox(height: 12),
@@ -195,16 +359,164 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
                   order,
                   trimmedQuery,
                   cache: _searchCache,
+                  includeDates: false,
                 ),
               )
               .toList(growable: false);
+    final dateFiltered = resolved
+        .where(_matchesCreatedDateFilter)
+        .toList(growable: false);
+    final urgencyFiltered = dateFiltered
+        .where((order) => matchesOrderUrgencyFilter(order, _urgencyFilter))
+        .toList(growable: false);
     _cachedSourceOrders = orders;
     _cachedVisibleKey = key;
-    _cachedVisibleOrders = resolved;
-    return resolved;
+    _cachedVisibleOrders = urgencyFiltered;
+    return urgencyFiltered;
   }
 
-  String _visibleOrdersKey() => _searchQuery.trim().toLowerCase();
+  String _visibleOrdersKey() =>
+      '${_searchQuery.trim().toLowerCase()}|${_urgencyFilter.name}|'
+      '${_createdDateRangeFilter?.start.millisecondsSinceEpoch ?? ''}|'
+      '${_createdDateRangeFilter?.end.millisecondsSinceEpoch ?? ''}';
+
+  bool _matchesCreatedDateFilter(PurchaseOrder order) {
+    final selectedRange = _createdDateRangeFilter;
+    if (selectedRange == null) return true;
+    final createdAt = order.createdAt;
+    if (createdAt == null) return false;
+    final createdDate = DateTime(createdAt.year, createdAt.month, createdAt.day);
+    final rangeStart = DateTime(
+      selectedRange.start.year,
+      selectedRange.start.month,
+      selectedRange.start.day,
+    );
+    final rangeEnd = DateTime(
+      selectedRange.end.year,
+      selectedRange.end.month,
+      selectedRange.end.day,
+    );
+    return !createdDate.isBefore(rangeStart) && !createdDate.isAfter(rangeEnd);
+  }
+
+  Future<bool> _confirmAcceptAll(AppUser actor, int count) async {
+    final reviewerName = actor.name.trim().isEmpty ? actor.id : actor.name.trim();
+    final reviewerArea = actor.areaDisplay.trim().isEmpty
+        ? actor.areaId
+        : actor.areaDisplay.trim();
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Aceptar todas'),
+        content: Text(
+          'Vas a aceptar $count orden(es) visibles con los filtros actuales. '
+          'Todas quedarán firmadas por "$reviewerName" del área "$reviewerArea" '
+          'y pasarán directamente a Cotizaciones sin revisión individual. '
+          'Riesgo: si alguna orden trae errores en materiales, cantidades, cliente '
+          'o urgencia, el error avanzará en lote. Además, si algo falla a mitad del '
+          'proceso, puede quedar un avance parcial y tendrás que revisarlo manualmente. '
+          '¿Deseas continuar?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Aceptar todas'),
+          ),
+        ],
+      ),
+    );
+
+    return result ?? false;
+  }
+}
+
+
+class _PendingOrdersAcceptAllButton extends StatelessWidget {
+  const _PendingOrdersAcceptAllButton({
+    required this.visibleCount,
+    required this.isBusy,
+    required this.onPressed,
+  });
+
+  final int visibleCount;
+  final bool isBusy;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return FilledButton.tonal(
+      onPressed: onPressed,
+      style: FilledButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        visualDensity: VisualDensity.compact,
+      ),
+      child: isBusy
+          ? const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : Text(
+              visibleCount > 0
+                  ? 'Aceptar todas ($visibleCount)'
+                  : 'Aceptar todas',
+            ),
+    );
+  }
+}
+
+class _PendingOrdersDateFilterButton extends StatelessWidget {
+  const _PendingOrdersDateFilterButton({
+    required this.selectedRange,
+    required this.onPickDate,
+    required this.onClearDate,
+  });
+
+  final DateTimeRange? selectedRange;
+  final VoidCallback onPickDate;
+  final VoidCallback onClearDate;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        OutlinedButton.icon(
+          onPressed: onPickDate,
+          icon: const Icon(Icons.calendar_today_outlined),
+          label: Text(
+            _rangeLabel(),
+          ),
+        ),
+        if (selectedRange != null) ...[
+          const SizedBox(width: 8),
+          IconButton(
+            tooltip: 'Limpiar rango',
+            onPressed: onClearDate,
+            icon: const Icon(Icons.close),
+          ),
+        ],
+      ],
+    );
+  }
+
+  String _rangeLabel() {
+    final range = selectedRange;
+    if (range == null) return 'Rango de fechas';
+    final start = range.start.toShortDate();
+    final end = range.end.toShortDate();
+    if (range.start.year == range.end.year &&
+        range.start.month == range.end.month &&
+        range.start.day == range.end.day) {
+      return 'Fecha: $start';
+    }
+    return '$start - $end';
+  }
 }
 
 class _PendingOrderCard extends StatelessWidget {
@@ -217,6 +529,7 @@ class _PendingOrderCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final createdLabel = order.createdAt?.toFullDateTime() ?? 'Pendiente';
     final direccionComment = (order.direccionComment ?? '').trim();
+    final urgentJustification = (order.urgentJustification ?? '').trim();
     final wasRejectedByDireccion = order.direccionReturnCount > 0;
 
     final returnCount = order.returnCount;
@@ -239,6 +552,15 @@ class _PendingOrderCard extends StatelessWidget {
               children: [
                 _FolioPill(folio: order.id),
                 _UrgencyPill(urgency: order.urgency),
+                if (order.urgency == PurchaseOrderUrgency.urgente &&
+                    urgentJustification.isNotEmpty)
+                  Text(
+                    urgentJustification,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Colors.red.shade900,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 if (wasRejectedByDireccion)
                   Container(
                     padding: const EdgeInsets.symmetric(
@@ -282,8 +604,7 @@ class _PendingOrderCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
-            Text('Solicitante: ${order.requesterName}'),
-            Text('Área: ${order.areaName}'),
+            Text('Solicitante / Area: ${order.requesterName} | ${order.areaName}'),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -328,7 +649,12 @@ class _OrderCardSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return OrderSummaryLines(order: order, includeBudget: true, emptyLabel: '');
+    return OrderSummaryLines(
+      order: order,
+      includeBudget: true,
+      includeUrgentJustification: false,
+      emptyLabel: '',
+    );
   }
 }
 
@@ -517,6 +843,3 @@ String _formatDuration(Duration duration) {
   }
   return '$minutes min';
 }
-
-
-

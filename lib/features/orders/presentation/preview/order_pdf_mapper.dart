@@ -25,6 +25,7 @@ OrderPdfData buildPdfDataFromOrder(
   List<OrderItemDraft>? items,
   DateTime? createdAt,
   DateTime? updatedAt,
+  DateTime? etaDate,
   List<DateTime>? resubmissionDates,
   bool hideBudget = false,
   bool suppressUpdatedAt = false,
@@ -46,6 +47,7 @@ OrderPdfData buildPdfDataFromOrder(
     items: items,
     createdAt: createdAt,
     updatedAt: updatedAt,
+    etaDate: etaDate,
     resubmissionDates: resubmissionDates,
     hideBudget: hideBudget,
     suppressUpdatedAt: suppressUpdatedAt,
@@ -74,6 +76,7 @@ OrderPdfData buildPdfDataFromOrder(
       items: items,
       createdAt: createdAt,
       updatedAt: updatedAt,
+      etaDate: etaDate,
       resubmissionDates: resubmissionDates,
       hideBudget: hideBudget,
       suppressUpdatedAt: suppressUpdatedAt,
@@ -105,6 +108,7 @@ OrderPdfData buildPdfDataFromOrder(
     items: items,
     createdAt: createdAt,
     updatedAt: updatedAt,
+    etaDate: etaDate,
     resubmissionDates: resubmissionDates,
     hideBudget: hideBudget,
     suppressUpdatedAt: suppressUpdatedAt,
@@ -130,6 +134,7 @@ OrderPdfData _buildPdfDataFromOrderImpl(
   List<OrderItemDraft>? items,
   DateTime? createdAt,
   DateTime? updatedAt,
+  DateTime? etaDate,
   List<DateTime>? resubmissionDates,
   bool hideBudget = false,
   bool suppressUpdatedAt = false,
@@ -164,19 +169,6 @@ OrderPdfData _buildPdfDataFromOrderImpl(
       ? mappedItems.map((item) => item.copyWith(clearBudget: true)).toList()
       : mappedItems;
 
-  final requestedDate = effectiveItems
-      .map((item) => item.estimatedDate)
-      .whereType<DateTime>()
-      .fold<DateTime?>(null, (current, next) {
-    if (current == null) return next;
-    return next.isBefore(current) ? next : current;
-  });
-  final fallbackRequestedDate = requestedDate ??
-      _requestedDateFromUrgency(
-        order.urgency,
-        order.createdAt ?? DateTime.now(),
-      );
-
   return OrderPdfData(
     branding: effectiveBranding,
     requesterName: order.requesterName,
@@ -187,12 +179,13 @@ OrderPdfData _buildPdfDataFromOrderImpl(
     createdAt: effectiveCreatedAt,
     updatedAt: effectiveUpdatedAt,
     observations: order.clientNote ?? '',
+    urgentJustification: order.urgentJustification ?? '',
     folio: order.id,
     supplier: supplier ?? order.supplier ?? '',
     internalOrder: internalOrder ?? order.internalOrder ?? '',
     budget: effectiveBudget,
     supplierBudgets: effectiveSupplierBudgets,
-    comprasComment: comprasComment ?? order.comprasComment ?? '',
+    comprasComment: comprasComment ?? '',
     comprasReviewerName: comprasReviewerName ?? order.comprasReviewerName ?? '',
     comprasReviewerArea: comprasReviewerArea ?? order.comprasReviewerArea ?? '',
     processedByName: processedByName ?? order.processedByName ?? '',
@@ -200,11 +193,8 @@ OrderPdfData _buildPdfDataFromOrderImpl(
     direccionGeneralName: direccionGeneralName ?? order.direccionGeneralName ?? '',
     direccionGeneralArea: direccionGeneralArea ?? order.direccionGeneralArea ?? '',
     pendingResubmissionLabel: effectivePendingResubmissionLabel,
-    almacenName: order.almacenName ?? '',
-    almacenArea: order.almacenArea ?? '',
-    almacenComment: order.almacenComment ?? '',
-    requestedDeliveryDate: fallbackRequestedDate,
-    etaDate: order.etaDate,
+    requestedDeliveryDate: resolveRequestedDeliveryDate(order),
+    etaDate: etaDate ?? order.etaDate,
     resubmissionDates: effectiveResubmissionDates,
     cacheSalt: cacheSalt,
   );
@@ -226,6 +216,7 @@ bool _canUseDefaultPdfDataCache({
   required List<OrderItemDraft>? items,
   required DateTime? createdAt,
   required DateTime? updatedAt,
+  required DateTime? etaDate,
   required List<DateTime>? resubmissionDates,
   required bool hideBudget,
   required bool suppressUpdatedAt,
@@ -246,6 +237,7 @@ bool _canUseDefaultPdfDataCache({
       items == null &&
       createdAt == null &&
       updatedAt == null &&
+      etaDate == null &&
       resubmissionDates == null &&
       !hideBudget &&
       !suppressUpdatedAt &&
@@ -268,7 +260,6 @@ String _defaultPdfDataCacheKey(PurchaseOrder order, CompanyBranding branding) {
     resubmissions.length,
     lastResubmission,
     order.items.length,
-    order.cotizacionLinks.length,
     order.facturaPdfUrls.length,
   ].join('|');
 }
@@ -368,19 +359,3 @@ num _sumBudgets(Map<String, num> budgets) {
   return total;
 }
 
-DateTime _requestedDateFromUrgency(
-  PurchaseOrderUrgency urgency,
-  DateTime baseDate,
-) {
-  final base = DateTime(baseDate.year, baseDate.month, baseDate.day);
-  switch (urgency) {
-    case PurchaseOrderUrgency.urgente:
-      return base.add(const Duration(days: 1));
-    case PurchaseOrderUrgency.alta:
-      return base.add(const Duration(days: 3));
-    case PurchaseOrderUrgency.media:
-      return base.add(const Duration(days: 7));
-    case PurchaseOrderUrgency.baja:
-      return base.add(const Duration(days: 14));
-  }
-}

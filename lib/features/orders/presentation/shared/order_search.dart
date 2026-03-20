@@ -10,15 +10,23 @@ final _shortDateDash = DateFormat('dd-MM-yyyy');
 class OrderSearchCache {
   final Map<String, _OrderSearchEntry> _cache = <String, _OrderSearchEntry>{};
 
-  String textFor(PurchaseOrder order) {
+  String textFor(
+    PurchaseOrder order, {
+    bool includeDates = true,
+  }) {
     final version = _orderVersion(order);
     final cached = _cache[order.id];
     if (cached != null && cached.version == version) {
-      return cached.text;
+      return includeDates ? cached.textWithDates : cached.textWithoutDates;
     }
-    final text = _buildOrderSearchText(order);
-    _cache[order.id] = _OrderSearchEntry(version, text);
-    return text;
+    final textWithDates = _buildOrderSearchText(order, includeDates: true);
+    final textWithoutDates = _buildOrderSearchText(order, includeDates: false);
+    _cache[order.id] = _OrderSearchEntry(
+      version,
+      textWithDates,
+      textWithoutDates,
+    );
+    return includeDates ? textWithDates : textWithoutDates;
   }
 
   void retainFor(Iterable<PurchaseOrder> orders) {
@@ -29,10 +37,15 @@ class OrderSearchCache {
 }
 
 class _OrderSearchEntry {
-  const _OrderSearchEntry(this.version, this.text);
+  const _OrderSearchEntry(
+    this.version,
+    this.textWithDates,
+    this.textWithoutDates,
+  );
 
   final int version;
-  final String text;
+  final String textWithDates;
+  final String textWithoutDates;
 }
 
 int _orderVersion(PurchaseOrder order) {
@@ -45,10 +58,13 @@ bool orderMatchesSearch(
   PurchaseOrder order,
   String query, {
   OrderSearchCache? cache,
+  bool includeDates = true,
 }) {
   final normalized = query.trim().toLowerCase();
   if (normalized.isEmpty) return true;
-  final haystack = cache == null ? _buildOrderSearchText(order) : cache.textFor(order);
+  final haystack = cache == null
+      ? _buildOrderSearchText(order, includeDates: includeDates)
+      : cache.textFor(order, includeDates: includeDates);
   final tokens = normalized.split(RegExp(r'\s+')).where((token) => token.isNotEmpty);
   for (final token in tokens) {
     if (!haystack.contains(token)) {
@@ -58,7 +74,10 @@ bool orderMatchesSearch(
   return true;
 }
 
-String _buildOrderSearchText(PurchaseOrder order) {
+String _buildOrderSearchText(
+  PurchaseOrder order, {
+  required bool includeDates,
+}) {
   final buffer = StringBuffer();
   void addValue(Object? value) {
     if (value == null) return;
@@ -87,14 +106,17 @@ String _buildOrderSearchText(PurchaseOrder order) {
   addValue(order.urgency.label);
   addValue(order.status.label);
   addValue(order.clientNote);
+  addValue(order.urgentJustification);
   addValue(order.lastReturnReason);
   addValue(order.supplier);
   addValue(order.internalOrder);
   addValue(order.comprasComment);
   addValue(order.budget);
   addValue(order.returnCount);
-  addDate(order.createdAt);
-  addDate(order.updatedAt);
+  if (includeDates) {
+    addDate(order.createdAt);
+    addDate(order.updatedAt);
+  }
 
   for (final item in order.items) {
     addValue(item.line);
@@ -105,9 +127,12 @@ String _buildOrderSearchText(PurchaseOrder order) {
     addValue(item.unit);
     addValue(item.customer);
     addValue(item.supplier);
+    addValue(item.internalOrder);
     addValue(item.reviewComment);
     addValue(item.reviewFlagged);
-    addDate(item.estimatedDate);
+    if (includeDates) {
+      addDate(item.estimatedDate);
+    }
   }
 
   return buffer.toString();

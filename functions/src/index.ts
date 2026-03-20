@@ -73,7 +73,6 @@ const TRACKED_ORDER_STATUSES = new Set([
   'authorizedGerencia',
   'paymentDone',
   'contabilidad',
-  'almacen',
 ]);
 
 type PurchaseOrderCounterSummary = {
@@ -91,8 +90,9 @@ export const createUserProfile = functions
     const snapshot = await userRef.get();
     if (snapshot.exists()) return;
 
+    const emailPrefix = user.email?.split('@')[0];
     await userRef.set({
-      name: user.displayName ?? user.email?.split('@').first ?? 'Usuario',
+      name: user.displayName ?? emailPrefix ?? 'Usuario',
       email: user.email ?? '',
       role: 'usuario',
       areaId: 'por-definir',
@@ -245,7 +245,7 @@ export const transitionStatus = functions
   .region(REGION)
   .https.onCall(async (data, context) => {
     if (!context.auth) {
-      throw new functions.https.HttpsError('unauthenticated', 'Debes iniciar sesión.');
+      throw new functions.https.HttpsError('unauthenticated', 'Debes iniciar sesiÃ³n.');
     }
 
     const orderId = data.orderId as string | undefined;
@@ -269,7 +269,7 @@ export const transitionStatus = functions
     const currentStatus = (snapshot.val() as { status?: string } | null)?.status;
     const validTargets = allowedTransitions[currentStatus ?? ''] ?? [];
     if (!validTargets.includes(targetStatus)) {
-      throw new functions.https.HttpsError('failed-precondition', 'Transición inválida.');
+      throw new functions.https.HttpsError('failed-precondition', 'TransiciÃ³n invÃ¡lida.');
     }
 
     const now = admin.database.ServerValue.TIMESTAMP;
@@ -1080,5 +1080,5 @@ async function resolveLegacyCounterMax(): Promise<number> {
   return values.reduce((max, value) => (value > max ? value : max), 0);
 }
 
-// TODO: generatePdfOnFinalState trigger based on status once plantilla esté lista.
+// TODO: generatePdfOnFinalState trigger based on status once plantilla estÃ© lista.
 

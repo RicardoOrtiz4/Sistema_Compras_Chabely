@@ -14,7 +14,8 @@ import 'package:sistema_compras/features/orders/data/order_local_snapshot_store.
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
 import 'package:sistema_compras/features/orders/domain/order_dashboard_counts.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
-import 'package:sistema_compras/features/orders/domain/shared_quote.dart';
+import 'package:sistema_compras/features/orders/domain/supplier_quote.dart';
+import 'package:sistema_compras/features/orders/domain/supplier_quote_history_entry.dart';
 
 bool _awaitingProfile(Ref ref) {
   final uid = ref.watch(currentUserIdProvider);
@@ -23,6 +24,7 @@ bool _awaitingProfile(Ref ref) {
 }
 
 const _sessionCacheDuration = Duration(minutes: 4);
+const _sharedOrderDataScope = sharedCompanyDataId;
 final _sessionSnapshotCache = <String, Object?>{};
 
 String _orderSnapshotKey(String scope, String orderId) =>
@@ -30,7 +32,7 @@ String _orderSnapshotKey(String scope, String orderId) =>
 String _orderEventsSnapshotKey(String scope, String orderId) =>
     '$scope:orderEvents:$orderId';
 
-String _companyCacheScope(Ref ref) => ref.watch(currentCompanyProvider).name;
+String _companyCacheScope(Ref ref) => _sharedOrderDataScope;
 
 String _companyScopeFromKey(String key) {
   final scopeEnd = key.indexOf(':');
@@ -73,6 +75,27 @@ void _cacheProviderForSession(
 String _orderSignature(PurchaseOrder order) {
   final updatedAt = order.updatedAt?.millisecondsSinceEpoch ?? 0;
   final createdAt = order.createdAt?.millisecondsSinceEpoch ?? 0;
+  final itemsSignature = order.items
+      .map((item) {
+        final estimatedDate = item.estimatedDate?.millisecondsSinceEpoch ?? 0;
+        final deliveryEtaDate = item.deliveryEtaDate?.millisecondsSinceEpoch ?? 0;
+        final sentToContabilidadAt =
+            item.sentToContabilidadAt?.millisecondsSinceEpoch ?? 0;
+        return [
+          item.line.toString(),
+          item.quoteId ?? '',
+          item.quoteStatus.name,
+          estimatedDate.toString(),
+          deliveryEtaDate.toString(),
+          sentToContabilidadAt.toString(),
+          item.internalOrder ?? '',
+          item.reviewFlagged ? '1' : '0',
+          item.reviewComment ?? '',
+          item.receivedQuantity?.toString() ?? '',
+          item.receivedComment ?? '',
+        ].join('^');
+      })
+      .join('~');
   return [
     order.id,
     order.companyId ?? '',
@@ -81,8 +104,8 @@ String _orderSignature(PurchaseOrder order) {
     createdAt.toString(),
     order.returnCount.toString(),
     order.direccionReturnCount.toString(),
-    (order.cotizacionReady ?? false).toString(),
     order.items.length.toString(),
+    itemsSignature,
   ].join('|');
 }
 
@@ -129,26 +152,25 @@ bool _sameEventList(List<PurchaseOrderEvent> a, List<PurchaseOrderEvent> b) {
   return true;
 }
 
-String _sharedQuoteSignature(SharedQuote quote) {
+String _supplierQuoteSignature(SupplierQuote quote) {
   final updatedAt = quote.updatedAt?.millisecondsSinceEpoch ?? 0;
   final approvedAt = quote.approvedAt?.millisecondsSinceEpoch ?? 0;
   return [
     quote.id,
+    quote.status.name,
     quote.version.toString(),
     updatedAt.toString(),
     approvedAt.toString(),
-    quote.needsUpdate.toString(),
-    quote.orderIds.length.toString(),
-    quote.approvedOrderIds.length.toString(),
-    quote.pdfUrl,
+    quote.items.length.toString(),
+    quote.links.length.toString(),
   ].join('|');
 }
 
-bool _sameSharedQuoteList(List<SharedQuote> a, List<SharedQuote> b) {
+bool _sameSupplierQuoteList(List<SupplierQuote> a, List<SupplierQuote> b) {
   if (identical(a, b)) return true;
   if (a.length != b.length) return false;
   for (var index = 0; index < a.length; index++) {
-    if (_sharedQuoteSignature(a[index]) != _sharedQuoteSignature(b[index])) {
+    if (_supplierQuoteSignature(a[index]) != _supplierQuoteSignature(b[index])) {
       return false;
     }
   }
@@ -164,7 +186,6 @@ bool _sameDashboardCounts(OrderDashboardCounts? a, OrderDashboardCounts? b) {
       a.pendingDireccion == b.pendingDireccion &&
       a.pendingEta == b.pendingEta &&
       a.contabilidad == b.contabilidad &&
-      a.almacen == b.almacen &&
       a.rejected == b.rejected &&
       a.hasRemoteCounters == b.hasRemoteCounters;
 }
@@ -176,8 +197,27 @@ bool _isRejectedDraftOrder(PurchaseOrder order) {
       reason.trim().isNotEmpty;
 }
 
+bool _isGlobalMonitoringOrder(PurchaseOrder order) {
+  return _isRejectedDraftOrder(order) || order.isAwaitingRequesterReceipt;
+}
+
 List<PurchaseOrder> _filterRejectedDraftOrders(List<PurchaseOrder> orders) {
   return orders.where(_isRejectedDraftOrder).toList(growable: false);
+}
+
+List<PurchaseOrder> _filterGlobalMonitoringOrders(List<PurchaseOrder> orders) {
+  return orders.where(_isGlobalMonitoringOrder).toList(growable: false);
+}
+
+bool _isUserInProcessOrder(PurchaseOrder order) {
+  return order.status != PurchaseOrderStatus.draft &&
+      !order.isRequesterReceiptConfirmed;
+}
+
+List<PurchaseOrder> _filterContabilidadOrders(List<PurchaseOrder> orders) {
+  return orders
+      .where((order) => order.status == PurchaseOrderStatus.contabilidad)
+      .toList(growable: false);
 }
 
 Stream<List<PurchaseOrder>> _withCachedOrders({
@@ -215,19 +255,19 @@ Stream<List<PurchaseOrder>> _withCachedOrders({
   }
 }
 
-Stream<List<SharedQuote>> _withCachedSharedQuotes({
+Stream<List<SupplierQuote>> _withCachedSupplierQuotes({
   required String key,
-  required Stream<List<SharedQuote>> source,
+  required Stream<List<SupplierQuote>> source,
 }) async* {
-  List<SharedQuote>? lastEmitted;
+  List<SupplierQuote>? lastEmitted;
   final cached = _sessionSnapshotCache[key];
-  if (cached is List<SharedQuote>) {
+  if (cached is List<SupplierQuote>) {
     lastEmitted = cached;
     yield cached;
   } else {
-    final persisted = await OrderLocalSnapshotStore.readSharedQuotes(key);
+    final persisted = await OrderLocalSnapshotStore.readSupplierQuotes(key);
     if (persisted != null) {
-      final snapshot = List<SharedQuote>.unmodifiable(persisted);
+      final snapshot = List<SupplierQuote>.unmodifiable(persisted);
       _sessionSnapshotCache[key] = snapshot;
       lastEmitted = snapshot;
       yield snapshot;
@@ -235,10 +275,10 @@ Stream<List<SharedQuote>> _withCachedSharedQuotes({
   }
 
   await for (final quotes in source) {
-    final snapshot = List<SharedQuote>.unmodifiable(quotes);
+    final snapshot = List<SupplierQuote>.unmodifiable(quotes);
     _sessionSnapshotCache[key] = snapshot;
-    unawaited(OrderLocalSnapshotStore.writeSharedQuotes(key, quotes));
-    if (lastEmitted != null && _sameSharedQuoteList(lastEmitted, snapshot)) {
+    unawaited(OrderLocalSnapshotStore.writeSupplierQuotes(key, quotes));
+    if (lastEmitted != null && _sameSupplierQuoteList(lastEmitted, snapshot)) {
       continue;
     }
     lastEmitted = snapshot;
@@ -380,6 +420,53 @@ final allOrdersProvider = StreamProvider.autoDispose<List<PurchaseOrder>>((
   );
 });
 
+final historyAllOrdersProvider = StreamProvider.autoDispose<List<PurchaseOrder>>((
+  ref,
+) {
+  _cacheProviderForSession(ref);
+  if (_awaitingProfile(ref)) {
+    return const Stream.empty();
+  }
+  final user = ref.watch(currentUserProfileProvider).value;
+  if (user == null) {
+    return Stream.value(const <PurchaseOrder>[]);
+  }
+  final isDireccionGeneral = isDireccionGeneralLabel(user.areaDisplay);
+  final isCompras = isComprasLabel(user.areaDisplay);
+  if (!isAdminRole(user.role) && !isDireccionGeneral && !isCompras) {
+    return Stream.value(const <PurchaseOrder>[]);
+  }
+  final cacheScope = _profileCacheScope(ref, user);
+  final repository = ref.watch(purchaseOrderRepositoryProvider);
+  return _withCachedOrders(
+    key: '$cacheScope:historyAllOrders',
+    source: repository.watchAllOrders(),
+  );
+});
+
+final monitoringOrdersProvider = StreamProvider.autoDispose<List<PurchaseOrder>>(
+  (ref) {
+    _cacheProviderForSession(ref);
+    if (_awaitingProfile(ref)) {
+      return const Stream.empty();
+    }
+    final user = ref.watch(currentUserProfileProvider).value;
+    if (user == null) {
+      return Stream.value(const <PurchaseOrder>[]);
+    }
+    final isCompras = isComprasLabel(user.areaDisplay);
+    if (!isAdminRole(user.role) && !isCompras) {
+      return Stream.value(const <PurchaseOrder>[]);
+    }
+    final cacheScope = _profileCacheScope(ref, user);
+    final repository = ref.watch(purchaseOrderRepositoryProvider);
+    return _withCachedOrders(
+      key: '$cacheScope:monitoringOrders',
+      source: repository.watchAllOrders(),
+    );
+  },
+);
+
 final allOrdersPagedProvider = StreamProvider.autoDispose
     .family<List<PurchaseOrder>, int>((ref, limit) {
       _cacheProviderForSession(ref);
@@ -496,7 +583,7 @@ final cotizacionesOrdersProvider =
       );
     });
 
-final comprasDashboardAllOrdersProvider =
+final dataCompleteOrdersProvider =
     StreamProvider.autoDispose<List<PurchaseOrder>>((ref) {
       _cacheProviderForSession(ref);
       if (_awaitingProfile(ref)) {
@@ -513,7 +600,36 @@ final comprasDashboardAllOrdersProvider =
       final cacheScope = _profileCacheScope(ref, user);
       final repository = ref.watch(purchaseOrderRepositoryProvider);
       return _withCachedOrders(
-        key: '$cacheScope:comprasDashboardAllOrders',
+        key: '$cacheScope:dataCompleteOrders',
+        source: repository.watchOrdersByStatus(
+          PurchaseOrderStatus.dataComplete,
+        ),
+      );
+    });
+
+final operationalOrdersProvider =
+    StreamProvider.autoDispose<List<PurchaseOrder>>((ref) {
+      _cacheProviderForSession(ref);
+      if (_awaitingProfile(ref)) {
+        return const Stream.empty();
+      }
+      final user = ref.watch(currentUserProfileProvider).value;
+      if (user == null) {
+        return Stream.value(const <PurchaseOrder>[]);
+      }
+      final isCompras = isComprasLabel(user.areaDisplay);
+      final isDireccionGeneral = isDireccionGeneralLabel(user.areaDisplay);
+      final isContabilidad = isContabilidadLabel(user.areaDisplay);
+      if (!isAdminRole(user.role) &&
+          !isCompras &&
+          !isDireccionGeneral &&
+          !isContabilidad) {
+        return Stream.value(const <PurchaseOrder>[]);
+      }
+      final cacheScope = _profileCacheScope(ref, user);
+      final repository = ref.watch(purchaseOrderRepositoryProvider);
+      return _withCachedOrders(
+        key: '$cacheScope:operationalOrders',
         source: repository.watchAllOrders(),
       );
     });
@@ -543,7 +659,7 @@ final cotizacionesOrdersPagedProvider = StreamProvider.autoDispose
       );
     });
 
-final sharedQuotesProvider = StreamProvider.autoDispose<List<SharedQuote>>((
+final supplierQuotesProvider = StreamProvider.autoDispose<List<SupplierQuote>>((
   ref,
 ) {
   _cacheProviderForSession(ref);
@@ -552,49 +668,45 @@ final sharedQuotesProvider = StreamProvider.autoDispose<List<SharedQuote>>((
   }
   final user = ref.watch(currentUserProfileProvider).value;
   if (user == null) {
-    return Stream.value(const <SharedQuote>[]);
+    return Stream.value(const <SupplierQuote>[]);
   }
   final isCompras = isComprasLabel(user.areaDisplay);
   final isDireccionGeneral = isDireccionGeneralLabel(user.areaDisplay);
-  if (!isAdminRole(user.role) && !isCompras && !isDireccionGeneral) {
-    return Stream.value(const <SharedQuote>[]);
+  final isContabilidad = isContabilidadLabel(user.areaDisplay);
+  if (!isAdminRole(user.role) &&
+      !isCompras &&
+      !isDireccionGeneral &&
+      !isContabilidad) {
+    return Stream.value(const <SupplierQuote>[]);
   }
   final cacheScope = _profileCacheScope(ref, user);
   final repository = ref.watch(purchaseOrderRepositoryProvider);
-  return _withCachedSharedQuotes(
-    key: '$cacheScope:sharedQuotes',
-    source: repository.watchSharedQuotes(),
+  return _withCachedSupplierQuotes(
+    key: '$cacheScope:supplierQuotes',
+    source: repository.watchSupplierQuotes(),
   );
 });
 
-final sharedQuoteByIdProvider = StreamProvider.autoDispose
-    .family<SharedQuote?, String>((ref, quoteId) {
+final supplierQuoteByIdProvider = StreamProvider.autoDispose
+    .family<SupplierQuote?, String>((ref, quoteId) {
       _cacheProviderForSession(ref);
       final repository = ref.watch(purchaseOrderRepositoryProvider);
-      return repository.watchSharedQuoteById(quoteId);
+      return repository.watchSupplierQuoteById(quoteId);
     });
 
-final pendingDireccionOrdersProvider =
-    StreamProvider.autoDispose<List<PurchaseOrder>>((ref) {
-      _cacheProviderForSession(ref);
-      if (_awaitingProfile(ref)) {
-        return const Stream.empty();
-      }
-      final user = ref.watch(currentUserProfileProvider).value;
-      if (user == null) {
-        return Stream.value(const <PurchaseOrder>[]);
-      }
-      final isDireccionGeneral = isDireccionGeneralLabel(user.areaDisplay);
-      if (!isAdminRole(user.role) && !isDireccionGeneral) {
-        return Stream.value(const <PurchaseOrder>[]);
-      }
-      final cacheScope = _profileCacheScope(ref, user);
+final supplierQuoteHistoryProvider = StreamProvider.autoDispose
+    .family<List<SupplierQuoteHistoryEntry>, String>((ref, quoteId) {
       final repository = ref.watch(purchaseOrderRepositoryProvider);
-      return _withCachedOrders(
-        key: '$cacheScope:pendingDireccionOrders',
-        source: repository.watchOrdersByStatus(
-          PurchaseOrderStatus.authorizedGerencia,
-        ),
+      return repository.watchSupplierQuoteHistory(quoteId);
+    });
+
+final supplierQuotesByOrderIdProvider = Provider.autoDispose
+    .family<AsyncValue<List<SupplierQuote>>, String>((ref, orderId) {
+      final quotesAsync = ref.watch(supplierQuotesProvider);
+      return quotesAsync.whenData(
+        (quotes) => quotes
+            .where((quote) => quote.orderIds.contains(orderId))
+            .toList(growable: false),
       );
     });
 
@@ -663,9 +775,7 @@ final contabilidadOrdersProvider =
       final repository = ref.watch(purchaseOrderRepositoryProvider);
       return _withCachedOrders(
         key: '$cacheScope:contabilidadOrders',
-        source: repository.watchOrdersByStatus(
-          PurchaseOrderStatus.contabilidad,
-        ),
+        source: repository.watchAllOrders().map(_filterContabilidadOrders),
       );
     });
 
@@ -687,58 +797,13 @@ final contabilidadOrdersPagedProvider = StreamProvider.autoDispose
       final repository = ref.watch(purchaseOrderRepositoryProvider);
       return _withCachedOrders(
         key: '$cacheScope:contabilidadOrdersPaged:$limit',
-        source: repository.watchOrdersByStatus(
-          PurchaseOrderStatus.contabilidad,
-          limit: limit,
-        ),
-      );
-    });
-
-final almacenOrdersProvider = StreamProvider.autoDispose<List<PurchaseOrder>>((
-  ref,
-) {
-  _cacheProviderForSession(ref);
-  if (_awaitingProfile(ref)) {
-    return const Stream.empty();
-  }
-  final user = ref.watch(currentUserProfileProvider).value;
-  if (user == null) {
-    return Stream.value(const <PurchaseOrder>[]);
-  }
-  final isAlmacen = isAlmacenLabel(user.areaDisplay);
-  if (!isAdminRole(user.role) && !isAlmacen) {
-    return Stream.value(const <PurchaseOrder>[]);
-  }
-  final cacheScope = _profileCacheScope(ref, user);
-  final repository = ref.watch(purchaseOrderRepositoryProvider);
-  return _withCachedOrders(
-    key: '$cacheScope:almacenOrders',
-    source: repository.watchOrdersByStatus(PurchaseOrderStatus.almacen),
-  );
-});
-
-final almacenOrdersPagedProvider = StreamProvider.autoDispose
-    .family<List<PurchaseOrder>, int>((ref, limit) {
-      _cacheProviderForSession(ref);
-      if (_awaitingProfile(ref)) {
-        return const Stream.empty();
-      }
-      final user = ref.watch(currentUserProfileProvider).value;
-      if (user == null) {
-        return Stream.value(const <PurchaseOrder>[]);
-      }
-      final isAlmacen = isAlmacenLabel(user.areaDisplay);
-      if (!isAdminRole(user.role) && !isAlmacen) {
-        return Stream.value(const <PurchaseOrder>[]);
-      }
-      final cacheScope = _profileCacheScope(ref, user);
-      final repository = ref.watch(purchaseOrderRepositoryProvider);
-      return _withCachedOrders(
-        key: '$cacheScope:almacenOrdersPaged:$limit',
-        source: repository.watchOrdersByStatus(
-          PurchaseOrderStatus.almacen,
-          limit: limit,
-        ),
+        source: repository.watchAllOrders().map((orders) {
+          final filtered = _filterContabilidadOrders(orders);
+          if (limit <= 0 || filtered.length <= limit) {
+            return filtered;
+          }
+          return filtered.take(limit).toList(growable: false);
+        }),
       );
     });
 
@@ -756,6 +821,29 @@ final rejectedOrdersProvider = StreamProvider.autoDispose<List<PurchaseOrder>>((
     source: repository.watchOrdersForUser(uid).map(_filterRejectedDraftOrders),
   );
 });
+
+final globalActionMonitoringOrdersProvider =
+    StreamProvider.autoDispose<List<PurchaseOrder>>((ref) {
+      _cacheProviderForSession(ref);
+      if (_awaitingProfile(ref)) {
+        return const Stream.empty();
+      }
+      final user = ref.watch(currentUserProfileProvider).value;
+      if (user == null) {
+        return Stream.value(const <PurchaseOrder>[]);
+      }
+      final isCompras = isComprasLabel(user.areaDisplay);
+      final isDireccionGeneral = isDireccionGeneralLabel(user.areaDisplay);
+      if (!isAdminRole(user.role) && !isCompras && !isDireccionGeneral) {
+        return Stream.value(const <PurchaseOrder>[]);
+      }
+      final cacheScope = _profileCacheScope(ref, user);
+      final repository = ref.watch(purchaseOrderRepositoryProvider);
+      return _withCachedOrders(
+        key: '$cacheScope:globalActionMonitoringOrders',
+        source: repository.watchAllOrders().map(_filterGlobalMonitoringOrders),
+      );
+    });
 
 final rejectedOrdersPagedProvider = StreamProvider.autoDispose
     .family<List<PurchaseOrder>, int>((ref, limit) {
@@ -823,125 +911,135 @@ final cotizacionesCountProvider = Provider.autoDispose<AsyncValue<int>>((ref) {
 final cotizacionesModuleCountProvider = Provider.autoDispose<AsyncValue<int>>((
   ref,
 ) {
-  final ordersAsync = ref.watch(cotizacionesOrdersProvider);
-  final allOrdersAsync = ref.watch(comprasDashboardAllOrdersProvider);
-  final bundlesAsync = ref.watch(sharedQuotesProvider);
+  final pendingOrdersAsync = ref.watch(cotizacionesOrdersProvider);
+  final dashboardOrdersAsync = ref.watch(dataCompleteOrdersProvider);
+  final quotesAsync = ref.watch(supplierQuotesProvider);
 
+  if (pendingOrdersAsync.hasError) {
+    return AsyncValue<int>.error(
+      pendingOrdersAsync.error!,
+      pendingOrdersAsync.stackTrace ?? StackTrace.current,
+    );
+  }
+  if (dashboardOrdersAsync.hasError) {
+    return AsyncValue<int>.error(
+      dashboardOrdersAsync.error!,
+      dashboardOrdersAsync.stackTrace ?? StackTrace.current,
+    );
+  }
+  if (quotesAsync.hasError) {
+    return AsyncValue<int>.error(
+      quotesAsync.error!,
+      quotesAsync.stackTrace ?? StackTrace.current,
+    );
+  }
+
+  final pendingOrders = pendingOrdersAsync.valueOrNull;
+  final dashboardOrders = dashboardOrdersAsync.valueOrNull;
+  final quotes = quotesAsync.valueOrNull;
+  if (pendingOrders == null || dashboardOrders == null || quotes == null) {
+    return const AsyncValue<int>.loading();
+  }
+
+  final pendingCount = pendingOrders.length;
+  final dashboardCount = dashboardOrders.where(_orderNeedsSupplierQuote).length;
+  final activeQuotes = quotes
+      .where(
+        (quote) =>
+            quote.status == SupplierQuoteStatus.draft ||
+            quote.status == SupplierQuoteStatus.rejected,
+      )
+      .length;
+  return AsyncValue<int>.data(pendingCount + dashboardCount + activeQuotes);
+});
+
+final cotizacionesReadyToSendCountProvider =
+    Provider.autoDispose<AsyncValue<int>>((ref) {
+      final quotesAsync = ref.watch(supplierQuotesProvider);
+      return quotesAsync.whenData(
+        (quotes) => quotes
+            .where(
+              (quote) =>
+                  quote.status == SupplierQuoteStatus.draft &&
+                  quote.items.isNotEmpty &&
+                  quote.links.isNotEmpty,
+            )
+            .length,
+      );
+    });
+
+final pendingDireccionCountProvider = Provider.autoDispose<AsyncValue<int>>((ref) {
+  final quotesAsync = ref.watch(supplierQuotesProvider);
+  return quotesAsync.whenData(
+    (quotes) => quotes
+        .where((quote) => quote.status == SupplierQuoteStatus.pendingDireccion)
+        .length,
+  );
+});
+
+final pendingDireccionBundleCountProvider =
+    Provider.autoDispose<AsyncValue<int>>((ref) {
+      final quotesAsync = ref.watch(supplierQuotesProvider);
+      return quotesAsync.whenData(
+        (quotes) => quotes
+            .where(
+              (quote) => quote.status == SupplierQuoteStatus.pendingDireccion,
+            )
+            .length,
+      );
+    });
+
+final pendingEtaCountProvider = Provider.autoDispose<AsyncValue<int>>((ref) {
+  final quotesAsync = ref.watch(supplierQuotesProvider);
+  final ordersAsync = ref.watch(operationalOrdersProvider);
+
+  if (quotesAsync.hasError) {
+    return AsyncValue<int>.error(
+      quotesAsync.error!,
+      quotesAsync.stackTrace ?? StackTrace.current,
+    );
+  }
   if (ordersAsync.hasError) {
     return AsyncValue<int>.error(
       ordersAsync.error!,
       ordersAsync.stackTrace ?? StackTrace.current,
     );
   }
-  if (allOrdersAsync.hasError) {
-    return AsyncValue<int>.error(
-      allOrdersAsync.error!,
-      allOrdersAsync.stackTrace ?? StackTrace.current,
-    );
-  }
-  if (bundlesAsync.hasError) {
-    return AsyncValue<int>.error(
-      bundlesAsync.error!,
-      bundlesAsync.stackTrace ?? StackTrace.current,
-    );
-  }
 
+  final quotes = quotesAsync.valueOrNull;
   final orders = ordersAsync.valueOrNull;
-  final allOrders = allOrdersAsync.valueOrNull;
-  final bundles = bundlesAsync.valueOrNull;
-  if (orders == null || allOrders == null || bundles == null) {
+  if (quotes == null || orders == null) {
     return const AsyncValue<int>.loading();
   }
 
-  final pendingCount = orders.where((order) => order.cotizacionReady != true).length;
-  final readyOrderIds = orders
-      .where(_cotizacionesDashboardOrderReady)
-      .map((order) => order.id)
-      .toSet();
-  final ordersById = {for (final order in allOrders) order.id: order};
-  final bundlesCount = bundles.where((bundle) {
-    if (bundle.orderIds.any(readyOrderIds.contains)) return true;
-    return bundle.needsUpdate &&
-        bundle.rejectedOrderIds.isNotEmpty &&
-        bundle.orderIds.any(ordersById.containsKey);
+  final ordersById = {
+    for (final order in orders) order.id: order,
+  };
+  final pendingCount = quotes.where((quote) {
+    if (quote.status != SupplierQuoteStatus.approved) return false;
+    for (final orderId in quote.orderIds) {
+      final order = ordersById[orderId];
+      if (order == null) continue;
+      final hasPendingEta = order.items.any(
+        (item) =>
+            (item.quoteId?.trim() ?? '') == quote.id &&
+            item.quoteStatus == PurchaseOrderItemQuoteStatus.approved &&
+            item.deliveryEtaDate == null,
+      );
+      if (hasPendingEta) return true;
+    }
+    return false;
   }).length;
 
-  return AsyncValue<int>.data(pendingCount + bundlesCount);
+  return AsyncValue<int>.data(pendingCount);
 });
 
-final cotizacionesReadyToSendCountProvider =
-    Provider.autoDispose<AsyncValue<int>>((ref) {
-      final countsAsync = ref.watch(homeDashboardCountsProvider);
-      final counts = countsAsync.valueOrNull;
-      if (counts?.hasRemoteCounters == true) {
-        return countsAsync.whenData(
-          (value) => value?.cotizacionesReadyToSend ?? 0,
-        );
-      }
-      final ordersAsync = ref.watch(cotizacionesOrdersProvider);
-      return ordersAsync.whenData((orders) {
-        var count = 0;
-        for (final order in orders) {
-          if (_orderReadyToSend(order)) {
-            count += 1;
-          }
-        }
-        return count;
-      });
-    });
-
-final pendingDireccionCountProvider = Provider.autoDispose<AsyncValue<int>>((
+final userInProcessOrdersCountProvider = Provider.autoDispose<AsyncValue<int>>((
   ref,
 ) {
-  return _countFromDashboardOrOrders(
-    ref,
-    selector: (counts) => counts.pendingDireccion,
-    fallbackProvider: pendingDireccionOrdersProvider,
-  );
-});
-
-final pendingDireccionBundleCountProvider =
-    Provider.autoDispose<AsyncValue<int>>((ref) {
-      final ordersAsync = ref.watch(pendingDireccionOrdersProvider);
-      final bundlesAsync = ref.watch(sharedQuotesProvider);
-
-      if (ordersAsync.hasError) {
-        return AsyncValue<int>.error(
-          ordersAsync.error!,
-          ordersAsync.stackTrace ?? StackTrace.current,
-        );
-      }
-      if (bundlesAsync.hasError) {
-        return AsyncValue<int>.error(
-          bundlesAsync.error!,
-          bundlesAsync.stackTrace ?? StackTrace.current,
-        );
-      }
-
-      final orders = ordersAsync.valueOrNull;
-      final bundles = bundlesAsync.valueOrNull;
-      if (orders == null || bundles == null) {
-        return const AsyncValue<int>.loading();
-      }
-
-      final ordersById = {for (final order in orders) order.id: order};
-      final count = bundles.where((bundle) {
-        if (bundle.needsUpdate) return false;
-        return bundle.orderIds.any(
-          (id) =>
-              ordersById.containsKey(id) &&
-              !bundle.approvedOrderIds.contains(id),
-        );
-      }).length;
-
-      return AsyncValue<int>.data(count);
-    });
-
-final pendingEtaCountProvider = Provider.autoDispose<AsyncValue<int>>((ref) {
-  return _countFromDashboardOrOrders(
-    ref,
-    selector: (counts) => counts.pendingEta,
-    fallbackProvider: pendingEtaOrdersProvider,
+  final ordersAsync = ref.watch(userOrdersProvider);
+  return ordersAsync.whenData(
+    (orders) => orders.where(_isUserInProcessOrder).length,
   );
 });
 
@@ -953,11 +1051,12 @@ final contabilidadCountProvider = Provider.autoDispose<AsyncValue<int>>((ref) {
   );
 });
 
-final almacenCountProvider = Provider.autoDispose<AsyncValue<int>>((ref) {
-  return _countFromDashboardOrOrders(
-    ref,
-    selector: (counts) => counts.almacen,
-    fallbackProvider: almacenOrdersProvider,
+final monitoringOrdersCountProvider = Provider.autoDispose<AsyncValue<int>>((
+  ref,
+) {
+  final ordersAsync = ref.watch(monitoringOrdersProvider);
+  return ordersAsync.whenData(
+    (orders) => orders.where(_isMonitoringVisibleOrder).length,
   );
 });
 
@@ -969,24 +1068,29 @@ final rejectedCountProvider = Provider.autoDispose<AsyncValue<int>>((ref) {
   );
 });
 
-bool _orderReadyToSend(PurchaseOrder order) {
+final globalActionMonitoringCountProvider = Provider.autoDispose<AsyncValue<int>>((
+  ref,
+) {
+  final ordersAsync = ref.watch(globalActionMonitoringOrdersProvider);
+  return ordersAsync.whenData((orders) => orders.length);
+});
+
+bool _orderNeedsSupplierQuote(PurchaseOrder order) {
   if (order.items.isEmpty) return false;
-  if (!order.cotizacionLinks.any((link) => link.url.trim().isNotEmpty)) {
-    return false;
-  }
-  return order.items.every((item) {
+  return order.items.any((item) {
     final supplier = (item.supplier ?? '').trim();
     final budget = item.budget ?? 0;
-    return supplier.isNotEmpty && budget > 0;
+    final missingAssignment = supplier.isEmpty || budget <= 0;
+    final missingQuote =
+        item.quoteId == null ||
+        item.quoteStatus == PurchaseOrderItemQuoteStatus.rejected;
+    return missingAssignment || missingQuote;
   });
 }
 
-bool _cotizacionesDashboardOrderReady(PurchaseOrder order) {
-  if (order.items.isEmpty) return false;
-  if (order.cotizacionReady != true) return false;
-  return order.items.every((item) {
-    final supplier = (item.supplier ?? '').trim();
-    final budget = item.budget ?? 0;
-    return supplier.isNotEmpty && budget > 0;
-  });
+bool _isMonitoringVisibleOrder(PurchaseOrder order) {
+  if (!order.isDraft) return true;
+  final reason = order.lastReturnReason?.trim() ?? '';
+  return order.status == PurchaseOrderStatus.draft &&
+      (reason.isNotEmpty || order.returnCount > 0);
 }

@@ -107,7 +107,7 @@ class _PendingOrderReviewScreenState
                                 setState(() => _pdfRefreshToken += 1);
                               }
                             },
-                      child: const Text('Autorizar'),
+                      child: const Text('Confirmar'),
                     );
 
                     if (isNarrow) {
@@ -335,7 +335,7 @@ class _PendingOrderApprovalScreenState
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Autorizar orden'),
+        title: const Text('Confirmar orden'),
       ),
       body: orderAsync.when(
         data: (order) {
@@ -472,7 +472,7 @@ class _PendingOrderApprovalScreenState
       builder: (context) => AlertDialog(
         title: const Text('Enviar a Cotizaciones'),
         content: Text(
-          'En el PDF, la casilla AUTORIZO mostrara "$trimmedName" y el area "$trimmedArea".',
+          'En el PDF, la casilla AUTORIZÓ mostrara "$trimmedName" y el area "$trimmedArea".',
         ),
         actions: [
           TextButton(

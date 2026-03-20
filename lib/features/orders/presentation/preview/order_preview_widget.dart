@@ -42,6 +42,8 @@ class OrderPreviewWidget extends StatelessWidget {
           ),
         ],
         const SizedBox(height: 12),
+        _SignaturesCard(data: data),
+        const SizedBox(height: 12),
         Text(
           'Vista previa rápida. El PDF final se genera al enviar.',
           style: Theme.of(context)
@@ -105,7 +107,12 @@ class _MetaCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final requestedDate = data.requestedDeliveryDate;
+    final urgentJustification = (data.urgentJustification ?? '').trim();
+    final urgencyValue =
+        data.urgency == PurchaseOrderUrgency.urgente &&
+            urgentJustification.isNotEmpty
+        ? '${data.urgency.label} - $urgentJustification'
+        : data.urgency.label;
 
     return Card(
       child: Padding(
@@ -113,15 +120,12 @@ class _MetaCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _MetaRow(label: 'Solicitante', value: data.requesterName),
-            _MetaRow(label: 'Área', value: data.areaName),
-            _MetaRow(label: 'Urgencia', value: data.urgency.label),
+            _MetaRow(
+              label: 'Solicitante / Area',
+              value: '${data.requesterName} | ${data.areaName}',
+            ),
+            _MetaRow(label: 'Urgencia', value: urgencyValue),
             _MetaRow(label: 'Fecha', value: data.createdAt.toFullDateTime()),
-            if (requestedDate != null)
-              _MetaRow(
-                label: 'Fecha máxima solicitada',
-                value: requestedDate.toShortDate(),
-              ),
           ],
         ),
       ),
@@ -154,6 +158,52 @@ class _ItemsCard extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _SignaturesCard extends StatelessWidget {
+  const _SignaturesCard({required this.data});
+
+  final OrderPdfData data;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Firmas',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 12),
+            _MetaRow(label: 'Solicito', value: data.requesterName),
+            _MetaRow(
+              label: 'Proceso',
+              value: _signatureValue(data.processedByName, data.processedByArea),
+            ),
+            _MetaRow(
+              label: 'Autorizo',
+              value: _signatureValue(
+                data.direccionGeneralName ?? data.comprasReviewerName,
+                data.direccionGeneralArea ?? data.comprasReviewerArea,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _signatureValue(String? name, String? area) {
+    final trimmedName = (name ?? '').trim();
+    final trimmedArea = (area ?? '').trim();
+    if (trimmedName.isEmpty && trimmedArea.isEmpty) return '-';
+    if (trimmedArea.isEmpty) return trimmedName;
+    if (trimmedName.isEmpty) return trimmedArea;
+    return '$trimmedName | $trimmedArea';
   }
 }
 
@@ -203,11 +253,6 @@ class _ItemTile extends StatelessWidget {
                     _MetaChip(label: 'Cliente', value: customer),
                   if (supplier.isNotEmpty)
                     _MetaChip(label: 'Proveedor', value: supplier),
-                  if (item.estimatedDate != null)
-                    _MetaChip(
-                      label: 'Fecha estimada',
-                      value: item.estimatedDate!.toShortDate(),
-                    ),
                 ],
               ),
             ],
