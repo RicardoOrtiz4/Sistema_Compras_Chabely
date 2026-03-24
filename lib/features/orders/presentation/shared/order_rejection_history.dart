@@ -267,7 +267,7 @@ List<_HistoryEntry> _buildEntries(
     );
     if (title == null) continue;
     if (showOriginalWithReturns && isReturn && returnCount == 0) {
-      title = _appendRejectionStage('Orden original', event);
+      title = _appendRejectionStage('Version inicial', event);
     }
 
     final resubmissionDates = _resubmissionDatesForEntry(
@@ -357,9 +357,6 @@ String _itemsSignature(List<PurchaseOrderItem> items) {
       ..write('|')
       ..write(item.estimatedDate?.millisecondsSinceEpoch.toString() ?? '')
       ..write('|')
-      ..write(item.reviewFlagged)
-      ..write('|')
-      ..write(item.reviewComment ?? '')
       ..write(';');
   }
   return buffer.toString();
@@ -393,7 +390,7 @@ String? _titleForEvent(
 
   if (_isSubmissionEvent(event)) {
     final next = submissionCount + 1;
-    return next == 1 ? 'Orden original' : 'Reenvio ${next - 1}';
+    return next == 1 ? 'Version inicial' : 'Actualizacion ${next - 1}';
   }
 
   if (_isReturnEvent(event)) {
@@ -403,15 +400,15 @@ String? _titleForEvent(
 
   switch (toStatus) {
     case PurchaseOrderStatus.pendingCompras:
-      return 'Enviada a Compras';
+      return 'Enviada para autorizacion de requerimiento';
     case PurchaseOrderStatus.cotizaciones:
-      return 'Enviada a Cotizaciones';
+      return 'Enviada a Compras';
     case PurchaseOrderStatus.dataComplete:
-      return 'Datos completos';
+      return releaseProcessLabel;
     case PurchaseOrderStatus.authorizedGerencia:
-      return 'Enviada a Direccion General';
+      return 'Enviada para autorizacion de pago';
     case PurchaseOrderStatus.paymentDone:
-      return 'En proceso';
+      return inTransitArrivalLabel;
     case PurchaseOrderStatus.contabilidad:
       return 'Enviada a Contabilidad';
     case PurchaseOrderStatus.orderPlaced:

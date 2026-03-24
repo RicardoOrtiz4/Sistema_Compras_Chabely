@@ -65,8 +65,6 @@ class _PendingOrderReviewScreenState
             return const AppSplash();
           }
 
-          final maxCorrectionsReached = order.returnCount >= _maxCorrections;
-
           return Column(
             children: [
               Expanded(
@@ -83,9 +81,7 @@ class _PendingOrderReviewScreenState
                     final isNarrow = constraints.maxWidth < 360;
 
                     final rejectButton = OutlinedButton(
-                      onPressed: _isBusy || maxCorrectionsReached
-                          ? null
-                          : () => _handleReject(order),
+                      onPressed: _isBusy ? null : () => _handleReject(order),
                       child: _isBusy
                           ? const SizedBox(
                               width: 18,
@@ -145,15 +141,6 @@ class _PendingOrderReviewScreenState
   }
 
   Future<void> _handleReject(PurchaseOrder order) async {
-    if (order.returnCount >= _maxCorrections) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Máximo de correcciones alcanzado. Crea otra requisición.'),
-        ),
-      );
-      return;
-    }
 
     final review = await showItemReviewDialog(
       context: context,
@@ -179,8 +166,8 @@ class _PendingOrderReviewScreenState
     await runOptimisticAction(
       context: context,
       onNavigate: () => context.pop(),
-      pendingLabel: 'Regresando al solicitante...',
-      successMessage: 'Orden devuelta al solicitante.',
+      pendingLabel: 'Enviando a ordenes rechazadas...',
+      successMessage: 'Orden movida a ordenes rechazadas.',
       errorContext: 'PendingOrderReviewScreen.reject',
       action: () async {
         final repo = ref.read(purchaseOrderRepositoryProvider);
@@ -311,7 +298,6 @@ class _PendingReviewHistoryActionButton extends ConsumerWidget {
   }
 }
 
-const _maxCorrections = 3;
 
 class PendingOrderApprovalScreen extends ConsumerStatefulWidget {
   const PendingOrderApprovalScreen({required this.orderId, super.key});
@@ -365,7 +351,7 @@ class _PendingOrderApprovalScreenState
                             height: 20,
                             child: AppSplash(compact: true, size: 20),
                           )
-                        : const Text('Enviar a Cotizaciones'),
+                        : const Text('Enviar a Compras'),
                   ),
                 ),
               ),
@@ -425,8 +411,8 @@ class _PendingOrderApprovalScreenState
     await runOptimisticAction(
       context: context,
       onNavigate: () => guardedGo(context, '/orders/pending'),
-      pendingLabel: 'Enviando a Cotizaciones...',
-      successMessage: 'Orden enviada a Cotizaciones.',
+      pendingLabel: 'Enviando a Compras...',
+      successMessage: 'Orden enviada a Compras.',
       errorContext: 'PendingOrderApprovalScreen.approve',
       action: () => ref.read(purchaseOrderRepositoryProvider).transitionStatus(
             order: order,
@@ -470,7 +456,7 @@ class _PendingOrderApprovalScreenState
     final result = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Enviar a Cotizaciones'),
+        title: const Text('Enviar a Compras'),
         content: Text(
           'En el PDF, la casilla AUTORIZÓ mostrara "$trimmedName" y el area "$trimmedArea".',
         ),

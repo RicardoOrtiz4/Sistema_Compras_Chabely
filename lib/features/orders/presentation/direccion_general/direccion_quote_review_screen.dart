@@ -46,7 +46,7 @@ class _DireccionQuoteReviewScreenState
       body: quoteAsync.when(
         data: (quote) {
           if (quote == null) {
-            return const Center(child: Text('Cotizacion no disponible.'));
+            return const Center(child: Text('Compra no disponible.'));
           }
 
           return ordersAsync.when(
@@ -92,7 +92,7 @@ class _DireccionQuoteReviewScreenState
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Text(
-                      'Monto total a pagar de esta cotizacion: ${_money(viewData.totalAmount)}',
+                      'Monto total a pagar de esta compra: ${_money(viewData.totalAmount)}',
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w700,
                         color: Theme.of(context).colorScheme.onPrimaryContainer,
@@ -101,7 +101,7 @@ class _DireccionQuoteReviewScreenState
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    'Links de cotizacion',
+                    'Links de compra',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                   const SizedBox(height: 8),
@@ -135,7 +135,7 @@ class _DireccionQuoteReviewScreenState
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    'Historial de cotizacion',
+                    'Historial de compra',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                   const SizedBox(height: 8),
@@ -162,7 +162,7 @@ class _DireccionQuoteReviewScreenState
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    'Ordenes de esta cotizacion',
+                    'Ordenes de esta compra',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                   const SizedBox(height: 8),
@@ -216,9 +216,29 @@ class _DireccionQuoteReviewScreenState
       return;
     }
     if (!_canAuthorizeQuote(actor)) {
-      _showMessage('Solo Direccion General puede autorizar esta cotizacion.');
+      _showMessage('Solo Direccion General puede autorizar esta compra.');
       return;
     }
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Autorizar compra'),
+        content: Text(
+          'Se autorizara la compra ${quote.displayId}. Deseas continuar?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Autorizar'),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true) return;
     setState(() => _isBusy = true);
     try {
       await ref.read(purchaseOrderRepositoryProvider).approveSupplierQuote(
@@ -227,7 +247,7 @@ class _DireccionQuoteReviewScreenState
           );
       if (!mounted) return;
       Navigator.of(context).pop();
-      _showMessage('Cotizacion autorizada.');
+      _showMessage('Compra autorizada.');
     } catch (error, stack) {
       _showMessage(reportError(error, stack, context: 'DireccionQuoteReview.approve'));
     } finally {
@@ -242,14 +262,14 @@ class _DireccionQuoteReviewScreenState
       return;
     }
     if (!_canAuthorizeQuote(actor)) {
-      _showMessage('Solo Direccion General puede rechazar esta cotizacion.');
+      _showMessage('Solo Direccion General puede rechazar esta compra.');
       return;
     }
     final controller = TextEditingController();
     final accepted = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Rechazar cotizacion'),
+        title: const Text('Rechazar compra'),
         content: TextField(
           controller: controller,
           minLines: 2,
@@ -278,7 +298,7 @@ class _DireccionQuoteReviewScreenState
           );
       if (!mounted) return;
       Navigator.of(context).pop();
-      _showMessage('Cotizacion rechazada.');
+      _showMessage('Compra rechazada.');
     } catch (error, stack) {
       _showMessage(reportError(error, stack, context: 'DireccionQuoteReview.reject'));
     } finally {
@@ -374,6 +394,7 @@ class _QuoteReviewItemData {
     this.partNumber,
     this.customer,
     this.amount,
+    this.etaDate,
   });
 
   final int line;
@@ -384,6 +405,7 @@ class _QuoteReviewItemData {
   final String? partNumber;
   final String? customer;
   final num? amount;
+  final DateTime? etaDate;
 
   SupplierQuotePdfItemData toPdfData() {
     return SupplierQuotePdfItemData(
@@ -395,6 +417,7 @@ class _QuoteReviewItemData {
       partNumber: partNumber,
       customer: customer,
       amount: amount,
+      etaDate: etaDate,
     );
   }
 }
@@ -410,7 +433,7 @@ class _QuoteHistoryCard extends StatelessWidget {
       return const Card(
         child: Padding(
           padding: EdgeInsets.all(16),
-          child: Text('Aun no hay snapshots guardados para esta cotizacion.'),
+          child: Text('Aun no hay snapshots guardados para esta compra.'),
         ),
       );
     }
@@ -554,6 +577,7 @@ _QuoteReviewViewData _buildViewData(
           partNumber: item.partNumber,
           customer: item.customer,
           amount: selectedRef?.amount ?? item.budget,
+          etaDate: item.deliveryEtaDate,
         ),
       );
     }
@@ -604,7 +628,7 @@ class _QuoteOrderCard extends StatelessWidget {
                 ),
                 Chip(
                   label: Text(
-                    'Total en esta cotizacion: ${order.selectedTotal.toDouble().toStringAsFixed(2)}',
+                    'Total en esta compra: ${order.selectedTotal.toDouble().toStringAsFixed(2)}',
                   ),
                 ),
               ],
@@ -649,8 +673,8 @@ class _QuoteOrderCard extends StatelessWidget {
                     const SizedBox(height: 6),
                     Text(
                       item.selected
-                          ? 'Monto en esta cotizacion: ${item.amount?.toDouble().toStringAsFixed(2) ?? '0.00'}'
-                          : 'Fuera de esta cotizacion',
+                          ? 'Monto en esta compra: ${item.amount?.toDouble().toStringAsFixed(2) ?? '0.00'}'
+                          : 'Fuera de esta compra',
                       style: theme.textTheme.bodyMedium?.copyWith(
                         fontWeight: item.selected ? FontWeight.w600 : FontWeight.w400,
                         color: item.selected

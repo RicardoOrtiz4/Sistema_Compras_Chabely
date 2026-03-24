@@ -115,29 +115,6 @@ class _CotizacionesDashboardScreenState
             .toList(growable: false)
         : const <SupplierQuote>[];
     final compactAppBar = useCompactOrderModuleAppBar(context);
-    final visibleDireccionQuotes = _isDireccion
-        ? titleQuotes
-            .where(
-              (quote) => _matchesDireccionQuoteFilters(
-                quote: quote,
-                allOrders: titleOrders,
-                query: _searchQuery,
-                filter: _urgencyFilter,
-                range: _createdDateRangeFilter,
-              ),
-            )
-            .toList(growable: false)
-        : const <SupplierQuote>[];
-    visibleDireccionQuotes.fold<num>(
-      0,
-      (sum, quote) => sum + quote.totalAmount,
-    );
-    final canApproveAllDireccion = _isDireccion &&
-        actor != null &&
-        _canAuthorizeQuote(actor) &&
-        visibleDireccionQuotes.isNotEmpty &&
-        !_isBusy;
-
     final body = completedOrdersAsync.when(
       data: (completedOrders) => operationalOrdersAsync.when(
         data: (allOrders) => quotesAsync.when(
@@ -219,6 +196,13 @@ class _CotizacionesDashboardScreenState
                     editableQuoteId: selectedQuote?.id,
                   )
                 : const <_SupplierGroupedItem>[];
+            final pendingDashboardOrders = _isDireccion
+                ? const <_PendingDashboardOrder>[]
+                : _buildPendingDashboardOrders(
+                    allOrders: allOrders,
+                    selectedSupplier: _selectedSupplier,
+                    selectedQuoteId: selectedQuote?.id,
+                  );
             final quoteSendStates = _buildQuoteSendStates(
               quotes: visibleQuotes,
               orders: allOrders,
@@ -282,23 +266,30 @@ class _CotizacionesDashboardScreenState
                               actor: actor,
                               quote: selectedQuote,
                             ),
-                    onSend: supplierItems.isEmpty || selectedLinks.isEmpty
-                        ? null
-                        : () => _sendSelectionToDireccion(
-                              supplier: _selectedSupplier!,
-                              items: supplierItems,
-                              quote: selectedQuote,
-                            ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+                if (!_isDireccion &&
+                    supplierOptions.isEmpty &&
+                    visibleQuotes.isEmpty &&
+                    pendingDashboardOrders.isEmpty) ...[
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text(
+                        'No hay ordenes disponibles en este momento.',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 16),
                 ],
                 _QuotesPanel(
                   quotes: visibleQuotes,
                   allOrders: allOrders,
+                  pendingOrders: pendingDashboardOrders,
                   quoteSendStates: quoteSendStates,
                   isDireccion: _isDireccion,
-                  selectedSupplier: _selectedSupplier,
-                  selectedQuote: selectedQuote,
                   onOpenOrder: widget.onOpenOrder,
                   onViewOrderPdf: _openOrderPdf,
                   onViewPdf: (quote) => _openStoredQuotePdf(
@@ -308,7 +299,6 @@ class _CotizacionesDashboardScreenState
                     actor: actor,
                   ),
                   onCancel: _isDireccion ? null : _cancelQuote,
-                  onSend: _isDireccion ? null : _sendQuoteToDireccion,
                   onApprove: _isDireccion ? _approveQuoteFromCard : null,
                   onReject: _isDireccion ? _rejectQuoteFromCard : null,
                 ),
@@ -341,26 +331,17 @@ class _CotizacionesDashboardScreenState
       appBar: AppBar(
         title: _isDireccion
             ? (compactAppBar
-                ? const Text('Direccion General')
+                ? const Text(paymentAuthorizationLabel)
                 : OrderModuleAppBarTitle(
-                    title: 'Direccion General',
+                    title: paymentAuthorizationLabel,
                     counts: _direccionQuoteCounts(
                       quotes: titleQuotes,
                       allOrders: titleOrders,
                     ),
                     filter: _urgencyFilter,
                     onSelected: _setUrgencyFilter,
-                    trailing: _DireccionAcceptAllButton(
-                      visibleCount: visibleDireccionQuotes.length,
-                      isBusy: _isBusy,
-                      onPressed: canApproveAllDireccion
-                          ? () => _approveAllDireccionQuotes(
-                                visibleDireccionQuotes,
-                              )
-                          : null,
-                    ),
                   ))
-            : const Text('Mesa de cotizaciones'),
+            : const Text('Mesa de compras'),
         bottom: !_isDireccion || !compactAppBar
             ? null
             : OrderModuleAppBarBottom(
@@ -370,15 +351,6 @@ class _CotizacionesDashboardScreenState
                 ),
                 filter: _urgencyFilter,
                 onSelected: _setUrgencyFilter,
-                trailing: _DireccionAcceptAllButton(
-                  visibleCount: visibleDireccionQuotes.length,
-                  isBusy: _isBusy,
-                  onPressed: canApproveAllDireccion
-                      ? () => _approveAllDireccionQuotes(
-                            visibleDireccionQuotes,
-                          )
-                      : null,
-                ),
               ),
       ),
       body: body,
@@ -420,7 +392,17 @@ class _CotizacionesDashboardScreenState
     if (!mounted) return;
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
-        builder: (_) => SupplierQuotePdfViewScreen(data: data),
+        builder: (_) => SupplierQuotePdfViewScreen(
+          data: data,
+          primaryActionLabel: 'Enviar a autorizacion de pago',
+          primaryActionEnabled: _parseLinks(_linksController.text).isNotEmpty,
+          closeOnPrimaryAction: true,
+          onPrimaryAction: () => _sendSelectionToDireccionFromPdf(
+            supplier: supplier,
+            items: items,
+            quote: quote,
+          ),
+        ),
       ),
     );
   }
@@ -448,25 +430,53 @@ class _CotizacionesDashboardScreenState
     if (!mounted) return;
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
-        builder: (_) => SupplierQuotePdfViewScreen(data: data),
+        builder: (_) => SupplierQuotePdfViewScreen(
+          data: data,
+          primaryActionLabel: _isDireccion
+              ? null
+              : 'Enviar a autorizacion de pago',
+          primaryActionEnabled: _isDireccion ? true : quote.links.isNotEmpty,
+          closeOnPrimaryAction: !_isDireccion,
+          onPrimaryAction: _isDireccion
+              ? null
+              : () => _sendStoredQuoteToDireccionFromPdf(quote),
+        ),
       ),
     );
   }
 
-  Future<void> _sendSelectionToDireccion({
+  Future<bool> _sendSelectionToDireccionFromPdf({
+    required String supplier,
+    required List<_SupplierGroupedItem> items,
+    required SupplierQuote? quote,
+  }) async {
+    return _sendSelectionToDireccion(
+      supplier: supplier,
+      items: items,
+      quote: quote,
+    );
+  }
+
+  Future<bool> _sendStoredQuoteToDireccionFromPdf(SupplierQuote quote) async {
+    return _sendQuoteToDireccion(quote);
+  }
+
+  Future<bool> _sendSelectionToDireccion({
     required String supplier,
     required List<_SupplierGroupedItem> items,
     required SupplierQuote? quote,
   }) async {
     final links = _parseLinks(_linksController.text);
     if (links.isEmpty) {
-      _showMessage('Agrega al menos un link de cotización antes de enviar a DG.');
-      return;
+      _showMessage(
+        'Agrega al menos un link de compra antes de enviar a autorizacion de pago.',
+      );
+      return false;
     }
     final actor = ref.read(currentUserProfileProvider).value;
     if (actor == null) {
       _showMessage('Perfil no disponible.');
-      return;
+      return false;
     }
     setState(() => _isBusy = true);
     try {
@@ -479,15 +489,17 @@ class _CotizacionesDashboardScreenState
             quote: storedQuote,
             actor: actor,
           );
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(() {
         _selectedSupplier = null;
         _linksController.clear();
         _comprasCommentController.clear();
       });
-      _showMessage('Cotizacion enviada a Direccion General.');
+      _showMessage('Compra enviada para autorizacion de pago.');
+      return true;
     } catch (error, stack) {
       _showMessage(reportError(error, stack, context: 'SupplierQuotes.sendSelection'));
+      return false;
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
@@ -527,6 +539,8 @@ class _CotizacionesDashboardScreenState
       supplier: quote.supplier,
       items: refs,
       links: links,
+      facturaLinks: quote.facturaLinks,
+      paymentLinks: quote.paymentLinks,
       comprasComment: comprasComment,
       status: SupplierQuoteStatus.draft,
       createdAt: quote.createdAt,
@@ -535,24 +549,28 @@ class _CotizacionesDashboardScreenState
     );
   }
 
-  Future<void> _sendQuoteToDireccion(SupplierQuote quote) async {
+  Future<bool> _sendQuoteToDireccion(SupplierQuote quote) async {
     if (quote.links.isEmpty) {
-      _showMessage('Agrega al menos un link de cotización antes de enviar a DG.');
-      return;
+      _showMessage(
+        'Agrega al menos un link de compra antes de enviar a autorizacion de pago.',
+      );
+      return false;
     }
     final actor = ref.read(currentUserProfileProvider).value;
     if (actor == null) {
       _showMessage('Perfil no disponible.');
-      return;
+      return false;
     }
     try {
       await ref.read(purchaseOrderRepositoryProvider).sendSupplierQuoteToDireccion(
             quote: quote,
             actor: actor,
           );
-      _showMessage('Cotizacion enviada a Direccion General.');
+      _showMessage('Compra enviada para autorizacion de pago.');
+      return true;
     } catch (error, stack) {
       _showMessage(reportError(error, stack, context: 'SupplierQuotes.send'));
+      return false;
     }
   }
 
@@ -565,9 +583,9 @@ class _CotizacionesDashboardScreenState
     final accepted = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Cancelar cotizacion ${quote.supplier}'),
+        title: Text('Cancelar compra ${quote.supplier}'),
         content: const Text(
-          'La cotizacion se eliminara y las ordenes relacionadas volveran a pendientes para editarse.',
+          'La compra se eliminara y las ordenes relacionadas volveran a pendientes para editarse.',
         ),
         actions: [
           TextButton(
@@ -595,7 +613,7 @@ class _CotizacionesDashboardScreenState
           _comprasCommentController.clear();
         });
       }
-      _showMessage('Cotizacion cancelada. Las ordenes volvieron a pendientes.');
+      _showMessage('Compra cancelada. Las ordenes volvieron a pendientes.');
     } catch (error, stack) {
       _showMessage(reportError(error, stack, context: 'SupplierQuotes.cancel'));
     }
@@ -608,16 +626,36 @@ class _CotizacionesDashboardScreenState
       return;
     }
     if (!_canAuthorizeQuote(actor)) {
-      _showMessage('Solo Direccion General puede autorizar esta cotizacion.');
+      _showMessage('Solo Direccion General puede autorizar esta compra.');
       return;
     }
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Autorizar compra'),
+        content: Text(
+          'Se autorizara la compra ${quote.displayId}. Deseas continuar?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Autorizar'),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true) return;
     setState(() => _isBusy = true);
     try {
       await ref.read(purchaseOrderRepositoryProvider).approveSupplierQuote(
             quote: quote,
             actor: actor,
           );
-      _showMessage('Cotizacion autorizada.');
+      _showMessage('Compra autorizada.');
     } catch (error, stack) {
       _showMessage(
         reportError(error, stack, context: 'SupplierQuotes.direccionApprove'),
@@ -634,7 +672,7 @@ class _CotizacionesDashboardScreenState
       return;
     }
     if (!_canAuthorizeQuote(actor)) {
-      _showMessage('Solo Direccion General puede rechazar esta cotizacion.');
+      _showMessage('Solo Direccion General puede rechazar esta compra.');
       return;
     }
 
@@ -642,7 +680,7 @@ class _CotizacionesDashboardScreenState
     final accepted = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Rechazar cotizacion'),
+        title: const Text('Rechazar compra'),
         content: TextField(
           controller: controller,
           minLines: 2,
@@ -673,75 +711,13 @@ class _CotizacionesDashboardScreenState
             comment: controller.text,
             actor: actor,
           );
-      _showMessage('Cotizacion rechazada.');
+      _showMessage('Compra rechazada.');
     } catch (error, stack) {
       _showMessage(
         reportError(error, stack, context: 'SupplierQuotes.direccionReject'),
       );
     } finally {
       controller.dispose();
-      if (mounted) setState(() => _isBusy = false);
-    }
-  }
-
-  Future<void> _approveAllDireccionQuotes(List<SupplierQuote> quotes) async {
-    if (quotes.isEmpty || _isBusy) return;
-    final actor = ref.read(currentUserProfileProvider).value;
-    if (actor == null) {
-      _showMessage('Perfil no disponible.');
-      return;
-    }
-    if (!_canAuthorizeQuote(actor)) {
-      _showMessage('Solo Direccion General puede autorizar cotizaciones.');
-      return;
-    }
-
-    final totalAmount = quotes.fold<num>(0, (sum, quote) => sum + quote.totalAmount);
-    final count = quotes.length;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Aceptar todas'),
-        content: Text(
-          'Vas a autorizar $count cotizacion(es) visibles con los filtros actuales. '
-          'El monto total acumulado es ${_money(totalAmount)}. '
-          'Riesgo: si alguna cotizacion trae links equivocados, montos incorrectos o un proveedor incorrecto, '
-          'el error avanzara en lote. Ademas, si algo falla a mitad del proceso, puede quedar una autorizacion parcial '
-          'y tendras que revisar manualmente las restantes. ¿Deseas continuar?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Aceptar todas'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-
-    setState(() => _isBusy = true);
-    try {
-      final repo = ref.read(purchaseOrderRepositoryProvider);
-      for (final quote in quotes) {
-        await repo.approveSupplierQuote(
-          quote: quote,
-          actor: actor,
-        );
-      }
-      _showMessage(
-        count == 1
-            ? '1 cotizacion autorizada.'
-            : '$count cotizaciones autorizadas.',
-      );
-    } catch (error, stack) {
-      _showMessage(
-        reportError(error, stack, context: 'SupplierQuotes.direccionApproveAll'),
-      );
-    } finally {
       if (mounted) setState(() => _isBusy = false);
     }
   }
@@ -816,7 +792,6 @@ class _SupplierWorkPanel extends StatelessWidget {
     required this.onViewOrderPdf,
     required this.onManageLinks,
     this.onViewPdf,
-    this.onSend,
   });
 
   final List<String> supplierOptions;
@@ -830,7 +805,6 @@ class _SupplierWorkPanel extends StatelessWidget {
   final ValueChanged<String>? onViewOrderPdf;
   final VoidCallback? onManageLinks;
   final VoidCallback? onViewPdf;
-  final VoidCallback? onSend;
 
   @override
   Widget build(BuildContext context) {
@@ -871,8 +845,8 @@ class _SupplierWorkPanel extends StatelessWidget {
                   Expanded(
                     child: Text(
                       quoteLinkCount == 0
-                          ? 'Aún no hay links de cotización agregados.'
-                          : '$quoteLinkCount link(s) de cotización agregados.',
+                          ? 'Aun no hay links de compra agregados.'
+                          : '$quoteLinkCount link(s) de compra agregados.',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ),
@@ -880,7 +854,9 @@ class _SupplierWorkPanel extends StatelessWidget {
                   OutlinedButton.icon(
                     onPressed: isBusy ? null : onManageLinks,
                     icon: const Icon(Icons.link),
-                    label: const Text('Agregar links'),
+                    label: Text(
+                      quoteLinkCount == 0 ? 'Agregar links' : 'Editar links',
+                    ),
                   ),
                 ],
               ),
@@ -901,13 +877,13 @@ class _SupplierWorkPanel extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               Text(
-                'Este comentario solo se mostrara en el PDF general de la cotizacion por proveedor.',
+                'Este comentario solo se mostrara en el PDF general de la compra por proveedor.',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               if (workingQuote != null) ...[
                 const SizedBox(height: 8),
                 Text(
-                  'Cotizacion cargada: ${workingQuote!.id}',
+                  'Compra cargada: ${workingQuote!.id}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
@@ -938,22 +914,12 @@ class _SupplierWorkPanel extends StatelessWidget {
                 ],
               ],
               const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: isBusy ? null : onViewPdf,
-                      child: const Text('Ver PDF'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: isBusy ? null : onSend,
-                      child: const Text('Enviar a DG'),
-                    ),
-                  ),
-                ],
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: isBusy ? null : onViewPdf,
+                  child: const Text('Ver PDF general'),
+                ),
               ),
             ],
           ],
@@ -1004,7 +970,7 @@ class _SupplierQuoteLinkEditorDialogState
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Agregar links de cotización'),
+      title: const Text('Agregar links de compra'),
       content: SizedBox(
         width: 640,
         child: ConstrainedBox(
@@ -1013,7 +979,7 @@ class _SupplierQuoteLinkEditorDialogState
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text('Agrega uno o varios links de cotización, uno por uno.'),
+              const Text('Agrega uno o varios links de compra, uno por uno.'),
               const SizedBox(height: 12),
               Row(
                 children: [
@@ -1021,7 +987,7 @@ class _SupplierQuoteLinkEditorDialogState
                     child: TextField(
                       controller: _linkController,
                       decoration: const InputDecoration(
-                        labelText: 'Link de cotización',
+                        labelText: 'Link de compra',
                         prefixIcon: Icon(Icons.link),
                       ),
                       keyboardType: TextInputType.url,
@@ -1118,11 +1084,11 @@ class _SupplierQuoteLinkEditorDialogState
     final updated = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Editar link de cotización'),
+        title: const Text('Editar link de compra'),
         content: TextFormField(
           controller: urlController,
           decoration: const InputDecoration(
-            labelText: 'Link de cotización',
+            labelText: 'Link de compra',
             prefixIcon: Icon(Icons.link),
           ),
           keyboardType: TextInputType.url,
@@ -1193,80 +1159,35 @@ class _SupplierQuoteLinkEditorDialogState
   }
 }
 
-class _DireccionAcceptAllButton extends StatelessWidget {
-  const _DireccionAcceptAllButton({
-    required this.visibleCount,
-    required this.isBusy,
-    required this.onPressed,
-  });
-
-  final int visibleCount;
-  final bool isBusy;
-  final VoidCallback? onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return FilledButton.tonal(
-      onPressed: onPressed,
-      style: FilledButton.styleFrom(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        visualDensity: VisualDensity.compact,
-      ),
-      child: isBusy
-          ? const SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
-          : Text(
-              visibleCount > 0
-                  ? 'Aceptar todas ($visibleCount)'
-                  : 'Aceptar todas',
-            ),
-    );
-  }
-}
-
 class _QuotesPanel extends StatelessWidget {
   const _QuotesPanel({
     required this.quotes,
     required this.allOrders,
+    required this.pendingOrders,
     required this.quoteSendStates,
     required this.isDireccion,
-    required this.selectedSupplier,
-    required this.selectedQuote,
     required this.onOpenOrder,
     required this.onViewOrderPdf,
     this.onViewPdf,
     this.onCancel,
-    this.onSend,
     this.onApprove,
     this.onReject,
   });
 
   final List<SupplierQuote> quotes;
   final List<PurchaseOrder> allOrders;
+  final List<_PendingDashboardOrder> pendingOrders;
   final Map<String, _QuoteSendState> quoteSendStates;
   final bool isDireccion;
-  final String? selectedSupplier;
-  final SupplierQuote? selectedQuote;
   final ValueChanged<String>? onOpenOrder;
   final ValueChanged<String>? onViewOrderPdf;
   final ValueChanged<SupplierQuote>? onViewPdf;
   final ValueChanged<SupplierQuote>? onCancel;
-  final ValueChanged<SupplierQuote>? onSend;
   final ValueChanged<SupplierQuote>? onApprove;
   final ValueChanged<SupplierQuote>? onReject;
 
   @override
   Widget build(BuildContext context) {
-    final pendingOrders = isDireccion
-        ? const <_PendingDashboardOrder>[]
-        : _buildPendingDashboardOrders(
-            allOrders: allOrders,
-            selectedSupplier: selectedSupplier,
-            selectedQuoteId: selectedQuote?.id,
-          );
     if (!isDireccion && quotes.isEmpty && pendingOrders.isEmpty) {
       return const SizedBox.shrink();
     }
@@ -1278,7 +1199,7 @@ class _QuotesPanel extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Text(
-                'No hay cotizaciones con ese filtro.',
+                'No hay compras con ese filtro.',
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
             ),
@@ -1293,7 +1214,6 @@ class _QuotesPanel extends StatelessWidget {
               onOpenOrder: onOpenOrder,
               onViewPdf: onViewPdf == null ? null : () => onViewPdf!(quote),
               onCancel: onCancel == null ? null : () => onCancel!(quote),
-              onSend: onSend == null ? null : () => onSend!(quote),
               onApprove: onApprove == null ? null : () => onApprove!(quote),
               onReject: onReject == null ? null : () => onReject!(quote),
             ),
@@ -1302,7 +1222,7 @@ class _QuotesPanel extends StatelessWidget {
         if (!isDireccion && pendingOrders.isNotEmpty) ...[
           const SizedBox(height: 4),
           Text(
-            'Ordenes con items pendientes por completar cotizacion',
+            'Ordenes con items pendientes por completar compra',
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 8),
@@ -1328,7 +1248,6 @@ class _QuoteCard extends StatelessWidget {
     this.onOpenOrder,
     this.onViewPdf,
     this.onCancel,
-    this.onSend,
     this.onApprove,
     this.onReject,
   });
@@ -1340,7 +1259,6 @@ class _QuoteCard extends StatelessWidget {
   final ValueChanged<String>? onOpenOrder;
   final VoidCallback? onViewPdf;
   final VoidCallback? onCancel;
-  final VoidCallback? onSend;
   final VoidCallback? onApprove;
   final VoidCallback? onReject;
 
@@ -1390,8 +1308,8 @@ class _QuoteCard extends StatelessWidget {
                   ? PurchaseOrderStatus.authorizedGerencia
                   : PurchaseOrderStatus.dataComplete,
               label: isDireccion
-                  ? 'Tiempo en dashboard de cotizaciones'
-                  : 'Tiempo en pendientes de cotizaciones',
+                  ? 'Tiempo en dashboard de compras'
+                  : 'Tiempo en pendientes de compras',
               alignRight: false,
             ),
           ],
@@ -1433,7 +1351,7 @@ class _QuoteCard extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               sendState.canSend
-                  ? 'Lista para enviar a Direccion General.'
+                  ? 'Lista para enviar a autorizacion de pago.'
                   : sendState.message,
               style: Theme.of(context).textTheme.bodySmall,
             ),
@@ -1508,11 +1426,7 @@ class _QuoteCard extends StatelessWidget {
               else ...[
                 OutlinedButton(
                   onPressed: onViewPdf,
-                  child: const Text('Ver PDF'),
-                ),
-                FilledButton(
-                  onPressed: sendState.canSend ? onSend : null,
-                  child: const Text('Enviar a DG'),
+                  child: const Text('Ver PDF general'),
                 ),
                 OutlinedButton(
                   onPressed: onCancel,
@@ -1603,7 +1517,7 @@ class _PendingDashboardOrderCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${order.pendingItems} item(s) pendientes por completar cotizacion.',
+                  '${order.pendingItems} item(s) pendientes por completar compra.',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
                 const SizedBox(height: 4),
@@ -1616,7 +1530,7 @@ class _PendingDashboardOrderCard extends StatelessWidget {
                   orderIds: [order.order.id],
                   fromStatus: PurchaseOrderStatus.cotizaciones,
                   toStatus: PurchaseOrderStatus.dataComplete,
-                  label: 'Tiempo en pendientes de cotizaciones',
+                  label: 'Tiempo en pendientes de compras',
                   alignRight: false,
                 ),
               ],
@@ -1654,7 +1568,8 @@ class _ErrorText extends StatelessWidget {
 class _QuoteSendState {
   const _QuoteSendState({
     this.canSend = false,
-    this.message = 'Completa las cotizaciones pendientes para enviar a Direccion General.',
+    this.message =
+        'Completa las compras pendientes para enviar a autorizacion de pago.',
   });
 
   final bool canSend;
@@ -2094,6 +2009,7 @@ SupplierQuotePdfData _buildPdfData({
           partNumber: item.partNumber,
           customer: item.customer,
           amount: selectedRef?.amount ?? item.budget,
+          etaDate: item.deliveryEtaDate,
         ),
       );
     }
@@ -2136,13 +2052,13 @@ Map<String, _QuoteSendState> _buildQuoteSendStates({
   for (final quote in quotes) {
     if (quote.items.isEmpty) {
       states[quote.id] = const _QuoteSendState(
-        message: 'No hay items cargados para esta cotizacion.',
+        message: 'No hay items cargados para esta compra.',
       );
       continue;
     }
     if (quote.links.isEmpty) {
       states[quote.id] = const _QuoteSendState(
-        message: 'Agrega al menos un link de cotizacion.',
+        message: 'Agrega al menos un link de compra.',
       );
       continue;
     }
@@ -2170,7 +2086,7 @@ Map<String, _QuoteSendState> _buildQuoteSendStates({
     states[quote.id] = blockingMessage == null
         ? const _QuoteSendState(
             canSend: true,
-            message: 'Lista para enviar a Direccion General.',
+            message: 'Lista para enviar a autorizacion de pago.',
           )
         : _QuoteSendState(message: blockingMessage);
   }
@@ -2191,7 +2107,7 @@ String? _validateQuoteItemForDireccion({
     final quoteId = item.quoteId?.trim() ?? '';
     if (quoteId != quote.id ||
         item.quoteStatus == PurchaseOrderItemQuoteStatus.rejected) {
-      return 'no esta ligado correctamente a esta cotizacion.';
+      return 'no esta ligado correctamente a esta compra.';
     }
     return null;
   }

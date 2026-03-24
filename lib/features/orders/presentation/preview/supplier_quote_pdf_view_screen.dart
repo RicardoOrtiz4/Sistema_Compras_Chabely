@@ -8,11 +8,19 @@ class SupplierQuotePdfViewScreen extends StatefulWidget {
   const SupplierQuotePdfViewScreen({
     required this.data,
     this.title = 'Ver PDF',
+    this.primaryActionLabel,
+    this.onPrimaryAction,
+    this.primaryActionEnabled = true,
+    this.closeOnPrimaryAction = false,
     super.key,
   });
 
   final SupplierQuotePdfData data;
   final String title;
+  final String? primaryActionLabel;
+  final Future<bool> Function()? onPrimaryAction;
+  final bool primaryActionEnabled;
+  final bool closeOnPrimaryAction;
 
   @override
   State<SupplierQuotePdfViewScreen> createState() =>
@@ -21,6 +29,7 @@ class SupplierQuotePdfViewScreen extends StatefulWidget {
 
 class _SupplierQuotePdfViewScreenState extends State<SupplierQuotePdfViewScreen> {
   bool _downloading = false;
+  bool _runningPrimaryAction = false;
 
   @override
   Widget build(BuildContext context) {
@@ -46,6 +55,29 @@ class _SupplierQuotePdfViewScreenState extends State<SupplierQuotePdfViewScreen>
         padding: const EdgeInsets.all(16),
         child: SupplierQuotePdfInlineView(data: widget.data),
       ),
+      bottomNavigationBar: widget.primaryActionLabel == null
+          ? null
+          : SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: FilledButton.icon(
+                  onPressed: _runningPrimaryAction ||
+                          !widget.primaryActionEnabled ||
+                          widget.onPrimaryAction == null
+                      ? null
+                      : _runPrimaryAction,
+                  icon: _runningPrimaryAction
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.send_outlined),
+                  label: Text(widget.primaryActionLabel!),
+                ),
+              ),
+            ),
     );
   }
 
@@ -58,11 +90,28 @@ class _SupplierQuotePdfViewScreenState extends State<SupplierQuotePdfViewScreen>
       await savePdfBytes(
         context,
         bytes: bytes,
-        suggestedName: 'cotizacion_${widget.data.quoteId}.pdf',
+        suggestedName: 'compra_${widget.data.quoteId}.pdf',
       );
     } finally {
       if (mounted) {
         setState(() => _downloading = false);
+      }
+    }
+  }
+
+  Future<void> _runPrimaryAction() async {
+    final action = widget.onPrimaryAction;
+    if (action == null || _runningPrimaryAction) return;
+    setState(() => _runningPrimaryAction = true);
+    try {
+      final completed = await action();
+      if (!mounted) return;
+      if (completed && widget.closeOnPrimaryAction) {
+        Navigator.of(context).pop();
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _runningPrimaryAction = false);
       }
     }
   }

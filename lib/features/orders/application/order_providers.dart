@@ -81,6 +81,7 @@ String _orderSignature(PurchaseOrder order) {
         final deliveryEtaDate = item.deliveryEtaDate?.millisecondsSinceEpoch ?? 0;
         final sentToContabilidadAt =
             item.sentToContabilidadAt?.millisecondsSinceEpoch ?? 0;
+        final arrivedAt = item.arrivedAt?.millisecondsSinceEpoch ?? 0;
         return [
           item.line.toString(),
           item.quoteId ?? '',
@@ -88,6 +89,9 @@ String _orderSignature(PurchaseOrder order) {
           estimatedDate.toString(),
           deliveryEtaDate.toString(),
           sentToContabilidadAt.toString(),
+          arrivedAt.toString(),
+          item.arrivedByName ?? '',
+          item.arrivedByArea ?? '',
           item.internalOrder ?? '',
           item.reviewFlagged ? '1' : '0',
           item.reviewComment ?? '',
@@ -191,10 +195,9 @@ bool _sameDashboardCounts(OrderDashboardCounts? a, OrderDashboardCounts? b) {
 }
 
 bool _isRejectedDraftOrder(PurchaseOrder order) {
-  final reason = order.lastReturnReason;
+  final reason = order.lastReturnReason?.trim() ?? '';
   return order.status == PurchaseOrderStatus.draft &&
-      reason != null &&
-      reason.trim().isNotEmpty;
+      (reason.isNotEmpty || order.returnCount > 0);
 }
 
 bool _isGlobalMonitoringOrder(PurchaseOrder order) {

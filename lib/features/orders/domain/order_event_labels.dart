@@ -55,15 +55,15 @@ String orderEventTransitionLabel(PurchaseOrderEvent event) {
 String returnStageLabel(PurchaseOrderStatus? status) {
   switch (status) {
     case PurchaseOrderStatus.pendingCompras:
-      return 'Compras';
+      return pendingRequirementAuthorizationLabel;
     case PurchaseOrderStatus.cotizaciones:
-      return 'Cotizaciones';
+      return 'Compras';
     case PurchaseOrderStatus.dataComplete:
-      return 'Datos completos';
+      return releaseProcessLabel;
     case PurchaseOrderStatus.authorizedGerencia:
-      return 'Direccion General';
+      return paymentAuthorizationLabel;
     case PurchaseOrderStatus.paymentDone:
-      return 'En proceso';
+      return inTransitArrivalLabel;
     case PurchaseOrderStatus.contabilidad:
       return 'Contabilidad';
     case PurchaseOrderStatus.orderPlaced:

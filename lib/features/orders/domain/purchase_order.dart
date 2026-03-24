@@ -13,11 +13,11 @@ extension PurchaseOrderItemQuoteStatusX on PurchaseOrderItemQuoteStatus {
   String get label {
     switch (this) {
       case PurchaseOrderItemQuoteStatus.pending:
-        return 'Pendiente de cotizacion';
+        return 'Pendiente de compra';
       case PurchaseOrderItemQuoteStatus.draft:
-        return 'En cotizacion';
+        return 'En compra';
       case PurchaseOrderItemQuoteStatus.pendingDireccion:
-        return 'En Direccion General';
+        return paymentAuthorizationLabel;
       case PurchaseOrderItemQuoteStatus.approved:
         return 'Aprobado';
       case PurchaseOrderItemQuoteStatus.rejected:
@@ -47,6 +47,9 @@ class PurchaseOrderItem {
     this.reviewComment,
     this.receivedQuantity,
     this.receivedComment,
+    this.arrivedAt,
+    this.arrivedByName,
+    this.arrivedByArea,
   });
 
   final int line;
@@ -68,6 +71,11 @@ class PurchaseOrderItem {
   final String? reviewComment;
   final num? receivedQuantity;
   final String? receivedComment;
+  final DateTime? arrivedAt;
+  final String? arrivedByName;
+  final String? arrivedByArea;
+
+  bool get isArrivalRegistered => arrivedAt != null;
 
   PurchaseOrderItem copyWith({
     int? line,
@@ -96,6 +104,12 @@ class PurchaseOrderItem {
     String? receivedComment,
     bool clearReceivedQuantity = false,
     bool clearReceivedComment = false,
+    DateTime? arrivedAt,
+    String? arrivedByName,
+    String? arrivedByArea,
+    bool clearArrivedAt = false,
+    bool clearArrivedByName = false,
+    bool clearArrivedByArea = false,
   }) {
     return PurchaseOrderItem(
       line: line ?? this.line,
@@ -121,6 +135,9 @@ class PurchaseOrderItem {
       reviewComment: clearReviewComment ? null : (reviewComment ?? this.reviewComment),
       receivedQuantity: clearReceivedQuantity ? null : (receivedQuantity ?? this.receivedQuantity),
       receivedComment: clearReceivedComment ? null : (receivedComment ?? this.receivedComment),
+      arrivedAt: clearArrivedAt ? null : (arrivedAt ?? this.arrivedAt),
+      arrivedByName: clearArrivedByName ? null : (arrivedByName ?? this.arrivedByName),
+      arrivedByArea: clearArrivedByArea ? null : (arrivedByArea ?? this.arrivedByArea),
     );
   }
 
@@ -145,6 +162,9 @@ class PurchaseOrderItem {
       'reviewComment': reviewComment,
       'receivedQuantity': receivedQuantity,
       'receivedComment': receivedComment,
+      'arrivedAt': arrivedAt?.millisecondsSinceEpoch,
+      'arrivedByName': arrivedByName,
+      'arrivedByArea': arrivedByArea,
     };
   }
 
@@ -177,6 +197,9 @@ class PurchaseOrderItem {
       reviewComment: data['reviewComment'] as String?,
       receivedQuantity: data['receivedQuantity'] as num?,
       receivedComment: data['receivedComment'] as String?,
+      arrivedAt: _parseDateTime(data['arrivedAt']),
+      arrivedByName: data['arrivedByName'] as String?,
+      arrivedByArea: data['arrivedByArea'] as String?,
     );
   }
 }
@@ -261,10 +284,14 @@ class PurchaseOrder {
     this.contabilidadName,
     this.contabilidadArea,
     this.facturaUploadedAt,
+    this.materialArrivedAt,
+    this.materialArrivedName,
+    this.materialArrivedArea,
     this.completedAt,
     this.requesterReceivedAt,
     this.requesterReceivedName,
     this.requesterReceivedArea,
+    this.requesterReceiptAutoConfirmed = false,
     this.isDraft = false,
   });
 
@@ -308,16 +335,25 @@ class PurchaseOrder {
   final String? contabilidadName;
   final String? contabilidadArea;
   final DateTime? facturaUploadedAt;
+  final DateTime? materialArrivedAt;
+  final String? materialArrivedName;
+  final String? materialArrivedArea;
   final DateTime? completedAt;
   final DateTime? requesterReceivedAt;
   final String? requesterReceivedName;
   final String? requesterReceivedArea;
+  final bool requesterReceiptAutoConfirmed;
   final bool isDraft;
 
   bool get canEdit => isDraft || status == PurchaseOrderStatus.draft;
+  bool get isMaterialArrivalRegistered => materialArrivedAt != null;
   bool get isRequesterReceiptConfirmed => requesterReceivedAt != null;
+  bool get isRequesterReceiptAutoConfirmed =>
+      isRequesterReceiptConfirmed && requesterReceiptAutoConfirmed;
   bool get isAwaitingRequesterReceipt =>
       status == PurchaseOrderStatus.eta && !isRequesterReceiptConfirmed;
+  bool get isArrivalPendingConfirmation =>
+      !isRequesterReceiptConfirmed && hasAllItemsArrived(this);
 
   Map<String, dynamic> toMap() {
     return {
@@ -362,10 +398,15 @@ class PurchaseOrder {
       'contabilidadName': contabilidadName,
       'contabilidadArea': contabilidadArea,
       'facturaUploadedAt': facturaUploadedAt?.millisecondsSinceEpoch,
+      'materialArrivedAt': materialArrivedAt?.millisecondsSinceEpoch,
+      'materialArrivedName': materialArrivedName,
+      'materialArrivedArea': materialArrivedArea,
       'completedAt': completedAt?.millisecondsSinceEpoch,
       'requesterReceivedAt': requesterReceivedAt?.millisecondsSinceEpoch,
       'requesterReceivedName': requesterReceivedName,
       'requesterReceivedArea': requesterReceivedArea,
+      'requesterReceiptAutoConfirmed':
+          requesterReceiptAutoConfirmed ? true : null,
       'isDraft': isDraft,
     };
   }
@@ -439,10 +480,15 @@ class PurchaseOrder {
       contabilidadName: data['contabilidadName'] as String?,
       contabilidadArea: data['contabilidadArea'] as String?,
       facturaUploadedAt: _parseDateTime(data['facturaUploadedAt']),
+      materialArrivedAt: _parseDateTime(data['materialArrivedAt']),
+      materialArrivedName: data['materialArrivedName'] as String?,
+      materialArrivedArea: data['materialArrivedArea'] as String?,
       completedAt: _parseDateTime(data['completedAt']),
       requesterReceivedAt: _parseDateTime(data['requesterReceivedAt']),
       requesterReceivedName: data['requesterReceivedName'] as String?,
       requesterReceivedArea: data['requesterReceivedArea'] as String?,
+      requesterReceiptAutoConfirmed:
+          (data['requesterReceiptAutoConfirmed'] as bool?) ?? false,
       isDraft: (data['isDraft'] as bool?) ?? false,
     );
   }
@@ -483,6 +529,102 @@ int countItemsWithCommittedDeliveryDate(PurchaseOrder order) {
   return order.items.where((item) => item.deliveryEtaDate != null).length;
 }
 
+int countArrivedItems(PurchaseOrder order) {
+  return order.items.where((item) => item.isArrivalRegistered).length;
+}
+
+int countPendingArrivalItems(PurchaseOrder order) {
+  return order.items
+      .where((item) => item.deliveryEtaDate != null && !item.isArrivalRegistered)
+      .length;
+}
+
+bool hasAnyArrivedItems(PurchaseOrder order) {
+  return order.items.any((item) => item.isArrivalRegistered);
+}
+
+bool hasAllItemsArrived(PurchaseOrder order) {
+  if (order.items.isEmpty) return false;
+  return order.items.every((item) => item.isArrivalRegistered);
+}
+
+DateTime? resolveLatestArrivalDate(PurchaseOrder order) {
+  DateTime? latest = order.materialArrivedAt;
+  for (final item in order.items) {
+    final arrivedAt = item.arrivedAt;
+    if (arrivedAt == null) continue;
+    if (latest == null || arrivedAt.isAfter(latest)) {
+      latest = arrivedAt;
+    }
+  }
+  return latest;
+}
+
+DateTime? orderAutoReceiptDueDate(PurchaseOrder order) {
+  if (order.isRequesterReceiptConfirmed) return null;
+  if (!hasAllItemsArrived(order)) return null;
+  final latestArrival = resolveLatestArrivalDate(order);
+  if (latestArrival == null) return null;
+  return latestArrival.add(const Duration(days: 10));
+}
+
+bool isOrderAutoReceiptDue(PurchaseOrder order, {DateTime? now}) {
+  final dueDate = orderAutoReceiptDueDate(order);
+  if (dueDate == null) return false;
+  final reference = now ?? DateTime.now();
+  return !reference.isBefore(dueDate);
+}
+
+String requesterReceiptStatusLabel(PurchaseOrder order) {
+  if (order.isRequesterReceiptAutoConfirmed) {
+    return 'Llegado pero no confirmado';
+  }
+  if (order.isRequesterReceiptConfirmed) {
+    return 'Recibida por solicitante';
+  }
+  if (order.isArrivalPendingConfirmation) {
+    return 'Llegado pendiente de confirmacion';
+  }
+  return order.status.label;
+}
+
+int? itemArrivalDeltaDays(PurchaseOrderItem item) {
+  final eta = _dateOnly(item.deliveryEtaDate);
+  final arrived = _dateOnly(item.arrivedAt);
+  if (eta == null || arrived == null) return null;
+  return arrived.difference(eta).inDays;
+}
+
+String itemArrivalComplianceLabel(PurchaseOrderItem item) {
+  if (!item.isArrivalRegistered) {
+    return itemPendingArrivalLabel(item);
+  }
+  final delta = itemArrivalDeltaDays(item);
+  if (delta == null) return 'Entregado sin fecha estimada';
+  if (delta == 0) return 'Entregado en la fecha exacta';
+  if (delta < 0) {
+    final days = delta.abs();
+    return 'Entregado antes de la fecha estimada ($days dia${days == 1 ? '' : 's'} antes)';
+  }
+  return 'Te excediste con $delta dia${delta == 1 ? '' : 's'} de entrega';
+}
+
+String itemPendingArrivalLabel(
+  PurchaseOrderItem item, {
+  DateTime? referenceDate,
+}) {
+  final eta = _dateOnly(item.deliveryEtaDate);
+  if (eta == null) return 'Sin fecha estimada de entrega';
+  final today = _dateOnly(referenceDate ?? DateTime.now())!;
+  final delta = today.difference(eta).inDays;
+  if (delta == 0) return 'Se espera hoy';
+  if (delta < 0) {
+    final days = delta.abs();
+    return 'Faltan $days dia${days == 1 ? '' : 's'} para la fecha estimada';
+  }
+  return 'Atraso actual de $delta dia${delta == 1 ? '' : 's'} frente a la fecha estimada';
+}
+
 bool hasAllItemsCommittedDeliveryDate(PurchaseOrder order) {
   if (order.items.isEmpty) return false;
   for (final item in order.items) {
@@ -491,6 +633,11 @@ bool hasAllItemsCommittedDeliveryDate(PurchaseOrder order) {
     }
   }
   return true;
+}
+
+DateTime? _dateOnly(DateTime? value) {
+  if (value == null) return null;
+  return DateTime(value.year, value.month, value.day);
 }
 
 PurchaseOrderStatus? _statusFromString(String? raw) {

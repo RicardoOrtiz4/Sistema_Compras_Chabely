@@ -33,6 +33,8 @@ class _UserInProcessOrdersScreenState
   List<PurchaseOrder>? _cachedVisibleOrders;
 
   String? _lastCompletionNoticeKey;
+  String? _lastArrivalNoticeKey;
+  final Set<String> _autoFinalizeInFlight = <String>{};
   late final TextEditingController _searchController;
   final OrderSearchCache _searchCache = OrderSearchCache();
   Timer? _searchDebounce;
@@ -153,8 +155,13 @@ class _UserInProcessOrdersScreenState
           final completedOrders = activeOrders
               .where((order) => order.isAwaitingRequesterReceipt)
               .toList(growable: false);
+          final arrivalOrders = activeOrders
+              .where((order) => hasAnyArrivedItems(order))
+              .toList(growable: false);
 
+          _scheduleAutoFinalize(activeOrders);
           _scheduleCompletionNotice(completedOrders);
+          _scheduleArrivalNotice(arrivalOrders);
 
           if (activeOrders.isEmpty) {
             return const Center(
@@ -295,6 +302,65 @@ class _UserInProcessOrdersScreenState
     });
   }
 
+  void _scheduleAutoFinalize(List<PurchaseOrder> orders) {
+    for (final order in orders) {
+      if (!isOrderAutoReceiptDue(order)) continue;
+      if (_autoFinalizeInFlight.contains(order.id)) continue;
+      _autoFinalizeInFlight.add(order.id);
+      unawaited(_autoFinalizeOrder(order));
+    }
+  }
+
+  Future<void> _autoFinalizeOrder(PurchaseOrder order) async {
+    try {
+      await ref.read(purchaseOrderRepositoryProvider).autoConfirmRequesterReceived(
+            order: order,
+          );
+    } catch (error, stack) {
+      logError(
+        error,
+        stack,
+        context: 'UserInProcessOrdersScreen.autoConfirmRequesterReceived',
+      );
+    } finally {
+      _autoFinalizeInFlight.remove(order.id);
+    }
+  }
+
+  void _scheduleArrivalNotice(List<PurchaseOrder> orders) {
+    if (orders.isEmpty) {
+      _lastArrivalNoticeKey = null;
+      return;
+    }
+
+    final key = orders
+        .map((order) => '${order.id}:${countArrivedItems(order)}:${countPendingArrivalItems(order)}')
+        .join('|');
+    if (_lastArrivalNoticeKey == key) return;
+    _lastArrivalNoticeKey = key;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Actualizacion interna de llegadas'),
+          content: Text(
+            orders.length == 1
+                ? 'Tu orden ${orders.first.id} ya tiene items llegados. Revisa cuales llegaron, cuales faltan y la diferencia contra la fecha estimada.'
+                : 'Tienes ${orders.length} ordenes con llegadas parciales registradas. Revisa en la app cuales items llegaron, cuales faltan y si van en tiempo o con atraso.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Revisar despues'),
+            ),
+          ],
+        ),
+      );
+    });
+  }
+
   List<PurchaseOrder> _activeOrders(List<PurchaseOrder> orders) {
     return orders
         .where(
@@ -356,6 +422,8 @@ class _UserInProcessOrderCard extends StatelessWidget {
     final committedItems =
         order.items.where((item) => item.deliveryEtaDate != null).length;
     final totalItems = order.items.length;
+    final arrivedItems = countArrivedItems(order);
+    final pendingArrivalItems = countPendingArrivalItems(order);
     final committedDate = resolveCommittedDeliveryDate(order);
     final requestedDate = resolveRequestedDeliveryDate(order);
     final urgentJustification = (order.urgentJustification ?? '').trim();
@@ -389,8 +457,12 @@ class _UserInProcessOrderCard extends StatelessWidget {
             Text('Solicitante / Area: ${order.requesterName} | ${order.areaName}'),
             const SizedBox(height: 8),
             Text(
-              order.isAwaitingRequesterReceipt
-                  ? 'Orden finalizada. Pendiente de confirmar recibido.'
+              arrivedItems > 0 || pendingArrivalItems > 0
+                  ? 'Llegadas registradas: $arrivedItems item(s) | Faltan: $pendingArrivalItems'
+                  : order.isAwaitingRequesterReceipt
+                  ? order.isMaterialArrivalRegistered
+                      ? 'Material reportado como llegado. Pendiente de tu confirmacion.'
+                      : 'Orden finalizada. Pendiente de confirmar recibido.'
                   : 'Avance de fechas estimadas: $committedItems/$totalItems item(s)',
               style: Theme.of(context).textTheme.bodyMedium,
             ),
@@ -413,18 +485,20 @@ class _UserInProcessOrderCard extends StatelessWidget {
                   color: Theme.of(context).colorScheme.primaryContainer,
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: const Text(
-                  'La orden ya paso por todo el flujo interno. Revisa el rastreo y confirma cuando realmente hayas recibido los items.',
+                child: Text(
+                  order.isMaterialArrivalRegistered
+                      ? 'Contabilidad ya reporto que el material llego. Revisa el rastreo y confirma de recibido cuando te lo entreguen.'
+                      : 'La orden ya paso por todo el flujo interno. Revisa el rastreo y confirma cuando realmente hayas recibido los items.',
                 ),
               ),
             ],
             const SizedBox(height: 12),
             Align(
               alignment: Alignment.centerRight,
-              child: FilledButton.icon(
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => UserOrderTrackingScreen(orderId: order.id),
+                child: FilledButton.icon(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => UserOrderTrackingScreen(orderId: order.id),
                   ),
                 ),
                 icon: const Icon(Icons.route_outlined),
@@ -502,7 +576,10 @@ class _UserOrderTrackingScreenState
                   const SizedBox(width: 12),
                   FilledButton.icon(
                     onPressed: () =>
-                        guardedPdfPush(context, '/orders/${order.id}/pdf'),
+                        guardedPdfPush(
+                          context,
+                          '/orders/${order.id}/pdf?tracking=1',
+                        ),
                     icon: const Icon(Icons.picture_as_pdf_outlined),
                     label: const Text('Ver PDF de la orden'),
                   ),
@@ -518,13 +595,17 @@ class _UserOrderTrackingScreenState
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Confirma cuando la orden ya te haya llegado',
+                          order.isMaterialArrivalRegistered
+                              ? 'Tu material ya fue reportado como llegado'
+                              : 'Confirma cuando la orden ya te haya llegado',
                           style:
                               Theme.of(context).textTheme.titleMedium,
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'En cuanto recibas los items, presiona este boton para cerrar la orden y mandarla a los historiales.',
+                          order.isMaterialArrivalRegistered
+                              ? 'Cuando te entreguen fisicamente los items, presiona este boton para cerrar la orden y mandarla a los historiales.'
+                              : 'En cuanto recibas los items, presiona este boton para cerrar la orden y mandarla a los historiales.',
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
                         const SizedBox(height: 12),
@@ -547,6 +628,10 @@ class _UserOrderTrackingScreenState
                     ),
                   ),
                 ),
+              ],
+              if (hasAnyArrivedItems(order) || countPendingArrivalItems(order) > 0) ...[
+                const SizedBox(height: 16),
+                _PartialArrivalStatusCard(order: order),
               ],
               const SizedBox(height: 8),
               Text(
@@ -637,6 +722,68 @@ class _UserOrderTrackingScreenState
   }
 }
 
+class _PartialArrivalStatusCard extends StatelessWidget {
+  const _PartialArrivalStatusCard({required this.order});
+
+  final PurchaseOrder order;
+
+  @override
+  Widget build(BuildContext context) {
+    final trackedItems = order.items
+        .where((item) => item.deliveryEtaDate != null || item.isArrivalRegistered)
+        .toList(growable: false)
+      ..sort((a, b) => a.line.compareTo(b.line));
+    if (trackedItems.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Llegadas parciales',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Llegaron ${countArrivedItems(order)} item(s) y faltan ${countPendingArrivalItems(order)}.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 12),
+            for (final item in trackedItems) ...[
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text('Item ${item.line}: ${item.description}'),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (item.deliveryEtaDate != null)
+                      Text('Fecha estimada: ${item.deliveryEtaDate!.toShortDate()}'),
+                    if (item.arrivedAt != null)
+                      Text('Llegada registrada: ${item.arrivedAt!.toFullDateTime()}'),
+                    Text(
+                      item.isArrivalRegistered
+                          ? itemArrivalComplianceLabel(item)
+                          : itemPendingArrivalLabel(item),
+                    ),
+                  ],
+                ),
+                trailing: Chip(
+                  label: Text(item.isArrivalRegistered ? 'Llegado' : 'Pendiente'),
+                ),
+              ),
+              if (item != trackedItems.last) const Divider(height: 1),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _TrackingTimelineCard extends StatelessWidget {
   const _TrackingTimelineCard({
     required this.order,
@@ -654,14 +801,24 @@ class _TrackingTimelineCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final currentStatus = _selectedCurrentStatus(order);
     final statuses = _reachedTrackingStatuses();
+    final pdfCreatedAt = order.createdAt ?? order.updatedAt;
 
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
+            if (pdfCreatedAt != null)
+              _TrackingPdfCreatedTile(
+                createdAt: pdfCreatedAt,
+                isLast:
+                    statuses.isEmpty &&
+                    order.status != PurchaseOrderStatus.eta &&
+                    !order.isRequesterReceiptConfirmed,
+              ),
             for (var index = 0; index < statuses.length; index++)
               _TrackingTimelineTile(
+                order: order,
                 status: statuses[index],
                 currentStatus: currentStatus,
                 isLast: index == statuses.length - 1 &&
@@ -701,8 +858,97 @@ class _TrackingTimelineCard extends StatelessWidget {
   }
 }
 
+class _TrackingPdfCreatedTile extends StatelessWidget {
+  const _TrackingPdfCreatedTile({
+    required this.createdAt,
+    required this.isLast,
+  });
+
+  final DateTime createdAt;
+  final bool isLast;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final color = scheme.primary;
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Column(
+          children: [
+            Icon(Icons.picture_as_pdf_outlined, color: color),
+            if (!isLast)
+              Container(
+                width: 2,
+                height: 64,
+                margin: const EdgeInsets.symmetric(vertical: 4),
+                color: color,
+              ),
+          ],
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Card(
+            color: color.withValues(alpha: color.a * 0.1),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'PDF de la orden creado',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          'Inicio',
+                          style: Theme.of(context).textTheme.labelSmall
+                              ?.copyWith(
+                                color: color,
+                                fontWeight: FontWeight.w700,
+                              ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Fecha base del documento que acompaña el rastreo.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      createdAt.toFullDateTime(),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _TrackingTimelineTile extends StatelessWidget {
   const _TrackingTimelineTile({
+    required this.order,
     required this.status,
     required this.currentStatus,
     required this.isLast,
@@ -717,6 +963,7 @@ class _TrackingTimelineTile extends StatelessWidget {
     this.onShowItems,
   });
 
+  final PurchaseOrder order;
   final PurchaseOrderStatus status;
   final PurchaseOrderStatus currentStatus;
   final bool isLast;
@@ -733,6 +980,7 @@ class _TrackingTimelineTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final stageProgress = _trackingStageProgressFor(order, status);
     final isCompleted = status.index <= currentStatus.index;
     final isCurrent = status == currentStatus;
     final isRejectedPending = !isCompleted && rejectionEvent != null;
@@ -847,6 +1095,29 @@ class _TrackingTimelineTile extends StatelessWidget {
                         ],
                       ),
                     ),
+                  if (stageProgress != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          _TrackingMetaTag(
+                            text:
+                                '${stageProgress.atStage}/${stageProgress.total} items aqui',
+                            highlighted: isCurrent,
+                          ),
+                          if (stageProgress.ahead > 0)
+                            _TrackingMetaTag(
+                              text: '${stageProgress.ahead} ya avanzaron',
+                            ),
+                          if (stageProgress.behind > 0)
+                            _TrackingMetaTag(
+                              text: '${stageProgress.behind} siguen atras',
+                            ),
+                        ],
+                      ),
+                    ),
                   if (note != null && note!.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
@@ -928,7 +1199,9 @@ class _RequesterReceiptTimelineTile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Confirmacion de recibido',
+                    order.isRequesterReceiptAutoConfirmed
+                        ? 'Llegado pero no confirmado'
+                        : 'Confirmacion de recibido',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                   const SizedBox(height: 4),
@@ -957,7 +1230,9 @@ class _RequesterReceiptTimelineTile extends StatelessWidget {
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
                     child: Text(
-                      isCompleted
+                      order.isRequesterReceiptAutoConfirmed
+                          ? 'La orden se cerro automaticamente despues de 10 dias sin confirmacion del solicitante.'
+                          : isCompleted
                           ? 'La orden ya fue confirmada como recibida y paso al historial.'
                           : 'La orden ya fue finalizada internamente y esta pendiente de que la confirmes como recibida.',
                       style: Theme.of(context).textTheme.bodySmall,
@@ -1045,6 +1320,20 @@ class _TrackingSelection {
   final bool isGroup;
 }
 
+class _TrackingStageProgress {
+  const _TrackingStageProgress({
+    required this.total,
+    required this.atStage,
+    required this.ahead,
+    required this.behind,
+  });
+
+  final int total;
+  final int atStage;
+  final int ahead;
+  final int behind;
+}
+
 void _showTrackingStatusItemsSheet(
   BuildContext context, {
   required PurchaseOrderStatus status,
@@ -1072,7 +1361,16 @@ void _showTrackingStatusItemsSheet(
               child: ListTile(
                 title: Text('Item ${item.line}: ${item.description}'),
                 subtitle: Text(
-                  '${item.partNumber} | ${item.quantity} ${item.unit}',
+                  [
+                    '${item.partNumber} | ${item.quantity} ${item.unit}',
+                    if (item.deliveryEtaDate != null)
+                      'ETA ${item.deliveryEtaDate!.toShortDate()}',
+                    if (item.arrivedAt != null)
+                      'Llegada ${item.arrivedAt!.toShortDate()}',
+                    item.isArrivalRegistered
+                        ? itemArrivalComplianceLabel(item)
+                        : itemPendingArrivalLabel(item),
+                  ].join('\n'),
                 ),
               ),
             );
@@ -1174,6 +1472,38 @@ List<PurchaseOrderItem> _itemsForTrackingStatus(
   return items;
 }
 
+_TrackingStageProgress? _trackingStageProgressFor(
+  PurchaseOrder order,
+  PurchaseOrderStatus status,
+) {
+  final total = order.items.length;
+  if (total <= 1) return null;
+
+  var atStage = 0;
+  var ahead = 0;
+  var behind = 0;
+  for (final item in order.items) {
+    final itemStatus = _itemTrackingStatus(order, item);
+    if (itemStatus == status) {
+      atStage++;
+    } else if (itemStatus.index > status.index) {
+      ahead++;
+    } else {
+      behind++;
+    }
+  }
+
+  if (atStage == 0 || (ahead == 0 && behind == 0)) {
+    return null;
+  }
+  return _TrackingStageProgress(
+    total: total,
+    atStage: atStage,
+    ahead: ahead,
+    behind: behind,
+  );
+}
+
 PurchaseOrderStatus _itemTrackingStatus(
   PurchaseOrder order,
   PurchaseOrderItem item,
@@ -1224,7 +1554,7 @@ PurchaseOrderEvent? _latestEventForStatus(
 PurchaseOrderEvent? _latestReceiptEvent(List<PurchaseOrderEvent> events) {
   PurchaseOrderEvent? selected;
   for (final event in events) {
-    if (event.type != 'received') continue;
+    if (event.type != 'received' && event.type != 'received_timeout') continue;
     if (selected == null) {
       selected = event;
       continue;
@@ -1312,6 +1642,13 @@ String? _noteForStatus(
   PurchaseOrderStatus status,
   Set<int> currentLines,
 ) {
+  if (status == PurchaseOrderStatus.eta) {
+    if (order.isMaterialArrivalRegistered) {
+      return 'Material reportado como llegado: ${order.materialArrivedAt!.toFullDateTime()}';
+    }
+    return 'Pendiente de confirmacion de recibido por el solicitante.';
+  }
+
   if (status != PurchaseOrderStatus.paymentDone) {
     return null;
   }
@@ -1341,8 +1678,16 @@ String? _noteForStatus(
 
 
 String _orderTrackingStatusLabel(PurchaseOrder order) {
+  if (order.isRequesterReceiptAutoConfirmed) {
+    return 'Llegado pero no confirmado';
+  }
+  if (order.isArrivalPendingConfirmation) {
+    return 'Llegado pendiente de confirmacion';
+  }
   if (order.isAwaitingRequesterReceipt) {
-    return 'Pendiente de confirmar recibido';
+    return order.isMaterialArrivalRegistered
+        ? 'Material llegado'
+        : 'Pendiente de confirmar recibido';
   }
   if (order.isRequesterReceiptConfirmed) {
     return 'Recibida';

@@ -595,7 +595,7 @@ class _GlobalRejectedOrderCardState
         builder: (context) => AlertDialog(
           title: const Text('Correo requerido'),
           content: const Text(
-            'Antes de enviar avisos por correo, registra tu correo en Perfil > Correo para enviar PDFs.',
+            'Antes de preparar avisos por correo, registra tu correo en Perfil > Correo de contacto.',
           ),
           actions: [
             TextButton(
@@ -628,7 +628,7 @@ class _GlobalRejectedOrderCardState
       final receiverEmail = (requester?.contactEmail ?? '').trim();
       if (receiverEmail.isEmpty) {
         throw StateError(
-          'El solicitante no tiene correo registrado en Perfil > Correo para enviar PDFs.',
+          'El solicitante no tiene correo registrado en Perfil > Correo de contacto.',
         );
       }
 
@@ -646,7 +646,36 @@ class _GlobalRejectedOrderCardState
           'body': body,
         },
       );
-      final opened = await launchUrl(uri);
+
+      final shouldPrepareEmail = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Aviso interno listo'),
+          content: Text(
+            monitoringType == _GlobalMonitoringType.rejected
+                ? 'La orden ${order.id} ya refleja internamente que requiere accion. Si quieres, ahora puedes preparar el correo opcional al solicitante.'
+                : 'La orden ${order.id} ya refleja internamente que sigue pendiente de recibido. Si quieres, ahora puedes preparar el correo opcional al solicitante.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Solo en app'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Preparar correo'),
+            ),
+          ],
+        ),
+      );
+      if (shouldPrepareEmail != true || !mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('El aviso queda visible dentro de la app.')),
+        );
+        return;
+      }
+
+      final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
       if (!mounted) return;
       if (!opened) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -809,15 +838,15 @@ String _globalRejectedByLabel(String? rawRole) {
 String _globalRejectedFromLabel(PurchaseOrderStatus? status) {
   switch (status) {
     case PurchaseOrderStatus.pendingCompras:
-      return 'ordenes por confirmar';
+      return 'autorizacion de requerimiento';
     case PurchaseOrderStatus.cotizaciones:
-      return 'cotizaciones';
+      return 'compras';
     case PurchaseOrderStatus.dataComplete:
-      return 'datos completos';
+      return 'proceso de liberacion';
     case PurchaseOrderStatus.authorizedGerencia:
-      return 'Direccion General';
+      return 'autorizacion de pago';
     case PurchaseOrderStatus.paymentDone:
-      return 'en proceso';
+      return 'en transito de llegada';
     case PurchaseOrderStatus.contabilidad:
       return 'contabilidad';
     case PurchaseOrderStatus.orderPlaced:

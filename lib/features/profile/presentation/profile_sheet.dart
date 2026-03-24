@@ -73,10 +73,10 @@ class _ProfileContentState extends State<_ProfileContent> {
           TextField(
             controller: _contactEmailController,
             decoration: const InputDecoration(
-              labelText: 'Correo para enviar PDFs',
+              labelText: 'Correo de contacto',
               hintText: 'correo@ejemplo.com',
               helperText:
-                  'Si quieres enviar o recibir avisos o PDFs de ordenes, registralo aqui.',
+                  'Se usa para recibir avisos y preparar correos desde tu app de correo. El sistema no envia correos automaticos por si solo.',
             ),
             keyboardType: TextInputType.emailAddress,
             enabled: !_isSaving,
@@ -92,7 +92,7 @@ class _ProfileContentState extends State<_ProfileContent> {
                       height: 18,
                       child: AppSplash(compact: true, size: 18),
                     )
-                  : const Text('Guardar correo'),
+                  : const Text('Guardar correo de contacto'),
             ),
           ),
           const SizedBox(height: 24),

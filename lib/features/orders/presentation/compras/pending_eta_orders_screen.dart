@@ -120,15 +120,15 @@ class _PendingEtaOrdersScreenState
       appBar: AppBar(
         title: ordersAsync.when(
           data: (orders) => compactAppBar
-              ? const Text('En proceso')
+              ? const Text(inTransitArrivalLabel)
               : OrderModuleAppBarTitle(
-                  title: 'En proceso',
+                  title: inTransitArrivalLabel,
                   counts: OrderUrgencyCounts.fromOrders(orders),
                   filter: _urgencyFilter,
                   onSelected: _setUrgencyFilter,
                 ),
-          loading: () => const Text('En proceso'),
-          error: (_, __) => const Text('En proceso'),
+          loading: () => const Text(inTransitArrivalLabel),
+          error: (_, __) => const Text(inTransitArrivalLabel),
         ),
         bottom: !compactAppBar
             ? null
@@ -359,7 +359,7 @@ class _PendingEtaOrderCard extends StatelessWidget {
                   orderIds: [order.id],
                   fromStatus: PurchaseOrderStatus.authorizedGerencia,
                   toStatus: PurchaseOrderStatus.paymentDone,
-                  label: 'Tiempo en Direccion General',
+                  label: 'Tiempo en autorizacion de pago',
                 ),
               ],
             ),

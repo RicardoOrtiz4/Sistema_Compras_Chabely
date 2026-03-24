@@ -120,13 +120,8 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
               controller.returnCount > 0 && hasEdits
                   ? controller.previewUpdatedAt
                   : null;
-          final requiresPreviewAcceptance =
-              controller.returnCount > 0 && hasEdits && hasScheduleChange;
-          final hasAcceptedPreview =
-              !requiresPreviewAcceptance || controller.previewAccepted;
-
-          final submitLabel =
-              folio == null ? 'Enviar a revisión' : 'Reenviar a revisión';
+          const hasAcceptedPreview = true;
+          const submitLabel = 'Enviar orden';
 
           final maxCorrectionsReached =
               controller.returnCount >= _maxCorrections;
@@ -149,7 +144,7 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                   child: Text(
-                    'Máximo de correcciones alcanzado. Crea otra requisición.',
+                    'Esta orden ya no puede seguir corrigiendose. Crea una nueva requisicion.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
@@ -162,38 +157,6 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
                   modificationDate: modificationDate,
                 ),
               ),
-              if (requiresPreviewAcceptance)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        hasAcceptedPreview
-                            ? 'PDF aceptado. El reenvio pendiente ya se refleja en el documento. La hora se registrara cuando reenvies la orden.'
-                            : 'El reenvio pendiente ya se refleja en el PDF. Acepta este PDF para continuar; la hora quedara registrada hasta que reenvies la orden.',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      const SizedBox(height: 8),
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          onPressed: hasAcceptedPreview
-                              ? null
-                              : () => ref
-                                  .read(createOrderControllerProvider.notifier)
-                                  .acceptPreview(),
-                          icon: const Icon(Icons.verified_outlined),
-                          label: Text(
-                            hasAcceptedPreview
-                                ? 'PDF aceptado'
-                                : 'Aceptar PDF',
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
               Padding(
                 padding: const EdgeInsets.all(16),
                 child: SizedBox(
@@ -205,28 +168,17 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
                             !hasAcceptedPreview
                         ? null
                         : () async {
-                            if (controller.returnCount > 0) {
-                              final confirmed = await _confirmResubmission(
-                                context,
-                                hasEdits: hasEdits,
-                              );
-                              if (confirmed != true) return;
-                            }
                             final orderId = await ref
                                 .read(createOrderControllerProvider.notifier)
                                 .submit();
                             if (orderId != null) {
                               unawaited(_warmPendingCache(orderId));
                               if (!mounted) return;
-                              if (controller.returnCount > 0) {
-                                _returnToRejectedOrders(context);
+                              final navigator = Navigator.of(context);
+                              if (navigator.canPop()) {
+                                navigator.pop();
                               } else {
-                                final navigator = Navigator.of(context);
-                                if (navigator.canPop()) {
-                                  navigator.pop();
-                                } else {
-                                  context.go('/orders/create');
-                                }
+                                context.go('/orders/create');
                               }
                             }
                           },
@@ -297,13 +249,8 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
       final hasEdits = baselineSignature == null
           ? true
           : baselineSignature != currentSignature;
-      final hasScheduleChange = controller.hasScheduleChange;
       final modificationDate =
           controller.returnCount > 0 && hasEdits ? controller.previewUpdatedAt : null;
-      final requiresPreviewAcceptance =
-          controller.returnCount > 0 && hasEdits && hasScheduleChange;
-      final hasAcceptedPreview =
-          !requiresPreviewAcceptance || controller.previewAccepted;
       final branding = ref.read(currentBrandingProvider);
       final isNewOrderPreview = folio == null && controller.returnCount <= 0;
       final pdfData = OrderPdfData(
@@ -319,13 +266,7 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
         observations: controller.notes,
         urgentJustification: controller.urgentJustification,
         requestedDeliveryDate: controller.requestedDeliveryDate,
-        pendingResubmissionLabel: _pendingResubmissionLabel(
-          controller,
-          modificationDate: modificationDate,
-        ),
         suppressCreatedTime: isNewOrderPreview,
-        resubmissionDates: controller.resubmissionDates,
-        cacheSalt: hasAcceptedPreview ? null : 'preview-pending',
       );
       final bytes = await buildOrderPdf(pdfData, useIsolate: false);
       if (!mounted) return;
@@ -342,20 +283,6 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
   }
 }
 
-void _returnToRejectedOrders(BuildContext context) {
-  final navigator = Navigator.of(context);
-  var foundRejectedRoute = false;
-  navigator.popUntil((route) {
-    if (route.settings.name == 'rejectedOrders') {
-      foundRejectedRoute = true;
-      return true;
-    }
-    return false;
-  });
-  if (!foundRejectedRoute) {
-    context.go('/orders/rejected');
-  }
-}
 
 String? _folioFromDraft(String? draftId) {
   return normalizeFolio(draftId);
@@ -365,7 +292,7 @@ String _lastAttemptMessage(String? contactArea) {
   final area = contactArea?.trim().isNotEmpty == true
       ? contactArea!.trim()
       : 'Compras';
-  return 'Advertencia: este es el último intento para enviar la requisición. '
+  return 'Advertencia: si esta orden vuelve a rechazarse, deberas crear una nueva requisicion. '
       'Antes de enviarla, contacta a $area.';
 }
 
@@ -419,12 +346,7 @@ class _DraftPdfBody extends ConsumerWidget {
       observations: controller.notes,
       urgentJustification: controller.urgentJustification,
       requestedDeliveryDate: controller.requestedDeliveryDate,
-      pendingResubmissionLabel: _pendingResubmissionLabel(
-        controller,
-        modificationDate: modificationDate,
-      ),
       suppressCreatedTime: isNewOrderPreview,
-      resubmissionDates: controller.resubmissionDates,
     );
     return OrderPdfInlineView(data: pdfData);
   }
@@ -573,31 +495,3 @@ String _contactLabel(String? rawRole) {
 
 const int _maxCorrections = 3;
 
-Future<bool?> _confirmResubmission(
-  BuildContext context, {
-  required bool hasEdits,
-}) {
-  final warning = hasEdits
-      ? ''
-      : '\n\nNo detectamos cambios en la orden. '
-          'Es posible que la vuelvan a rechazar.';
-  return showDialog<bool>(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('Confirmar reenvío'),
-      content: Text(
-        'Esta orden regresará a órdenes por confirmar. ¿Deseas continuar?$warning',
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context, false),
-          child: const Text('Cancelar'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.pop(context, true),
-          child: const Text('Reenviar'),
-        ),
-      ],
-    ),
-  );
-}

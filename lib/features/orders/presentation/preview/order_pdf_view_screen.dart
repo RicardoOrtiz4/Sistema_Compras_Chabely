@@ -6,6 +6,7 @@ import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
+import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
@@ -14,15 +15,15 @@ import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_m
 import 'package:sistema_compras/features/orders/presentation/preview/pdf_download_helper.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_rejection_history.dart';
 
-const int _maxCorrections = 3;
-
 class OrderPdfViewScreen extends ConsumerStatefulWidget {
   const OrderPdfViewScreen({
     required this.orderId,
+    this.hideBuyerFields = false,
     super.key,
   });
 
   final String orderId;
+  final bool hideBuyerFields;
 
   @override
   ConsumerState<OrderPdfViewScreen> createState() => _OrderPdfViewScreenState();
@@ -74,33 +75,27 @@ class _OrderPdfViewScreenState extends ConsumerState<OrderPdfViewScreen> {
           }
 
           final isRejectedDraft = _isRejectedDraft(order);
-          final maxCorrectionsReached = order.returnCount >= _maxCorrections;
-          final draftRoute =
-              '/orders/create?draftId=${Uri.encodeComponent(order.id)}';
           final copyRoute =
               '/orders/create?copyFromId=${Uri.encodeComponent(order.id)}';
 
           return Column(
             children: [
               Expanded(
-                child: _OrderPdfBody(order: order),
+                child: _OrderPdfBody(
+                  order: order,
+                  hideBuyerFields: widget.hideBuyerFields,
+                ),
               ),
               if (isRejectedDraft)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
                   child: SizedBox(
                     width: double.infinity,
-                    child: maxCorrectionsReached
-                        ? OutlinedButton.icon(
-                            onPressed: () => guardedPush(context, copyRoute),
-                            icon: const Icon(Icons.content_copy_outlined),
-                            label: const Text('Volver a generar'),
-                          )
-                        : FilledButton.icon(
-                            onPressed: () => guardedPush(context, draftRoute),
-                            icon: const Icon(Icons.edit_outlined),
-                            label: const Text('Editar y reenviar'),
-                          ),
+                    child: OutlinedButton.icon(
+                      onPressed: () => guardedPush(context, copyRoute),
+                      icon: const Icon(Icons.content_copy_outlined),
+                      label: const Text('Copiar orden'),
+                    ),
                   ),
                 ),
             ],
@@ -147,10 +142,10 @@ class _OrderPdfViewScreenState extends ConsumerState<OrderPdfViewScreen> {
     setState(() => _downloading = true);
     try {
       final branding = ref.read(currentBrandingProvider);
-      final pdfData = buildPdfDataFromOrder(
+      final pdfData = _buildOrderPdfDataForView(
+        branding,
         order,
-        branding: branding,
-        suppressUpdatedAt: _isRejectedDraft(order),
+        hideBuyerFields: widget.hideBuyerFields,
       );
       final bytes = await buildOrderPdf(pdfData, useIsolate: false);
       if (!mounted) return;
@@ -170,27 +165,52 @@ class _OrderPdfViewScreenState extends ConsumerState<OrderPdfViewScreen> {
 bool _isRejectedDraft(PurchaseOrder order) {
   final reason = order.lastReturnReason;
   return order.status == PurchaseOrderStatus.draft &&
-      reason != null &&
-      reason.trim().isNotEmpty;
+      ((reason != null && reason.trim().isNotEmpty) || order.returnCount > 0);
 }
 
 class _OrderPdfBody extends ConsumerWidget {
   const _OrderPdfBody({
     required this.order,
+    required this.hideBuyerFields,
   });
 
   final PurchaseOrder order;
+  final bool hideBuyerFields;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final branding = ref.watch(currentBrandingProvider);
-    final pdfData = buildPdfDataFromOrder(
+    final pdfData = _buildOrderPdfDataForView(
+      branding,
       order,
-      branding: branding,
-      suppressUpdatedAt: _isRejectedDraft(order),
+      hideBuyerFields: hideBuyerFields,
     );
     return OrderPdfInlineView(data: pdfData);
   }
+}
+
+OrderPdfData _buildOrderPdfDataForView(
+  CompanyBranding branding,
+  PurchaseOrder order, {
+  required bool hideBuyerFields,
+}) {
+  final sanitizedItems = !hideBuyerFields
+      ? null
+      : order.items
+            .map(
+              (item) => OrderItemDraft.fromModel(
+                item,
+              ).copyWith(customer: '', clearSupplier: true),
+            )
+            .toList(growable: false);
+  return buildPdfDataFromOrder(
+    order,
+    branding: branding,
+    supplier: hideBuyerFields ? '' : null,
+    items: sanitizedItems,
+    hideBudget: hideBuyerFields,
+    suppressUpdatedAt: _isRejectedDraft(order),
+  );
 }
 
 class _PdfViewHistoryActionButton extends ConsumerWidget {

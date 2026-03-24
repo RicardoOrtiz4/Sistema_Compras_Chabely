@@ -820,30 +820,6 @@ class _OrderItemCardState extends State<_OrderItemCard> {
               onChanged: (value) => widget.onChanged(draft.copyWith(description: value)),
               validator: (value) => (value == null || value.trim().isEmpty) ? 'Requerido' : null,
             ),
-
-            if ((draft.reviewComment ?? '').trim().isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Motivo de rechazo',
-                      style: Theme.of(context).textTheme.labelLarge,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(draft.reviewComment!.trim()),
-                  ],
-                ),
-              ),
-            ],
-
             const SizedBox(height: 8),
             TextFormField(
               key: ValueKey('customer-${widget.index}'),
@@ -934,7 +910,7 @@ class _OrderItemCardState extends State<_OrderItemCard> {
 
 String _lastAttemptMessage(String? contactArea) {
   final area = contactArea?.trim().isNotEmpty == true ? contactArea!.trim() : 'Compras';
-  return 'Advertencia: este es el último intento para enviar la requisición. '
+  return 'Advertencia: si esta orden vuelve a rechazarse, deberas crear una nueva requisicion. '
       'Antes de enviarla, contacta a $area.';
 }
 

@@ -530,8 +530,35 @@ class _MonitoringRecentActivitySectionState
             ),
             const SizedBox(height: 4),
             Text(
-              'Ordenes con actividad reciente. Toca una para ver sus movimientos.',
+              'Ordenes con movimientos recientes. Abre una para revisar su historial sin tanto texto corrido.',
               style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _MonitoringInfoPill(
+                  icon: Icons.inventory_2_outlined,
+                  label: '${widget.orders.length} ordenes monitoreadas',
+                ),
+                if (recentOrders.isNotEmpty)
+                  _MonitoringInfoPill(
+                    icon: Icons.bolt_outlined,
+                    label: '${recentOrders.length} con actividad reciente',
+                  ),
+                if (loadingCount > 0)
+                  _MonitoringInfoPill(
+                    icon: Icons.sync_outlined,
+                    label: 'Actualizando $loadingCount historial(es)',
+                  ),
+                if (errorCount > 0)
+                  _MonitoringInfoPill(
+                    icon: Icons.error_outline,
+                    label: '$errorCount historial(es) con error',
+                    highlighted: true,
+                  ),
+              ],
             ),
             if (loadingCount > 0) ...[
               const SizedBox(height: 8),
@@ -610,6 +637,9 @@ class _MonitoringRecentOrderTile extends StatelessWidget {
     final latestAction = isReturnOrderEvent(latestEvent)
         ? returnEventTitle(activity.events, latestEvent)
         : 'Movimiento';
+    final now = DateTime.now();
+    final currentElapsed = currentStatusElapsed(order, now);
+    final latestComment = latestEvent.comment?.trim() ?? '';
 
     return Material(
       color: Theme.of(context).colorScheme.surface,
@@ -644,20 +674,60 @@ class _MonitoringRecentOrderTile extends StatelessWidget {
                           '${order.requesterName} | ${order.areaName}',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
-                        const SizedBox(height: 4),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            _MonitoringInfoPill(
+                              icon: order.urgency == PurchaseOrderUrgency.urgente
+                                  ? Icons.priority_high_outlined
+                                  : Icons.remove_circle_outline,
+                              label: order.urgency.label,
+                            ),
+                            _MonitoringInfoPill(
+                              icon: order.status.icon,
+                              label: order.status.label,
+                            ),
+                            _MonitoringInfoPill(
+                              icon: Icons.timer_outlined,
+                              label: formatMonitoringDuration(currentElapsed),
+                            ),
+                            _MonitoringInfoPill(
+                              icon: Icons.history_outlined,
+                              label: '${activity.events.length} movimientos',
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
                         Text(
                           '$latestAction: ${orderEventTransitionLabel(latestEvent)}',
-                          style: Theme.of(context).textTheme.bodyMedium,
+                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.w600,
+                              ),
                         ),
                         const SizedBox(height: 4),
-                        Text(
-                          '${activity.events.length} movimientos',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
                         Text(
                           latestEvent.timestamp!.toFullDateTime(),
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
+                        if (latestComment.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              latestComment,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -710,37 +780,125 @@ class _MonitoringRecentMovementTile extends StatelessWidget {
     final action = isReturnOrderEvent(event)
         ? returnEventTitle(allEvents, event)
         : 'Movimiento';
+    final transition = orderEventTransitionLabel(event);
+    final comment = event.comment?.trim() ?? '';
+    final scheme = Theme.of(context).colorScheme;
 
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
+        color: scheme.surface,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+        border: Border.all(color: scheme.outlineVariant),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '$action: ${orderEventTransitionLabel(event)}',
+            action,
             style: Theme.of(context).textTheme.titleSmall,
           ),
-          const SizedBox(height: 4),
-          Text(
-            _actorLabel(event, actorNamesById),
-            style: Theme.of(context).textTheme.bodySmall,
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _MonitoringInfoPill(
+                icon: Icons.swap_horiz_outlined,
+                label: transition,
+              ),
+              _MonitoringInfoPill(
+                icon: Icons.person_outline,
+                label: _actorLabel(event, actorNamesById),
+              ),
+              _MonitoringInfoPill(
+                icon: Icons.schedule_outlined,
+                label: event.timestamp!.toFullDateTime(),
+              ),
+            ],
           ),
-          Text(
-            event.timestamp!.toFullDateTime(),
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          if (event.comment?.trim().isNotEmpty == true) ...[
-            const SizedBox(height: 4),
-            Text(
-              event.comment!.trim(),
-              style: Theme.of(context).textTheme.bodySmall,
+          if (comment.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: isReturnOrderEvent(event)
+                    ? scheme.errorContainer
+                    : scheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    isReturnOrderEvent(event) ? 'Motivo' : 'Comentario',
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    comment,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+class _MonitoringInfoPill extends StatelessWidget {
+  const _MonitoringInfoPill({
+    required this.icon,
+    required this.label,
+    this.highlighted = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool highlighted;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final background = highlighted
+        ? scheme.errorContainer
+        : scheme.surfaceContainerHighest;
+    final foreground = highlighted
+        ? scheme.onErrorContainer
+        : scheme.onSurfaceVariant;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: highlighted
+              ? scheme.error.withValues(alpha: 0.24)
+              : scheme.outlineVariant,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: foreground),
+          const SizedBox(width: 6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 260),
+            child: Text(
+              label,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: foreground,
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+          ),
         ],
       ),
     );

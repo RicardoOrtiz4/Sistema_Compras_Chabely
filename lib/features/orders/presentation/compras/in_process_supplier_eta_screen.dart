@@ -1,5 +1,6 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
@@ -97,9 +98,9 @@ class _InProcessSupplierEtaScreenState
     return Scaffold(
       appBar: AppBar(
         title: compactAppBar
-            ? const Text('En proceso')
+            ? const Text(inTransitArrivalLabel)
             : OrderModuleAppBarTitle(
-                title: 'En proceso',
+                title: inTransitArrivalLabel,
                 counts: titleCounts,
                 filter: _urgencyFilter,
                 onSelected: _setUrgencyFilter,
@@ -122,6 +123,12 @@ class _InProcessSupplierEtaScreenState
               filter: _urgencyFilter,
               range: _createdDateRangeFilter,
             );
+            final arrivalOrders = _visibleArrivalOrders(
+              allOrders: orders,
+              query: _searchQuery,
+              filter: _urgencyFilter,
+              range: _createdDateRangeFilter,
+            );
 
             return ListView(
               padding: const EdgeInsets.all(16),
@@ -136,6 +143,23 @@ class _InProcessSupplierEtaScreenState
                   onClearDate: _clearCreatedDateFilter,
                 ),
                 const SizedBox(height: 16),
+                _ArrivalSectionCard(
+                  orders: arrivalOrders,
+                  isBusy: _isBusy,
+                  onRegisterArrivals: (order, lines) => _registerArrivedItems(
+                    order: order,
+                    actor: actor,
+                    itemLines: lines,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Pendientes de fecha estimada',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
                 if (groups.isEmpty)
                   Card(
                     child: Padding(
@@ -251,6 +275,174 @@ class _InProcessSupplierEtaScreenState
     }
   }
 
+  Future<bool> _registerArrivedItems({
+    required PurchaseOrder order,
+    required AppUser? actor,
+    required Set<int> itemLines,
+  }) async {
+    if (_isBusy) return false;
+    if (actor == null) {
+      _showMessage('Perfil no disponible.');
+      return false;
+    }
+    if (itemLines.isEmpty) {
+      _showMessage('Selecciona al menos un item.');
+      return false;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Registrar llegadas'),
+        content: Text(
+          'Se registraran como llegados ${itemLines.length} item(s) de la orden '
+          '${order.id} y despues se preparara el correo para el solicitante.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Registrar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return false;
+
+    final registeredAt = DateTime.now();
+    setState(() => _isBusy = true);
+    try {
+      await ref.read(purchaseOrderRepositoryProvider).registerArrivedItems(
+            order: order,
+            itemLines: itemLines,
+            actor: actor,
+            registeredAt: registeredAt,
+          );
+
+      final users = await ref.read(allUsersProvider.future);
+      AppUser? requester;
+      for (final user in users) {
+        if (user.id == order.requesterId) {
+          requester = user;
+          break;
+        }
+      }
+
+      final receiverEmail = (requester?.contactEmail ?? '').trim();
+      final updatedItems = [
+        for (final item in order.items)
+          if (itemLines.contains(item.line) &&
+              item.deliveryEtaDate != null &&
+              !item.isArrivalRegistered)
+            item.copyWith(
+              arrivedAt: registeredAt,
+              arrivedByName: actor.name.trim().isEmpty ? null : actor.name.trim(),
+              arrivedByArea: actor.areaDisplay.trim().isEmpty
+                  ? null
+                  : actor.areaDisplay.trim(),
+            )
+          else
+            item,
+      ];
+
+      await _showArrivalRegisteredDialog(
+        order: order,
+        receiverEmail: receiverEmail,
+        updatedItems: updatedItems,
+        newlyArrivedLines: itemLines,
+      );
+      return true;
+    } catch (error, stack) {
+      _showMessage(
+        reportError(
+          error,
+          stack,
+          context: 'InProcessSupplierEtaScreen.registerArrivedItems',
+        ),
+      );
+      return false;
+    } finally {
+      if (mounted) {
+        setState(() => _isBusy = false);
+      }
+    }
+  }
+
+  Future<bool> _prepareArrivalEmail({
+    required PurchaseOrder order,
+    required String receiverEmail,
+    required List<PurchaseOrderItem> updatedItems,
+    required Set<int> newlyArrivedLines,
+  }) {
+    final uri = Uri(
+      scheme: 'mailto',
+      path: receiverEmail,
+      queryParameters: <String, String>{
+        'subject': 'Actualizacion de llegada de items - orden ${order.id}',
+        'body': _arrivalEmailBody(
+          order: order,
+          items: updatedItems,
+          newlyArrivedLines: newlyArrivedLines,
+        ),
+      },
+    );
+    return launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  Future<void> _showArrivalRegisteredDialog({
+    required PurchaseOrder order,
+    required String receiverEmail,
+    required List<PurchaseOrderItem> updatedItems,
+    required Set<int> newlyArrivedLines,
+  }) async {
+    final arrivedCount = updatedItems
+        .where((item) => newlyArrivedLines.contains(item.line))
+        .length;
+    final pendingCount = updatedItems
+        .where((item) => item.deliveryEtaDate != null && !item.isArrivalRegistered)
+        .length;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Llegadas registradas'),
+        content: Text(
+          'Se avisó internamente en la app que la orden ${order.id} ya tiene '
+          '$arrivedCount item(s) llegados y $pendingCount pendiente(s).'
+          '${receiverEmail.isEmpty ? '\n\nEl solicitante no tiene correo de contacto registrado.' : '\n\nSi quieres, ahora puedes preparar el correo opcional al solicitante.'}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text(receiverEmail.isEmpty ? 'Entendido' : 'Solo en app'),
+          ),
+          if (receiverEmail.isNotEmpty)
+            FilledButton(
+              onPressed: () async {
+                Navigator.of(dialogContext).pop();
+                final prepared = await _prepareArrivalEmail(
+                  order: order,
+                  receiverEmail: receiverEmail,
+                  updatedItems: updatedItems,
+                  newlyArrivedLines: newlyArrivedLines,
+                );
+                if (!mounted) return;
+                _showMessage(
+                  prepared
+                      ? 'Correo preparado para $receiverEmail.'
+                      : 'No se pudo abrir la app de correo en este dispositivo.',
+                );
+              },
+              child: const Text('Preparar correo'),
+            ),
+        ],
+      ),
+    );
+  }
+
   void _showMessage(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
@@ -325,6 +517,209 @@ class _EtaFiltersBar extends StatelessWidget {
   }
 }
 
+class _ArrivalSectionCard extends StatelessWidget {
+  const _ArrivalSectionCard({
+    required this.orders,
+    required this.isBusy,
+    required this.onRegisterArrivals,
+  });
+
+  final List<PurchaseOrder> orders;
+  final bool isBusy;
+  final Future<bool> Function(PurchaseOrder, Set<int>) onRegisterArrivals;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Registrar llegadas',
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Marca por item lo que ya llego, revisa el cumplimiento vs la fecha estimada y prepara el correo al solicitante.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 8),
+        if (orders.isEmpty)
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                'No hay ordenes con items en transito para registrar llegada.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ),
+          )
+        else
+          for (final order in orders) ...[
+            _ArrivalOrderCard(
+              order: order,
+              isBusy: isBusy,
+              onRegisterArrivals: onRegisterArrivals,
+            ),
+            const SizedBox(height: 12),
+          ],
+      ],
+    );
+  }
+}
+
+class _ArrivalOrderCard extends StatefulWidget {
+  const _ArrivalOrderCard({
+    required this.order,
+    required this.isBusy,
+    required this.onRegisterArrivals,
+  });
+
+  final PurchaseOrder order;
+  final bool isBusy;
+  final Future<bool> Function(PurchaseOrder, Set<int>) onRegisterArrivals;
+
+  @override
+  State<_ArrivalOrderCard> createState() => _ArrivalOrderCardState();
+}
+
+class _ArrivalOrderCardState extends State<_ArrivalOrderCard> {
+  final Set<int> _selectedLines = <int>{};
+
+  @override
+  Widget build(BuildContext context) {
+    final order = widget.order;
+    final arrivedItems = order.items
+        .where((item) => item.isArrivalRegistered)
+        .toList(growable: false)
+      ..sort((a, b) => a.line.compareTo(b.line));
+    final pendingItems = order.items
+        .where((item) => item.deliveryEtaDate != null && !item.isArrivalRegistered)
+        .toList(growable: false)
+      ..sort((a, b) => a.line.compareTo(b.line));
+    final requestedDate = resolveRequestedDeliveryDate(order);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Chip(label: Text(order.id)),
+                Chip(label: Text('${arrivedItems.length} llegaron')),
+                Chip(label: Text('${pendingItems.length} faltan')),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '${order.requesterName} | ${order.areaName}',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            if (requestedDate != null) ...[
+              const SizedBox(height: 4),
+              Text('Fecha requerida: ${requestedDate.toShortDate()}'),
+            ],
+            const SizedBox(height: 12),
+            if (pendingItems.isNotEmpty) ...[
+              Text(
+                'Items pendientes por registrar',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 6),
+              for (final item in pendingItems) ...[
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  value: _selectedLines.contains(item.line),
+                  onChanged: widget.isBusy
+                      ? null
+                      : (value) {
+                          setState(() {
+                            if (value == true) {
+                              _selectedLines.add(item.line);
+                            } else {
+                              _selectedLines.remove(item.line);
+                            }
+                          });
+                        },
+                  title: Text('Item ${item.line}: ${item.description}'),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if ((item.supplier ?? '').trim().isNotEmpty)
+                        Text('Proveedor: ${item.supplier!.trim()}'),
+                      if (item.deliveryEtaDate != null)
+                        Text(
+                          'Fecha estimada: ${item.deliveryEtaDate!.toShortDate()}',
+                        ),
+                      Text(itemPendingArrivalLabel(item)),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+              ],
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton.icon(
+                  onPressed: widget.isBusy || _selectedLines.isEmpty
+                      ? null
+                      : () async {
+                          final success = await widget.onRegisterArrivals(
+                            order,
+                            Set<int>.from(_selectedLines),
+                          );
+                          if (!mounted || !success) return;
+                          setState(() => _selectedLines.clear());
+                        },
+                  icon: const Icon(Icons.mark_email_read_outlined),
+                  label: const Text('Registrar llegadas y preparar correo'),
+                ),
+              ),
+            ],
+            if (arrivedItems.isNotEmpty) ...[
+              if (pendingItems.isNotEmpty) const SizedBox(height: 16),
+              Text(
+                'Items ya llegados',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 6),
+              for (final item in arrivedItems) ...[
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text('Item ${item.line}: ${item.description}'),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if ((item.supplier ?? '').trim().isNotEmpty)
+                        Text('Proveedor: ${item.supplier!.trim()}'),
+                      if (item.arrivedAt != null)
+                        Text('Llegada registrada: ${item.arrivedAt!.toFullDateTime()}'),
+                      Text(itemArrivalComplianceLabel(item)),
+                    ],
+                  ),
+                  trailing: const Chip(label: Text('Llegado')),
+                ),
+                const Divider(height: 1),
+              ],
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _ApprovedEtaGroupCard extends StatefulWidget {
   const _ApprovedEtaGroupCard({
     required this.group,
@@ -355,6 +750,10 @@ class _ApprovedEtaGroupCardState extends State<_ApprovedEtaGroupCard> {
 
   bool _isSelected(_ApprovedEtaItem entry) => _selectedKeys.contains(_itemKey(entry));
 
+  bool get _allItemsSelected =>
+      widget.group.items.isNotEmpty &&
+      _selectedKeys.length == widget.group.items.length;
+
   Map<String, Set<int>> _selectedLinesByOrder() {
     final selected = <String, Set<int>>{};
     for (final entry in widget.group.items) {
@@ -362,6 +761,20 @@ class _ApprovedEtaGroupCardState extends State<_ApprovedEtaGroupCard> {
       selected.putIfAbsent(entry.order.id, () => <int>{}).add(entry.item.line);
     }
     return selected;
+  }
+
+  void _toggleSelectAllItems() {
+    setState(() {
+      if (_allItemsSelected) {
+        _selectedKeys.clear();
+        return;
+      }
+      _selectedKeys
+        ..clear()
+        ..addAll(
+          widget.group.items.map(_itemKey),
+        );
+    });
   }
 
   Future<void> _pickEtaDate() async {
@@ -392,6 +805,7 @@ class _ApprovedEtaGroupCardState extends State<_ApprovedEtaGroupCard> {
       allOrders: widget.allOrders,
       branding: widget.branding,
       actor: widget.actor,
+      previewEtaDate: _selectedEtaDate,
     );
 
     return Container(
@@ -423,7 +837,7 @@ class _ApprovedEtaGroupCardState extends State<_ApprovedEtaGroupCard> {
             orderIds: [for (final order in group.orders) order.id],
             fromStatus: PurchaseOrderStatus.authorizedGerencia,
             toStatus: PurchaseOrderStatus.paymentDone,
-            label: 'Tiempo en Direccion General',
+            label: 'Tiempo en autorizacion de pago',
             alignRight: false,
           ),
           const SizedBox(height: 10),
@@ -496,6 +910,21 @@ class _ApprovedEtaGroupCardState extends State<_ApprovedEtaGroupCard> {
             'Items pendientes',
             style: theme.textTheme.bodyMedium?.copyWith(
               fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: widget.isBusy ? null : _toggleSelectAllItems,
+              icon: Icon(
+                _allItemsSelected
+                    ? Icons.remove_done_outlined
+                    : Icons.done_all_outlined,
+              ),
+              label: Text(
+                _allItemsSelected ? 'Limpiar seleccion' : 'Seleccionar todos',
+              ),
             ),
           ),
           const SizedBox(height: 6),
@@ -749,6 +1178,113 @@ bool _approvedEtaGroupMatchesSearch(_ApprovedEtaGroup group, String query) {
   return true;
 }
 
+List<PurchaseOrder> _visibleArrivalOrders({
+  required List<PurchaseOrder> allOrders,
+  required String query,
+  required OrderUrgencyFilter filter,
+  required DateTimeRange? range,
+}) {
+  final normalizedQuery = query.trim().toLowerCase();
+  final filtered = allOrders.where((order) {
+    if (!_orderNeedsArrivalTracking(order)) return false;
+    if (!matchesOrderUrgencyFilter(order, filter)) return false;
+    if (!matchesOrderCreatedDateRange(order, range)) return false;
+    if (normalizedQuery.isEmpty) return true;
+    return _arrivalOrderMatchesSearch(order, normalizedQuery);
+  }).toList(growable: false);
+
+  filtered.sort((a, b) {
+    final aTime = a.updatedAt?.millisecondsSinceEpoch ?? a.createdAt?.millisecondsSinceEpoch ?? 0;
+    final bTime = b.updatedAt?.millisecondsSinceEpoch ?? b.createdAt?.millisecondsSinceEpoch ?? 0;
+    return bTime.compareTo(aTime);
+  });
+  return filtered;
+}
+
+bool _orderNeedsArrivalTracking(PurchaseOrder order) {
+  if (order.isRequesterReceiptConfirmed) return false;
+  return order.items.any(
+    (item) => item.deliveryEtaDate != null || item.isArrivalRegistered,
+  );
+}
+
+bool _arrivalOrderMatchesSearch(PurchaseOrder order, String query) {
+  final buffer = StringBuffer();
+
+  void addValue(Object? value) {
+    if (value == null) return;
+    final text = value.toString().trim();
+    if (text.isEmpty) return;
+    buffer.write(text.toLowerCase());
+    buffer.write(' ');
+  }
+
+  addValue(order.id);
+  addValue(order.requesterName);
+  addValue(order.areaName);
+  addValue(order.clientNote);
+  addValue(order.urgency.label);
+  for (final item in order.items) {
+    addValue(item.description);
+    addValue(item.partNumber);
+    addValue(item.customer);
+    addValue(item.supplier);
+  }
+
+  final haystack = buffer.toString();
+  final tokens = query.split(RegExp(r'\s+')).where((token) => token.isNotEmpty);
+  for (final token in tokens) {
+    if (!haystack.contains(token)) return false;
+  }
+  return true;
+}
+
+String _arrivalEmailBody({
+  required PurchaseOrder order,
+  required List<PurchaseOrderItem> items,
+  required Set<int> newlyArrivedLines,
+}) {
+  final arrivedItems = items
+      .where((item) => item.isArrivalRegistered && newlyArrivedLines.contains(item.line))
+      .toList(growable: false)
+    ..sort((a, b) => a.line.compareTo(b.line));
+  final pendingItems = items
+      .where((item) => item.deliveryEtaDate != null && !item.isArrivalRegistered)
+      .toList(growable: false)
+    ..sort((a, b) => a.line.compareTo(b.line));
+
+  final lines = <String>[
+    'Hola ${order.requesterName},',
+    '',
+    'Se registraron llegadas parciales en tu orden ${order.id}.',
+    '',
+    'Items que ya llegaron:',
+    if (arrivedItems.isEmpty) '- Sin items nuevos en esta actualizacion.',
+    for (final item in arrivedItems) _arrivalEmailItemLine(item),
+    '',
+    'Items que aun faltan:',
+    if (pendingItems.isEmpty) '- Ya no quedan items pendientes por llegada.',
+    for (final item in pendingItems) _pendingEmailItemLine(item),
+    '',
+    'Puedes revisar el detalle actualizado en la app.',
+  ];
+  return lines.join('\n');
+}
+
+String _arrivalEmailItemLine(PurchaseOrderItem item) {
+  final etaLabel = item.deliveryEtaDate == null
+      ? 'sin fecha estimada'
+      : 'ETA ${item.deliveryEtaDate!.toShortDate()}';
+  return '- Item ${item.line}: ${item.description} | $etaLabel | ${itemArrivalComplianceLabel(item)}';
+}
+
+String _pendingEmailItemLine(PurchaseOrderItem item) {
+  final etaLabel = item.deliveryEtaDate == null
+      ? 'sin fecha estimada'
+      : 'ETA ${item.deliveryEtaDate!.toShortDate()}';
+  return '- Item ${item.line}: ${item.description} | $etaLabel | ${itemPendingArrivalLabel(item)}';
+}
+
 OrderUrgencyCounts _etaGroupUrgencyCounts(List<_ApprovedEtaGroup> groups) {
   var normal = 0;
   var urgente = 0;
@@ -774,6 +1310,7 @@ SupplierQuotePdfData _buildSupplierQuotePdfData({
   required List<PurchaseOrder> allOrders,
   required CompanyBranding branding,
   required AppUser? actor,
+  DateTime? previewEtaDate,
 }) {
   final refsByOrder = <String, Map<int, SupplierQuoteItemRef>>{};
   for (final ref in quote.items) {
@@ -801,6 +1338,9 @@ SupplierQuotePdfData _buildSupplierQuotePdfData({
           partNumber: item.partNumber,
           customer: item.customer,
           amount: selectedRef?.amount ?? item.budget,
+          etaDate: selectedRef != null
+              ? (previewEtaDate ?? item.deliveryEtaDate)
+              : item.deliveryEtaDate,
         ),
       );
     }

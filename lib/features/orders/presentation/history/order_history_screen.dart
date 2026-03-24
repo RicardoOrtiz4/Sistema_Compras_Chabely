@@ -419,7 +419,9 @@ class _OrderHistoryCard extends StatelessWidget {
     final resendCount = order.returnCount;
     final resendLabel = resendCount <= 0
         ? null
-        : (resendCount == 1 ? 'Reenviada' : 'Reenviada x$resendCount');
+        : (resendCount == 1
+            ? 'Con historial de rechazo'
+            : 'Con historial de rechazo x$resendCount');
 
     final canRepeat = order.status == PurchaseOrderStatus.eta;
     final copyRoute =
@@ -464,7 +466,14 @@ class _OrderHistoryCard extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 8),
-              Text('Estado: ${order.status.label}'),
+              Text('Estado: ${requesterReceiptStatusLabel(order)}'),
+              if (order.isRequesterReceiptAutoConfirmed) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'Cierre automatico por 10 dias sin confirmacion.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
               const SizedBox(height: 8),
 
               OrderSummaryLines(
@@ -485,7 +494,7 @@ class _OrderHistoryCard extends StatelessWidget {
                   child: OutlinedButton.icon(
                     onPressed: () => guardedPush(context, copyRoute),
                     icon: const Icon(Icons.content_copy_outlined),
-                    label: const Text('Volver a generar'),
+                    label: const Text('Copiar orden'),
                   ),
                 ),
               ],

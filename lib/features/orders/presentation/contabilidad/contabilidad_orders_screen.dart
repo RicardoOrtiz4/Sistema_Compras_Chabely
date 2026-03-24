@@ -369,7 +369,7 @@ class _ContabilidadOrderCard extends StatelessWidget {
                   orderIds: [order.id],
                   fromStatus: PurchaseOrderStatus.paymentDone,
                   toStatus: PurchaseOrderStatus.contabilidad,
-                  label: 'Tiempo en En proceso',
+                  label: 'Tiempo en transito de llegada',
                 ),
               ],
             ),
@@ -581,7 +581,7 @@ class _ContabilidadOrderReviewScreenState
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Captura una orden de compra interna para cada articulo antes de finalizar la compra.',
+            'Captura una orden de compra interna para cada articulo antes de registrar la llegada del material.',
           ),
         ),
       );
@@ -624,7 +624,7 @@ class _ContabilidadOrderReviewScreenState
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Compra finalizada. El usuario ya puede verla en Ordenes en proceso.',
+            'Llegada registrada. El usuario ya fue notificado para confirmar cuando reciba el material.',
           ),
         ),
       );
@@ -750,7 +750,7 @@ class _ContabilidadActionsPanel extends StatelessWidget {
                     height: 20,
                     child: AppSplash(compact: true, size: 20),
                   )
-                : const Text('Finalizar compra y notificar al usuario'),
+                : const Text('Registrar llegada y notificar'),
           ),
         ],
       ),
@@ -818,7 +818,7 @@ class _ContabilidadInternalOrderDialogState
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                'Captura una OC interna por cada articulo. En Contabilidad este dato es obligatorio antes de finalizar la compra.',
+                'Captura una OC interna por cada articulo. En Contabilidad este dato es obligatorio antes de registrar la llegada del material.',
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
               const SizedBox(height: 8),

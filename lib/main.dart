@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,12 +10,7 @@ import 'package:sistema_compras/features/orders/data/order_local_snapshot_store.
 import 'firebase_options.dart';
 import 'package:sistema_compras/app/app.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
-
-Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
-}
+import 'package:sistema_compras/core/startup_endpoint_guard.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,10 +18,8 @@ Future<void> main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+  assertNoLocalhostEndpoints(Firebase.app().options);
   await OrderLocalSnapshotStore.ensureInitialized();
-  if (_supportsBackgroundMessaging()) {
-    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-  }
 
   FlutterError.onError = (details) {
     logError(details.exception, details.stack, context: 'FlutterError');
@@ -45,15 +37,4 @@ Future<void> main() async {
   };
 
   runApp(const ProviderScope(child: SistemaComprasApp()));
-}
-
-bool _supportsBackgroundMessaging() {
-  if (kIsWeb) return false;
-  switch (defaultTargetPlatform) {
-    case TargetPlatform.android:
-    case TargetPlatform.iOS:
-      return true;
-    default:
-      return false;
-  }
 }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
@@ -10,7 +12,10 @@ import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/widgets/app_logo.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/features/auth/domain/app_user.dart';
+import 'package:sistema_compras/features/home/application/home_notifications.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
+import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
+import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 import 'package:sistema_compras/features/profile/presentation/profile_sheet.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
@@ -29,6 +34,10 @@ class HomeScreen extends ConsumerStatefulWidget {
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   ProviderSubscription<AsyncValue<AppUser?>>? _profileSubscription;
   ProviderSubscription<CompanyBranding>? _brandingSubscription;
+  ProviderSubscription<AsyncValue<List<PurchaseOrder>>>? _userOrdersSubscription;
+  ProviderSubscription<AsyncValue<List<PurchaseOrder>>>?
+      _operationalOrdersSubscription;
+  final Set<String> _autoFinalizeInFlight = <String>{};
 
   @override
   void initState() {
@@ -49,13 +58,55 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         warmUpPdfAssets(next);
       },
     );
+    _userOrdersSubscription = ref.listenManual<AsyncValue<List<PurchaseOrder>>>(
+      userOrdersProvider,
+      (_, next) {
+        _scheduleAutoFinalize(next.valueOrNull ?? const <PurchaseOrder>[]);
+      },
+    );
+    _operationalOrdersSubscription =
+        ref.listenManual<AsyncValue<List<PurchaseOrder>>>(
+      operationalOrdersProvider,
+      (_, next) {
+        final user = ref.read(currentUserProfileProvider).value;
+        if (user == null) return;
+        final canProcessAll = isAdminRole(user.role) ||
+            isComprasLabel(user.areaDisplay) ||
+            isDireccionGeneralLabel(user.areaDisplay);
+        if (!canProcessAll) return;
+        _scheduleAutoFinalize(next.valueOrNull ?? const <PurchaseOrder>[]);
+      },
+    );
   }
 
   @override
   void dispose() {
     _profileSubscription?.close();
     _brandingSubscription?.close();
+    _userOrdersSubscription?.close();
+    _operationalOrdersSubscription?.close();
     super.dispose();
+  }
+
+  void _scheduleAutoFinalize(List<PurchaseOrder> orders) {
+    for (final order in orders) {
+      if (!isOrderAutoReceiptDue(order)) continue;
+      if (_autoFinalizeInFlight.contains(order.id)) continue;
+      _autoFinalizeInFlight.add(order.id);
+      unawaited(_autoFinalizeOrder(order));
+    }
+  }
+
+  Future<void> _autoFinalizeOrder(PurchaseOrder order) async {
+    try {
+      await ref.read(purchaseOrderRepositoryProvider).autoConfirmRequesterReceived(
+            order: order,
+          );
+    } catch (error, stack) {
+      logError(error, stack, context: 'HomeScreen.autoConfirmRequesterReceived');
+    } finally {
+      _autoFinalizeInFlight.remove(order.id);
+    }
   }
 
   @override
@@ -105,6 +156,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ],
         ),
         actions: [
+          _HomeNotificationsAction(
+            onOpenProfile: () => showProfileSheet(context, ref),
+          ),
           if (isAdmin || isCompras)
             IconButton(
               icon: const Icon(Icons.monitor_heart_outlined),
@@ -129,19 +183,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               foreground: scheme.onPrimary,
               onTap: () => guardedPush(context, '/orders/create'),
             ),
-            _HomeBlockData(
-              title: 'Ordenes en proceso',
-              subtitle: 'Seguimiento por item de tus solicitudes',
-              icon: Icons.track_changes_outlined,
-              color: scheme.primaryContainer,
-              foreground: scheme.onPrimaryContainer,
-              countProvider: userInProcessOrdersCountProvider,
-              onTap: () => guardedPush(context, '/orders/in-process'),
-            ),
             if (isAdmin || isCompras)
               _HomeBlockData(
-                title: 'Órdenes por confirmar',
-                subtitle: 'Revisión pendiente de compras',
+                title: 'Autorizar ordenes',
+                subtitle: 'Revision inicial del requerimiento',
                 icon: Icons.fact_check_outlined,
                 color: scheme.secondary,
                 foreground: scheme.onSecondary,
@@ -150,8 +195,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               ),
             if (isAdmin || isCompras)
               _HomeBlockData(
-                title: 'Cotizaciones',
-                subtitle: 'Completar datos y armar cotizaciones por proveedor',
+                title: 'Compras',
+                subtitle: 'Completar datos y armar compras por proveedor',
                 icon: Icons.request_quote_outlined,
                 color: scheme.secondaryContainer,
                 foreground: scheme.onSecondaryContainer,
@@ -161,7 +206,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             if (isAdmin || isDireccionGeneral)
               _HomeBlockData(
                 title: 'Dirección General',
-                subtitle: 'Autorizar cotizaciones por proveedor',
+                subtitle: 'Autorizacion de pago por proveedor',
                 icon: Icons.approval_outlined,
                 color: scheme.tertiary,
                 foreground: scheme.onTertiary,
@@ -170,7 +215,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               ),
             if (isAdmin || isCompras)
               _HomeBlockData(
-                title: 'En proceso',
+                title: 'Agregar fecha de llegada',
                 subtitle: 'Definir fecha estimada y enviar a Contabilidad',
                 icon: Icons.assignment_turned_in_outlined,
                 color: scheme.secondary,
@@ -188,17 +233,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 countProvider: contabilidadCountProvider,
                 onTap: () => guardedPush(context, '/orders/contabilidad'),
               ),
-            if (isAdmin || isCompras)
-              _HomeBlockData(
-                title: 'Monitoreo de acciones',
-                subtitle: 'Rechazadas y finalizadas pendientes de recibido',
-                icon: Icons.report_gmailerrorred_outlined,
-                color: scheme.errorContainer,
-                foreground: scheme.onErrorContainer,
-                countProvider: globalActionMonitoringCountProvider,
-                onTap: () => guardedPush(context, '/orders/rejected/all'),
-              ),
-
             _HomeBlockData(
               title: 'Órdenes rechazadas',
               subtitle: 'Correcciones pendientes',
@@ -209,6 +243,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               countProvider: rejectedCountProvider,
               onTap: () => guardedPush(context, '/orders/rejected'),
             ),
+            _HomeBlockData(
+              title: 'Ordenes en proceso',
+              subtitle: 'Seguimiento del avance de tus solicitudes',
+              icon: Icons.track_changes_outlined,
+              color: scheme.primaryContainer,
+              foreground: scheme.onPrimaryContainer,
+              countProvider: userInProcessOrdersCountProvider,
+              onTap: () => guardedPush(context, '/orders/in-process'),
+            ),
+            if (isAdmin || isCompras)
+              _HomeBlockData(
+                title: 'Monitoreo de acciones',
+                subtitle: 'Rechazadas y finalizadas pendientes de recibido',
+                icon: Icons.report_gmailerrorred_outlined,
+                color: scheme.errorContainer,
+                foreground: scheme.onErrorContainer,
+                countProvider: globalActionMonitoringCountProvider,
+                onTap: () => guardedPush(context, '/orders/rejected/all'),
+              ),
           ];
 
           return Center(
@@ -362,6 +415,41 @@ class _HomeDrawer extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _HomeNotificationsAction extends ConsumerWidget {
+  const _HomeNotificationsAction({required this.onOpenProfile});
+
+  final VoidCallback onOpenProfile;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final total = ref.watch(homeNotificationsCountProvider);
+    return IconButton(
+      tooltip: 'Notificaciones',
+      onPressed: () => _showHomeNotificationsSheet(
+        context,
+        ref,
+        onOpenProfile: onOpenProfile,
+      ),
+      icon: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          const Icon(Icons.notifications_none_outlined),
+          if (total > 0)
+            Positioned(
+              right: -4,
+              top: -4,
+              child: _CountBadge(
+                count: total,
+                color: Theme.of(context).colorScheme.error,
+                textColor: Theme.of(context).colorScheme.onError,
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -807,4 +895,232 @@ Future<void> _showCompanySwitcher(
       );
     },
   );
+}
+
+Future<void> _showHomeNotificationsSheet(
+  BuildContext parentContext,
+  WidgetRef ref, {
+  required VoidCallback onOpenProfile,
+}) async {
+  await showModalBottomSheet<void>(
+    context: parentContext,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (context) {
+      return _HomeNotificationsSheet(
+        parentContext: parentContext,
+        onOpenProfile: onOpenProfile,
+      );
+    },
+  );
+}
+
+class _HomeNotificationsSheet extends ConsumerWidget {
+  const _HomeNotificationsSheet({
+    required this.parentContext,
+    required this.onOpenProfile,
+  });
+
+  final BuildContext parentContext;
+  final VoidCallback onOpenProfile;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final user = ref.watch(currentUserProfileProvider).value;
+    final notifications = ref.watch(homeNotificationsProvider);
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 640),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Notificaciones',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Avisos internos basados en tus pendientes y el estado de tus órdenes.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 12),
+              if (user != null)
+                _HomeNotificationsEmailCard(
+                  user: user,
+                  onOpenProfile: () {
+                    Navigator.of(context).pop();
+                    onOpenProfile();
+                  },
+                ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: notifications.isEmpty
+                    ? Center(
+                        child: Text(
+                          'No hay notificaciones internas por ahora.',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      )
+                    : ListView.separated(
+                        itemCount: notifications.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        itemBuilder: (context, index) {
+                          final item = notifications[index];
+                          return _HomeNotificationCard(
+                            item: item,
+                            onTap: () {
+                              Navigator.of(context).pop();
+                              guardedPush(parentContext, item.route);
+                            },
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _HomeNotificationsEmailCard extends StatelessWidget {
+  const _HomeNotificationsEmailCard({
+    required this.user,
+    required this.onOpenProfile,
+  });
+
+  final AppUser user;
+  final VoidCallback onOpenProfile;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final hasContactEmail = (user.contactEmail ?? '').trim().isNotEmpty;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            hasContactEmail ? Icons.mail_outline : Icons.mark_email_unread_outlined,
+            color: scheme.primary,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  notificationContactEmailLabel(user),
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  hasContactEmail
+                      ? 'Este correo se usa como contacto para recibir avisos y preparar correos desde tu dispositivo.'
+                      : 'Registra tu correo de contacto para recibir avisos manuales y preparar correos desde la app.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          TextButton(
+            onPressed: onOpenProfile,
+            child: Text(hasContactEmail ? 'Editar' : 'Configurar'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HomeNotificationCard extends StatelessWidget {
+  const _HomeNotificationCard({
+    required this.item,
+    required this.onTap,
+  });
+
+  final HomeNotificationItem item;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final accent = notificationToneColor(scheme, item.tone);
+
+    return Material(
+      color: scheme.surface,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: scheme.outlineVariant),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: accent.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(item.icon, color: accent, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.title,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      item.message,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Column(
+                children: [
+                  _CountBadge(
+                    count: item.count,
+                    color: accent,
+                    textColor: Colors.white,
+                  ),
+                  const SizedBox(height: 8),
+                  Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

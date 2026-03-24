@@ -128,8 +128,6 @@ String _buildOrderSearchText(
     addValue(item.customer);
     addValue(item.supplier);
     addValue(item.internalOrder);
-    addValue(item.reviewComment);
-    addValue(item.reviewFlagged);
     if (includeDates) {
       addDate(item.estimatedDate);
     }

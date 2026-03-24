@@ -363,6 +363,9 @@ class PurchaseOrderRepository {
       'contabilidadName': trimmedName.isEmpty ? null : trimmedName,
       'contabilidadArea': trimmedArea.isEmpty ? null : trimmedArea,
       'facturaUploadedAt': appServerTimestamp,
+      'materialArrivedAt': appServerTimestamp,
+      'materialArrivedName': trimmedName.isEmpty ? null : trimmedName,
+      'materialArrivedArea': trimmedArea.isEmpty ? null : trimmedArea,
       'completedAt': appServerTimestamp,
       'updatedAt': appServerTimestamp,
       ...timingUpdate,
@@ -380,7 +383,65 @@ class PurchaseOrderRepository {
       toStatus: PurchaseOrderStatus.eta,
       byUserId: actor.id,
       byRole: _actorRoleLabel(actor),
-      type: 'advance',
+      type: 'material_arrived',
+      comment: 'Material recibido en sitio y listo para confirmacion del solicitante.',
+    );
+  }
+
+  Future<void> registerArrivedItems({
+    required PurchaseOrder order,
+    required Set<int> itemLines,
+    required AppUser actor,
+    DateTime? registeredAt,
+  }) async {
+    if (itemLines.isEmpty) {
+      throw StateError('Selecciona al menos un item para registrar llegada.');
+    }
+
+    final orderRef = _ordersRef.child(order.id);
+    final arrivalMoment = registeredAt ?? DateTime.now();
+    final trimmedName = actor.name.trim();
+    final trimmedArea = actor.areaDisplay.trim();
+    var changedCount = 0;
+
+    final updatedItems = <PurchaseOrderItem>[];
+    for (final item in order.items) {
+      final matchesTarget =
+          itemLines.contains(item.line) &&
+          item.deliveryEtaDate != null &&
+          !item.isArrivalRegistered;
+      if (!matchesTarget) {
+        updatedItems.add(item);
+        continue;
+      }
+      changedCount += 1;
+      updatedItems.add(
+        item.copyWith(
+          arrivedAt: arrivalMoment,
+          arrivedByName: trimmedName.isEmpty ? null : trimmedName,
+          arrivedByArea: trimmedArea.isEmpty ? null : trimmedArea,
+        ),
+      );
+    }
+
+    if (changedCount == 0) {
+      throw StateError('No hubo items validos para registrar como llegados.');
+    }
+
+    await orderRef.update({
+      'items': updatedItems.map((item) => item.toMap()).toList(),
+      'updatedAt': appServerTimestamp,
+    });
+
+    await _appendEvent(
+      orderRef,
+      fromStatus: order.status,
+      toStatus: order.status,
+      byUserId: actor.id,
+      byRole: _actorRoleLabel(actor),
+      type: 'items_arrived',
+      itemsSnapshot: updatedItems,
+      comment: '$changedCount item(s) marcados como llegados por Compras.',
     );
   }
 
@@ -402,6 +463,7 @@ class PurchaseOrderRepository {
       'requesterReceivedAt': appServerTimestamp,
       'requesterReceivedName': trimmedName.isEmpty ? null : trimmedName,
       'requesterReceivedArea': trimmedArea.isEmpty ? null : trimmedArea,
+      'requesterReceiptAutoConfirmed': null,
       'completedAt': appServerTimestamp,
       'updatedAt': appServerTimestamp,
     });
@@ -414,6 +476,43 @@ class PurchaseOrderRepository {
       byRole: _actorRoleLabel(actor),
       type: 'received',
       comment: 'Orden confirmada como recibida por el solicitante.',
+    );
+  }
+
+  Future<void> autoConfirmRequesterReceived({
+    required PurchaseOrder order,
+  }) async {
+    if (order.isRequesterReceiptConfirmed) return;
+    if (!isOrderAutoReceiptDue(order)) {
+      throw StateError('La orden aun no cumple el plazo de autocierre.');
+    }
+
+    final orderRef = _ordersRef.child(order.id);
+    final nextStatus = PurchaseOrderStatus.eta;
+    final payload = <String, Object?>{
+      'status': nextStatus.name,
+      'requesterReceivedAt': appServerTimestamp,
+      'requesterReceivedName': 'Sistema',
+      'requesterReceivedArea': 'Autocierre 10 dias',
+      'requesterReceiptAutoConfirmed': true,
+      'completedAt': appServerTimestamp,
+      'updatedAt': appServerTimestamp,
+    };
+    if (order.status != nextStatus) {
+      payload.addAll(_statusTimingUpdate(order));
+    }
+
+    await orderRef.update(payload);
+
+    await _appendEvent(
+      orderRef,
+      fromStatus: order.status,
+      toStatus: nextStatus,
+      byUserId: 'system',
+      byRole: 'Sistema',
+      type: 'received_timeout',
+      comment:
+          'Autocierre por 10 dias sin confirmacion del solicitante. Estado final: llegado pero no confirmado.',
     );
   }
 
@@ -573,7 +672,7 @@ class PurchaseOrderRepository {
     final ref = _supplierQuotesRef.push();
     final quoteId = ref.key;
     if (quoteId == null || quoteId.isEmpty) {
-      throw StateError('No se pudo crear la cotizacion del proveedor.');
+      throw StateError('No se pudo crear la compra del proveedor.');
     }
     final folio = await _reserveNextSupplierQuoteFolio(_database);
 
@@ -618,6 +717,8 @@ class PurchaseOrderRepository {
       supplier: quote.supplier.trim(),
       items: items,
       links: _sanitizeQuoteLinks(links),
+      facturaLinks: quote.facturaLinks,
+      paymentLinks: quote.paymentLinks,
       comprasComment: comprasComment,
       status: SupplierQuoteStatus.draft,
       createdAt: quote.createdAt,
@@ -656,7 +757,7 @@ class PurchaseOrderRepository {
   }) async {
     final links = _sanitizeQuoteLinks(quote.links);
     if (links.isEmpty) {
-      throw StateError('Agrega al menos un link de cotizacion.');
+      throw StateError('Agrega al menos un link de compra.');
     }
     final refsByOrder = <String, Set<int>>{};
     for (final ref in quote.items) {
@@ -671,7 +772,7 @@ class PurchaseOrderRepository {
       final order = relatedOrders[orderId];
       if (order == null) {
         throw StateError(
-          'No se encontro la orden $orderId para enviar a Direccion General.',
+          'No se encontro la orden $orderId para enviar a autorizacion de pago.',
         );
       }
 
@@ -685,7 +786,7 @@ class PurchaseOrderRepository {
         }
         if (item == null) {
           throw StateError(
-            'No se encontro el item $line de la orden $orderId en esta cotizacion.',
+            'No se encontro el item $line de la orden $orderId en esta compra.',
           );
         }
         if (!_hasQuoteAssignmentData(item)) {
@@ -697,7 +798,7 @@ class PurchaseOrderRepository {
         if (quoteId != quote.id ||
             item.quoteStatus == PurchaseOrderItemQuoteStatus.rejected) {
           throw StateError(
-            'La orden $orderId aun tiene items seleccionados sin una cotizacion valida para enviar a Direccion General.',
+            'La orden $orderId aun tiene items seleccionados sin una compra valida para enviar a autorizacion de pago.',
           );
         }
       }
@@ -725,6 +826,7 @@ class PurchaseOrderRepository {
         items: quote.items,
         links: links,
         facturaLinks: quote.facturaLinks,
+        paymentLinks: quote.paymentLinks,
         comprasComment: quote.comprasComment,
         status: SupplierQuoteStatus.pendingDireccion,
         createdAt: quote.createdAt,
@@ -744,6 +846,7 @@ class PurchaseOrderRepository {
         items: quote.items,
         links: links,
         facturaLinks: quote.facturaLinks,
+        paymentLinks: quote.paymentLinks,
         comprasComment: quote.comprasComment,
         status: SupplierQuoteStatus.pendingDireccion,
         createdAt: quote.createdAt,
@@ -778,6 +881,7 @@ class PurchaseOrderRepository {
       items: quote.items,
       links: quote.links,
       facturaLinks: quote.facturaLinks,
+      paymentLinks: quote.paymentLinks,
       comprasComment: quote.comprasComment,
       status: SupplierQuoteStatus.approved,
       createdAt: quote.createdAt,
@@ -943,6 +1047,7 @@ class PurchaseOrderRepository {
           items: quote.items,
           links: quote.links,
           facturaLinks: quote.facturaLinks,
+          paymentLinks: quote.paymentLinks,
           comprasComment: quote.comprasComment,
           status: quote.status,
           createdAt: quote.createdAt,
@@ -967,14 +1072,17 @@ class PurchaseOrderRepository {
     }
   }
 
-  Future<void> saveSupplierQuoteFacturaLinks({
+  Future<void> saveSupplierQuoteAccountingLinks({
     required SupplierQuote quote,
-    required List<String> links,
+    required List<String> facturaLinks,
+    required List<String> paymentLinks,
     AppUser? actor,
   }) async {
-    final cleaned = _sanitizeQuoteLinks(links);
+    final cleanedFacturaLinks = _sanitizeQuoteLinks(facturaLinks);
+    final cleanedPaymentLinks = _sanitizeQuoteLinks(paymentLinks);
     await _supplierQuotesRef.child(quote.id).update({
-      'facturaLinks': cleaned.isEmpty ? null : cleaned,
+      'facturaLinks': cleanedFacturaLinks.isEmpty ? null : cleanedFacturaLinks,
+      'paymentLinks': cleanedPaymentLinks.isEmpty ? null : cleanedPaymentLinks,
       'updatedAt': appServerTimestamp,
     });
     await _appendSupplierQuoteHistorySnapshot(
@@ -984,7 +1092,8 @@ class PurchaseOrderRepository {
         supplier: quote.supplier,
         items: quote.items,
         links: quote.links,
-        facturaLinks: cleaned,
+        facturaLinks: cleanedFacturaLinks,
+        paymentLinks: cleanedPaymentLinks,
         comprasComment: quote.comprasComment,
         status: quote.status,
         createdAt: quote.createdAt,
@@ -1069,6 +1178,7 @@ class PurchaseOrderRepository {
 
     await _supplierQuotesRef.child(quote.id).update({
       'facturaLinks': null,
+      'paymentLinks': null,
       'updatedAt': appServerTimestamp,
     });
 
@@ -1080,6 +1190,7 @@ class PurchaseOrderRepository {
         items: quote.items,
         links: quote.links,
         facturaLinks: const <String>[],
+        paymentLinks: const <String>[],
         comprasComment: quote.comprasComment,
         status: quote.status,
         createdAt: quote.createdAt,
@@ -1102,21 +1213,21 @@ class PurchaseOrderRepository {
     );
   }
 
-  Future<void> saveInternalOrderForItems({
+  Future<void> saveInternalOrdersForItems({
     required PurchaseOrder order,
-    required Set<int> lines,
-    required String? internalOrder,
+    required Map<int, String> internalOrdersByLine,
   }) async {
-    if (lines.isEmpty) return;
-    final trimmed = internalOrder?.trim() ?? '';
+    if (internalOrdersByLine.isEmpty) return;
     var changed = false;
     final updatedItems = <PurchaseOrderItem>[];
     for (final item in order.items) {
-      if (!lines.contains(item.line)) {
+      final nextValue = internalOrdersByLine[item.line];
+      if (nextValue == null) {
         updatedItems.add(item);
         continue;
       }
       changed = true;
+      final trimmed = nextValue.trim();
       updatedItems.add(
         trimmed.isEmpty
             ? item.copyWith(clearInternalOrder: true)
@@ -1144,6 +1255,7 @@ class PurchaseOrderRepository {
       items: quote.items,
       links: quote.links,
       facturaLinks: quote.facturaLinks,
+      paymentLinks: quote.paymentLinks,
       comprasComment: quote.comprasComment,
       status: SupplierQuoteStatus.rejected,
       createdAt: quote.createdAt,
@@ -1202,7 +1314,7 @@ class PurchaseOrderRepository {
       quote: quote,
       eventType: 'returned_to_cotizaciones',
       actor: actor,
-      comment: 'Cotizacion cancelada desde dashboard de compras.',
+      comment: 'Compra cancelada desde dashboard de compras.',
     );
     final relatedOrders = await _fetchOrdersByIds(_database, quote.orderIds);
     for (final order in relatedOrders.values) {
@@ -1247,7 +1359,7 @@ class PurchaseOrderRepository {
         byRole: _actorRoleLabel(actor),
         type: 'return',
         itemsSnapshot: updatedItems,
-        comment: 'Cotizacion cancelada desde dashboard de compras.',
+        comment: 'Compra cancelada desde dashboard de compras.',
       );
     }
 
@@ -1348,6 +1460,7 @@ class PurchaseOrderRepository {
       'supplier': quote.supplier.trim(),
       'links': quote.links.isEmpty ? null : quote.links,
       'facturaLinks': quote.facturaLinks.isEmpty ? null : quote.facturaLinks,
+      'paymentLinks': quote.paymentLinks.isEmpty ? null : quote.paymentLinks,
       'orderIds': quote.orderIds,
       'orderCount': ordersPayload.length,
       'itemCount': quote.items.length,
@@ -1370,7 +1483,7 @@ class PurchaseOrderRepository {
       'processedByArea': quote.processedByArea,
       'actorName': actorName.isEmpty ? null : actorName,
       'actorArea': actorArea.isEmpty ? null : actorArea,
-      'pdfSuggestedName': 'cotizacion_${quote.displayId}.pdf',
+      'pdfSuggestedName': 'compra_${quote.displayId}.pdf',
       'orders': ordersPayload,
       'timestamp': appServerTimestamp,
     });
@@ -1595,12 +1708,12 @@ Future<String> _reserveNextSupplierQuoteFolio(AppDatabase database) async {
   });
 
   if (!result.committed) {
-    throw StateError('No se pudo generar el folio de cotizacion.');
+    throw StateError('No se pudo generar el folio de compra.');
   }
 
   final nextValue = _parseCounterValue(result.snapshot.value);
   if (nextValue <= 0) {
-    throw StateError('Folio de cotizacion invalido.');
+    throw StateError('Folio de compra invalido.');
   }
 
   return 'CP-${nextValue.toString().padLeft(6, '0')}';

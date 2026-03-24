@@ -72,6 +72,7 @@ class SupplierQuote {
     this.status = SupplierQuoteStatus.draft,
     List<String> links = const [],
     this.facturaLinks = const [],
+    this.paymentLinks = const [],
     List<String>? orderIds,
     String? pdfUrl,
     this.createdAt,
@@ -116,6 +117,7 @@ class SupplierQuote {
   final SupplierQuoteStatus status;
   final List<String> links;
   final List<String> facturaLinks;
+  final List<String> paymentLinks;
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final String? comprasComment;
@@ -171,6 +173,7 @@ class SupplierQuote {
           SupplierQuoteStatus.draft,
       links: _parseLinks(data['links'] ?? data['pdfUrls'] ?? data['pdfUrl']),
       facturaLinks: _parseLinks(data['facturaLinks']),
+      paymentLinks: _parseLinks(data['paymentLinks']),
       createdAt: _parseDateTime(data['createdAt']),
       updatedAt: _parseDateTime(data['updatedAt']),
       comprasComment: data['comprasComment'] as String?,
@@ -197,6 +200,10 @@ class SupplierQuote {
         .map((entry) => entry.trim())
         .where((entry) => entry.isNotEmpty)
         .toList(growable: false);
+    final cleanedPaymentLinks = paymentLinks
+        .map((entry) => entry.trim())
+        .where((entry) => entry.isNotEmpty)
+        .toList(growable: false);
     return {
       'folio': (folio?.trim().isEmpty ?? true) ? null : folio!.trim(),
       'supplier': supplier.trim(),
@@ -204,6 +211,7 @@ class SupplierQuote {
       'status': status.name,
       'links': cleanedLinks.isEmpty ? null : cleanedLinks,
       'facturaLinks': cleanedFacturaLinks.isEmpty ? null : cleanedFacturaLinks,
+      'paymentLinks': cleanedPaymentLinks.isEmpty ? null : cleanedPaymentLinks,
       'pdfUrl': cleanedLinks.isEmpty ? null : cleanedLinks.first,
       'pdfUrls': cleanedLinks.isEmpty ? null : cleanedLinks,
       'createdAt': createdAt?.millisecondsSinceEpoch,

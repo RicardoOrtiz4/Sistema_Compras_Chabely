@@ -177,18 +177,18 @@ class _CotizacionesOrdersScreenState
             ? pendingOrdersAsync.when(
                 data: (orders) {
                   return compactAppBar
-                      ? const Text('Cotizaciones')
+                      ? const Text('Compras')
                       : OrderModuleAppBarTitle(
-                          title: 'Cotizaciones',
+                          title: 'Compras',
                           counts: OrderUrgencyCounts.fromOrders(orders),
                           filter: _urgencyFilter,
                           onSelected: _setUrgencyFilter,
                         );
                 },
-                loading: () => const Text('Cotizaciones'),
-                error: (_, __) => const Text('Cotizaciones'),
+                loading: () => const Text('Compras'),
+                error: (_, __) => const Text('Compras'),
               )
-            : const Text('Dashboard de cotizaciones'),
+            : const Text('Dashboard de compras'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () {
@@ -518,7 +518,9 @@ class _CotizacionOrderCard extends StatelessWidget {
                       border: Border.all(color: Colors.red.shade400),
                     ),
                     child: Text(
-                      returnCount > 1 ? 'Reenviada x$returnCount' : 'Reenviada',
+                      returnCount > 1
+                          ? 'Con historial de rechazo x$returnCount'
+                          : 'Con historial de rechazo',
                       style: TextStyle(
                         color: Colors.red.shade800,
                         fontSize: 12,
@@ -534,7 +536,8 @@ class _CotizacionOrderCard extends StatelessWidget {
             const SizedBox(height: 8),
             if (resubmissions.isNotEmpty)
               Text(
-                'Reenvío: ${_formatResubmissionStamp(resubmissions.last, order.createdAt)}',
+                'Ultima actualizacion despues de rechazo: '
+                '${_formatResubmissionStamp(resubmissions.last, order.createdAt)}',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             const SizedBox(height: 6),
@@ -580,7 +583,7 @@ class _CotizacionPendingTimePill extends ConsumerWidget {
         if (duration == null) return const SizedBox.shrink();
         return StatusDurationPill(
           text:
-              'Tiempo en ordenes por confirmar: ${formatDurationLabel(duration)}',
+              'Tiempo en autorizacion de requerimiento: ${formatDurationLabel(duration)}',
         );
       },
       loading: () => const SizedBox.shrink(),
@@ -835,7 +838,7 @@ class _CotizacionOrderPreviewScreenState
                                 messenger.showSnackBar(
                                   SnackBar(
                                     content: Text(
-                                      'Orden ${resolvedOrder.id} regresada a ordenes por confirmar.',
+                                      'Orden ${resolvedOrder.id} regresada a autorizacion de requerimiento.',
                                     ),
                                   ),
                                 );
@@ -856,7 +859,9 @@ class _CotizacionOrderPreviewScreenState
                                 }
                               }
                             },
-                      child: const Text('Regresar a ordenes por confirmar'),
+                      child: const Text(
+                        'Regresar a autorizacion de requerimiento',
+                      ),
                     );
 
                     return Column(
@@ -937,9 +942,9 @@ Future<bool?> _confirmOpenCompleteData(BuildContext context) {
   return showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
-      title: const Text('Continuar con cotización'),
+      title: const Text('Continuar con compra'),
       content: const Text(
-        'Para este punto ya debes contar con la cotización externa del proveedor para continuar. ¿Deseas seguir?',
+        'Para este punto ya debes contar con la compra externa del proveedor para continuar. ¿Deseas seguir?',
       ),
       actions: [
         TextButton(
@@ -996,7 +1001,7 @@ class _CotizacionOrderReviewScreenState
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Completar datos de cotizacion'),
+        title: const Text('Completar datos de compra'),
       ),
       body: orderAsync.when(
         data: (order) {
@@ -1184,7 +1189,7 @@ class _CotizacionOrderReviewScreenState
       final savedPdfData = _buildPdfData(order, payload);
       if (!mounted) return;
       SessionDraftStore.clearCotizacion(order.id);
-      _showMessage('Datos completos guardados.');
+      _showMessage('Proceso de liberacion guardado.');
       Navigator.of(
         context,
       ).pop(_CotizacionSaveResult(pdfData: savedPdfData, ready: true));

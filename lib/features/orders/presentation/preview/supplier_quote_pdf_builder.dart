@@ -18,6 +18,7 @@ class SupplierQuotePdfItemData {
     this.partNumber,
     this.customer,
     this.amount,
+    this.etaDate,
   });
 
   final int line;
@@ -28,6 +29,7 @@ class SupplierQuotePdfItemData {
   final String? partNumber;
   final String? customer;
   final num? amount;
+  final DateTime? etaDate;
 }
 
 class SupplierQuotePdfOrderData {
@@ -103,7 +105,7 @@ class SupplierQuotePdfData {
   }
 }
 
-const String _supplierQuotePdfTemplateVersion = '2026-03-20-direccion-v10';
+const String _supplierQuotePdfTemplateVersion = '2026-03-23-proveedor-v11';
 const int _maxSupplierQuotePdfCacheEntries = 16;
 const int _maxSupplierQuotePdfCacheBytes = 16 * 1024 * 1024;
 
@@ -196,6 +198,8 @@ String supplierQuotePdfCacheKey(SupplierQuotePdfData data) {
         ..write(item.line)
         ..write(':')
         ..write(item.amount ?? 0)
+        ..write(':')
+        ..write(item.etaDate?.millisecondsSinceEpoch ?? 0)
         ..write(':')
         ..write(item.description)
         ..write(':')
@@ -307,7 +311,7 @@ pw.Widget _buildHeader(
               crossAxisAlignment: pw.CrossAxisAlignment.start,
               children: [
                 pw.Text(
-                  'COTIZACION POR PROVEEDOR',
+                  data.supplier,
                   style: pw.TextStyle(
                     fontSize: 24,
                     fontWeight: pw.FontWeight.bold,
@@ -316,7 +320,7 @@ pw.Widget _buildHeader(
                 ),
                 pw.SizedBox(height: 6),
                 pw.Text(
-                  data.supplier,
+                  'Cotizacion por proveedor',
                   style: pw.TextStyle(
                     fontSize: 20,
                     fontWeight: pw.FontWeight.bold,
@@ -381,7 +385,7 @@ pw.Widget _buildHeader(
           borderRadius: pw.BorderRadius.circular(6),
         ),
         child: pw.Text(
-          'Ordenes: $totalOrders   |   Items: $totalItems',
+          'Ordenes: $totalOrders   |   Items: $totalItems   |   Monto: solo items de este proveedor',
           style: pw.TextStyle(
             fontSize: 12,
             fontWeight: pw.FontWeight.bold,
@@ -389,50 +393,7 @@ pw.Widget _buildHeader(
           ),
         ),
       ),
-      if (data.links.isNotEmpty) ...[
-        pw.SizedBox(height: 12),
-        pw.Text(
-          'Links de cotizacion',
-          style: pw.TextStyle(
-            fontSize: 12,
-            fontWeight: pw.FontWeight.bold,
-            color: PdfColors.grey800,
-          ),
-        ),
-        pw.SizedBox(height: 4),
-        for (final link in data.links)
-          pw.Padding(
-            padding: const pw.EdgeInsets.only(bottom: 3),
-            child: _quoteLink(link),
-          ),
-      ],
     ],
-  );
-}
-
-pw.Widget _quoteLink(String rawLink) {
-  final link = rawLink.trim();
-  if (link.isEmpty) {
-    return pw.SizedBox.shrink();
-  }
-
-  final text = pw.Text(
-    link,
-    style: pw.TextStyle(
-      fontSize: 10,
-      color: PdfColors.blue700,
-      decoration: pw.TextDecoration.underline,
-    ),
-  );
-
-  final uri = Uri.tryParse(link);
-  if (uri == null || !uri.isAbsolute) {
-    return text;
-  }
-
-  return pw.UrlLink(
-    destination: link,
-    child: text,
   );
 }
 
@@ -469,14 +430,6 @@ pw.Widget _buildOrderBlock(SupplierQuotePdfOrderData order) {
         labelColor: PdfColors.grey700,
         valueColor: PdfColors.black,
       ),
-      _detailLine(
-        'Total de esta orden',
-        _formatMoney(order.selectedTotal),
-        valueSize: 14,
-        labelColor: PdfColors.orange800,
-        valueColor: PdfColors.orange900,
-        valueWeight: pw.FontWeight.bold,
-      ),
       pw.SizedBox(height: 10),
       for (final item in items) ...[
         _itemCard(item),
@@ -490,6 +443,9 @@ pw.Widget _buildOrderBlock(SupplierQuotePdfOrderData order) {
 pw.Widget _itemCard(SupplierQuotePdfItemData item) {
   final unit = item.unit.trim();
   final quantityLabel = '${_formatNum(item.quantity)} ${unit.isEmpty ? '' : unit}'.trim();
+  final etaLabel = item.etaDate == null
+      ? null
+      : DateFormat('dd/MM/yyyy').format(item.etaDate!);
 
   return pw.Container(
     width: double.infinity,
@@ -531,6 +487,13 @@ pw.Widget _itemCard(SupplierQuotePdfItemData item) {
           _detailLine(
             'Cliente',
             item.customer!.trim(),
+            labelColor: PdfColors.grey700,
+            valueColor: PdfColors.black,
+          ),
+        if (etaLabel != null)
+          _detailLine(
+            'Fecha estimada de entrega',
+            etaLabel,
             labelColor: PdfColors.grey700,
             valueColor: PdfColors.black,
           ),

@@ -1,4 +1,11 @@
 import 'package:flutter/material.dart';
+
+const pendingRequirementAuthorizationLabel =
+    'Por autorizacion de requerimiento';
+const paymentAuthorizationLabel = 'Por autorizacion de pago';
+const releaseProcessLabel = 'Proceso de liberacion';
+const inTransitArrivalLabel = 'En transito de llegada';
+
 enum PurchaseOrderStatus {
   draft,
   pendingCompras,
@@ -16,15 +23,15 @@ extension PurchaseOrderStatusX on PurchaseOrderStatus {
       case PurchaseOrderStatus.draft:
         return 'Requiere correccion';
       case PurchaseOrderStatus.pendingCompras:
-        return 'Por confirmar';
+        return pendingRequirementAuthorizationLabel;
       case PurchaseOrderStatus.cotizaciones:
-        return 'Cotizaciones';
+        return 'Compras';
       case PurchaseOrderStatus.dataComplete:
-        return 'Datos completos';
+        return releaseProcessLabel;
       case PurchaseOrderStatus.authorizedGerencia:
-        return 'En Direccion General';
+        return paymentAuthorizationLabel;
       case PurchaseOrderStatus.paymentDone:
-        return 'En proceso';
+        return inTransitArrivalLabel;
       case PurchaseOrderStatus.contabilidad:
         return 'En Contabilidad';
       case PurchaseOrderStatus.orderPlaced:
@@ -98,8 +105,8 @@ extension PurchaseOrderUrgencyX on PurchaseOrderUrgency {
   }
 }
 const appLogoAsset = 'evidencias/LOGO CHABELY.png';
-const int defaultOrderPageSize = 5;
-const int orderPageSizeStep = 5;
+const int defaultOrderPageSize = 10;
+const int orderPageSizeStep = 10;
 const defaultStatusFlow = <PurchaseOrderStatus>[
   PurchaseOrderStatus.pendingCompras,
   PurchaseOrderStatus.cotizaciones,

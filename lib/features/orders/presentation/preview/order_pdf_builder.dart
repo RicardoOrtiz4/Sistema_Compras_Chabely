@@ -767,13 +767,6 @@ pw.Widget _buildMetaSection(
   final hasFolio = _hasText(data.folio);
   final showFolioField = data.blankTemplate || hasFolio;
   final urgentJustification = (data.urgentJustification ?? '').trim();
-  final requestedDeliveryLabel = data.blankTemplate
-      ? ''
-      : data.requestedDeliveryDate == null
-      ? null
-      : dateFormat.format(data.requestedDeliveryDate!);
-  final showRequestedDeliveryField =
-      data.blankTemplate || requestedDeliveryLabel != null;
   final requesterName = data.blankTemplate ? '' : data.requesterName;
   final areaName = data.blankTemplate ? '' : data.areaName;
   final createdLabel = data.blankTemplate
@@ -782,7 +775,7 @@ pw.Widget _buildMetaSection(
       ? dateFormat.format(data.createdAt)
       : '${dateFormat.format(data.createdAt)} ${timeFormat.format(data.createdAt)}';
 
-  final resubmissionLabel = _pendingResubmissionLabel(data);
+  final String? resubmissionLabel = null;
 
   return pw.Container(
     decoration: pw.BoxDecoration(border: border),
@@ -912,36 +905,6 @@ pw.Widget _buildMetaSection(
                           fontSize: 7,
                           color: PdfColors.grey700,
                           fontStyle: pw.FontStyle.italic,
-                        ),
-                      ),
-                    ],
-                    if (!data.blankTemplate &&
-                        data.resubmissionDates.isNotEmpty) ...[
-                      pw.SizedBox(height: 2),
-                      for (var i = 0; i < data.resubmissionDates.length; i++)
-                        pw.Text(
-                          'REENVÍO ${i + 1}: ${_formatResubmissionStampPdf(data.resubmissionDates[i], data.createdAt, dateFormat, timeFormat)}',
-                          style: pw.TextStyle(
-                            fontSize: 7,
-                            color: PdfColors.grey700,
-                            fontStyle: pw.FontStyle.italic,
-                          ),
-                        ),
-                    ],
-                    if (showRequestedDeliveryField) ...[
-                      pw.SizedBox(height: 4),
-                      pw.RichText(
-                        text: pw.TextSpan(
-                          children: [
-                            pw.TextSpan(
-                              text: 'FECHA REQUERIDA: ',
-                              style: labelStyle,
-                            ),
-                            pw.TextSpan(
-                              text: requestedDeliveryLabel,
-                              style: valueStyle,
-                            ),
-                          ],
                         ),
                       ),
                     ],
@@ -1282,22 +1245,6 @@ String _acerproRefLine(CompanyBranding branding) {
   final rev = branding.pdfRevision?.trim() ?? '';
   if (rev.isEmpty) return ref;
   return '$ref $rev';
-}
-
-
-String? _pendingResubmissionLabel(OrderPdfData data) {
-  final label = data.pendingResubmissionLabel?.trim();
-  if (label == null || label.isEmpty) return null;
-  return label;
-}
-
-String _formatResubmissionStampPdf(
-  DateTime stamp,
-  DateTime createdAt,
-  DateFormat dateFormat,
-  DateFormat timeFormat,
-) {
-  return '${dateFormat.format(stamp)} ${timeFormat.format(stamp)}';
 }
 
 String _autorizaName(OrderPdfData data) {

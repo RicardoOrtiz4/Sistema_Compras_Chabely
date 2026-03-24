@@ -1,8 +1,6 @@
 import 'dart:collection';
 
-import 'package:intl/intl.dart';
 import 'package:sistema_compras/core/company_branding.dart';
-import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
@@ -143,15 +141,8 @@ OrderPdfData _buildPdfDataFromOrderImpl(
   final effectiveBranding = _brandingForOrder(order, branding);
   final effectiveCreatedAt = createdAt ?? order.createdAt ?? DateTime.now();
   final effectiveUpdatedAt = suppressUpdatedAt ? null : (updatedAt ?? order.updatedAt);
-  final effectiveResubmissionDates = resubmissionDates ?? order.resubmissionDates;
-  final effectivePendingResubmissionLabel =
-      pendingResubmissionLabel ??
-      _fallbackResubmissionLabel(
-        order,
-        createdAt: effectiveCreatedAt,
-        updatedAt: effectiveUpdatedAt,
-        resubmissionDates: effectiveResubmissionDates,
-      );
+  const effectiveResubmissionDates = <DateTime>[];
+  const String? effectivePendingResubmissionLabel = null;
 
   final effectiveSupplierBudgets = hideBudget
       ? const <String, num>{}
@@ -321,34 +312,6 @@ CompanyBranding _brandingForOrder(
   CompanyBranding fallback,
 ) {
   return fallback;
-}
-
-final DateFormat _pdfMapperResubmissionDateFormat = DateFormat('dd/MM/yyyy');
-final DateFormat _pdfMapperResubmissionTimeFormat = DateFormat('HH:mm');
-
-String? _fallbackResubmissionLabel(
-  PurchaseOrder order, {
-  required DateTime createdAt,
-  required DateTime? updatedAt,
-  required List<DateTime> resubmissionDates,
-}) {
-  if (order.status == PurchaseOrderStatus.draft) return null;
-  if (order.returnCount <= 0) return null;
-  if (resubmissionDates.isNotEmpty) return null;
-  if (updatedAt == null) return null;
-
-  return 'REENVIO ${order.returnCount}: ${_formatFallbackResubmissionStamp(updatedAt, createdAt)}';
-}
-
-String _formatFallbackResubmissionStamp(DateTime stamp, DateTime createdAt) {
-  if (_isSameDate(stamp, createdAt)) {
-    return _pdfMapperResubmissionTimeFormat.format(stamp);
-  }
-  return '${_pdfMapperResubmissionDateFormat.format(stamp)} ${_pdfMapperResubmissionTimeFormat.format(stamp)}';
-}
-
-bool _isSameDate(DateTime a, DateTime b) {
-  return a.year == b.year && a.month == b.month && a.day == b.day;
 }
 
 num _sumBudgets(Map<String, num> budgets) {

@@ -1,4 +1,4 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:csv/csv.dart';
@@ -160,7 +160,7 @@ String buildMonitoringActorSummary(PurchaseOrder order) {
   );
   _appendActor(
     parts,
-    'DG',
+    'Aut. pago',
     order.direccionGeneralName,
     order.direccionGeneralArea,
   );
@@ -294,9 +294,9 @@ String buildMonitoringCsv(
       'tiempoActualEnEstado',
       'creadaFechaHora',
       'enviadaComprasFechaHora',
-      'primeraCotizacionFechaHora',
-      'primeraCotizacionEnviadaDGFechaHora',
-      'ultimaAutorizacionDGFechaHora',
+      'primeraCompraFechaHora',
+      'primeraCompraEnviadaAutorizacionPagoFechaHora',
+      'ultimaAutorizacionPagoFechaHora',
       'finalizadaContabilidadFechaHora',
       'recibidaSolicitanteFechaHora',
       'actualizadaFechaHora',
@@ -323,7 +323,7 @@ String buildMonitoringCsv(
       'segundoRechazoTiempoHastaSiguiente',
       'ultimoComentario',
       'actores',
-      'cotizacionesRelacionadas',
+      'comprasRelacionadas',
       'trazabilidadCompleta',
       for (final status in PurchaseOrderStatus.values) 'acumulado_${status.name}',
     ],
@@ -522,7 +522,7 @@ Future<Uint8List> buildMonitoringPdf({
             'Urgencia',
             'Estado',
             'Tiempo actual',
-            'Compras / DG / Contabilidad',
+            'Compras / Aut. pago / Contabilidad',
           ],
           data: [
             for (final audit in audits)
@@ -618,6 +618,7 @@ _MonitoringOrderAudit _buildMonitoringOrderAudit({
             order.completedAt,
     receivedByRequesterAt:
         _firstEventByType(sortedEvents, 'received')?.timestamp ??
+            _firstEventByType(sortedEvents, 'received_timeout')?.timestamp ??
             order.requesterReceivedAt,
     firstReturn: returnEvents.isNotEmpty ? returnEvents.first : null,
     secondReturn: returnEvents.length > 1 ? returnEvents[1] : null,
@@ -636,7 +637,7 @@ List<_MonitoringTimelineEntry> _buildTimeline({
       timestamp: order.createdAt,
       title: 'Orden creada',
       actor: describeActor(order.requesterName, order.areaName) ?? order.requesterName,
-      detail: 'La orden se registró en el sistema.',
+      detail: 'La orden se registrÃ³ en el sistema.',
     ),
     for (final event in events)
       _MonitoringTimelineEntry(
@@ -649,42 +650,42 @@ List<_MonitoringTimelineEntry> _buildTimeline({
       if (quote.createdAt != null)
         _MonitoringTimelineEntry(
           timestamp: quote.createdAt,
-          title: 'Cotización creada',
+          title: 'Compra creada',
           actor:
               describeActor(quote.processedByName, quote.processedByArea) ??
                   _quoteSupplierLabel(quote),
           detail:
-              'Proveedor ${_quoteSupplierLabel(quote)} · cotización ${quote.displayId}.',
+              'Proveedor ${_quoteSupplierLabel(quote)} - compra ${quote.displayId}.',
         ),
       if (quote.sentToDireccionAt != null)
         _MonitoringTimelineEntry(
           timestamp: quote.sentToDireccionAt,
-          title: 'Cotización enviada a DG',
+          title: 'Compra enviada a autorizacion de pago',
           actor:
               describeActor(quote.processedByName, quote.processedByArea) ??
                   _quoteSupplierLabel(quote),
           detail:
-              'Proveedor ${_quoteSupplierLabel(quote)} · cotización ${quote.displayId}.',
+              'Proveedor ${_quoteSupplierLabel(quote)} - compra ${quote.displayId}.',
         ),
       if (quote.approvedAt != null)
         _MonitoringTimelineEntry(
           timestamp: quote.approvedAt,
-          title: 'Cotización aprobada',
+          title: 'Compra aprobada',
           actor:
               describeActor(quote.approvedByName, quote.approvedByArea) ??
-                  'Dirección General',
+                  'DirecciÃ³n General',
           detail:
-              'Proveedor ${_quoteSupplierLabel(quote)} · cotización ${quote.displayId}.',
+              'Proveedor ${_quoteSupplierLabel(quote)} - compra ${quote.displayId}.',
         ),
       if (quote.rejectedAt != null)
         _MonitoringTimelineEntry(
           timestamp: quote.rejectedAt,
-          title: 'Cotización rechazada',
+          title: 'Compra rechazada',
           actor:
               describeActor(quote.rejectedByName, quote.rejectedByArea) ??
-                  'Dirección General',
+                  'Direccion General',
           detail:
-              'Proveedor ${_quoteSupplierLabel(quote)} · ${_withTrailingPeriod(quote.rejectionComment)}',
+              'Proveedor ${_quoteSupplierLabel(quote)} - ${_withTrailingPeriod(quote.rejectionComment)}',
         ),
     ],
   ]
@@ -768,6 +769,9 @@ String _eventTitle(
 ) {
   final type = (event.type ?? '').trim().toLowerCase();
   if (type == 'return') return returnEventTitle(events, event);
+  if (type == 'items_arrived') return 'Llegada parcial registrada';
+  if (type == 'material_arrived') return 'Material llegado';
+  if (type == 'received_timeout') return 'Llegado pero no confirmado';
   if (type == 'received') return 'Recibida por solicitante';
   return 'Movimiento';
 }
@@ -836,7 +840,7 @@ String _relatedQuotesSummary(List<SupplierQuote> quotes) {
         if (quote.createdAt != null)
           'creada ${_formatMonitoringDateTime(quote.createdAt)}',
         if (quote.sentToDireccionAt != null)
-          'enviada DG ${_formatMonitoringDateTime(quote.sentToDireccionAt)}',
+          'enviada a autorizacion de pago ${_formatMonitoringDateTime(quote.sentToDireccionAt)}',
         if (quote.approvedAt != null)
           'aprobada ${_formatMonitoringDateTime(quote.approvedAt)}',
         if (quote.rejectedAt != null)
@@ -947,7 +951,7 @@ pw.Widget _buildMonitoringOrderAuditSection(
         ),
         pw.SizedBox(height: 4),
         pw.Text(
-          '${order.requesterName} · ${order.areaName} · ${order.status.label}',
+          '${order.requesterName} - ${order.areaName} - ${order.status.label}',
           style: const pw.TextStyle(fontSize: 9),
         ),
         pw.SizedBox(height: 10),
@@ -959,15 +963,15 @@ pw.Widget _buildMonitoringOrderAuditSection(
         row('Creada', _formatMonitoringDateTime(audit.createdAt)),
         row('Enviada a Compras', _formatMonitoringDateTime(audit.submittedAt)),
         row(
-          'Primera cotización creada',
+          'Primera compra creada',
           _formatMonitoringDateTime(audit.firstQuoteCreatedAt),
         ),
         row(
-          'Primera cotización enviada a DG',
+          'Primera compra enviada a autorizacion de pago',
           _formatMonitoringDateTime(audit.firstQuoteSentToDireccionAt),
         ),
         row(
-          'Última autorización DG',
+          'Ultima autorizacion de pago',
           _formatMonitoringDateTime(audit.lastQuoteApprovedAt),
         ),
         row(
@@ -994,7 +998,7 @@ pw.Widget _buildMonitoringOrderAuditSection(
         ),
         pw.SizedBox(height: 10),
         pw.Text(
-          'Cotizaciones relacionadas',
+          'Compras relacionadas',
           style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold),
         ),
         pw.SizedBox(height: 6),
@@ -1025,7 +1029,7 @@ pw.Widget _buildMonitoringOrderAuditSection(
           cellStyle: const pw.TextStyle(fontSize: 8),
           headers: const <String>[
             'Fecha / hora',
-            'Acción',
+            'AcciÃ³n',
             'Actor',
             'Detalle',
             'Tiempo hasta siguiente',

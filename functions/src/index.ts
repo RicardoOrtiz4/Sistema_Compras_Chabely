@@ -425,6 +425,248 @@ export const syncPurchaseOrderCounters = functions
     return null;
   });
 
+export const notifyRequesterWhenMaterialArrives = functions
+  .region(REGION)
+  .database.ref('/purchaseOrders/{orderId}')
+  .onWrite(async (change, context) => {
+    if (!change.after.exists()) {
+      return null;
+    }
+
+    const before = (change.before.exists() ? change.before.val() : null) as {
+      materialArrivedAt?: unknown;
+      requesterReceivedAt?: unknown;
+    } | null;
+    const after = change.after.val() as {
+      status?: unknown;
+      requesterId?: unknown;
+      materialArrivedAt?: unknown;
+      requesterReceivedAt?: unknown;
+    } | null;
+
+    const afterStatus = typeof after?.status == 'string' ? after.status : '';
+    const requesterId =
+      typeof after?.requesterId == 'string' ? after.requesterId.trim() : '';
+    const beforeMaterialArrived = before?.materialArrivedAt != null;
+    const afterMaterialArrived = after?.materialArrivedAt != null;
+    const alreadyReceived = after?.requesterReceivedAt != null;
+
+    if (afterStatus != 'eta') {
+      return null;
+    }
+    if (!afterMaterialArrived || beforeMaterialArrived) {
+      return null;
+    }
+    if (!requesterId || alreadyReceived) {
+      return null;
+    }
+
+    try {
+      await notifyUser(
+        requesterId,
+        {
+          title: 'Tu material ya llego',
+          body: `La orden ${context.params.orderId} ya fue reportada como recibida. Revisa el detalle y confirma cuando te entreguen el material.`,
+        },
+        notificationData({
+          orderId: String(context.params.orderId ?? ''),
+          route: `/orders/${String(context.params.orderId ?? '')}`,
+          type: 'material_arrived',
+        })
+      );
+    } catch (error) {
+      functions.logger.warn('notifyRequesterWhenMaterialArrives failed', {
+        orderId: context.params.orderId ?? null,
+        requesterId,
+        error: formatError(error),
+      });
+    }
+
+    return null;
+  });
+
+export const notifyStakeholdersOnOrderStatusChange = functions
+  .region(REGION)
+  .database.ref('/purchaseOrders/{orderId}')
+  .onWrite(async (change, context) => {
+    if (!change.after.exists()) {
+      return null;
+    }
+
+    const before = (change.before.exists() ? change.before.val() : null) as {
+      status?: unknown;
+    } | null;
+    const after = change.after.val() as {
+      status?: unknown;
+      requesterId?: unknown;
+      etaDate?: unknown;
+    } | null;
+
+    const beforeStatus = typeof before?.status == 'string' ? before.status : '';
+    const afterStatus = typeof after?.status == 'string' ? after.status : '';
+    if (!afterStatus || beforeStatus == afterStatus) {
+      return null;
+    }
+
+    const orderId = String(context.params.orderId ?? '').trim();
+    const requesterId =
+      typeof after?.requesterId == 'string' ? after.requesterId.trim() : '';
+    const etaLabel = formatShortDate(after?.etaDate);
+
+    try {
+      switch (afterStatus) {
+        case 'pendingCompras':
+          if (!change.before.exists()) {
+            return null;
+          }
+          await notifyArea(
+            AREA_COMPRAS,
+            {
+              title: 'Orden pendiente en Compras',
+              body: `Folio ${orderId} requiere revision nuevamente.`,
+            },
+            notificationData({
+              orderId,
+              route: '/orders/pending',
+              type: 'order_pending_compras',
+            })
+          );
+          return null;
+        case 'paymentDone':
+          await notifyArea(
+            AREA_COMPRAS,
+            {
+              title: 'Orden pendiente de ETA',
+              body: `Folio ${orderId} requiere registrar fecha estimada de entrega.`,
+            },
+            notificationData({
+              orderId,
+              route: '/orders/eta',
+              type: 'order_pending_eta',
+            })
+          );
+          return null;
+        case 'contabilidad':
+          await notifyArea(
+            AREA_CONTABILIDAD,
+            {
+              title: 'Orden pendiente en Contabilidad',
+              body: `Folio ${orderId} requiere registrar factura y cierre.`,
+            },
+            notificationData({
+              orderId,
+              route: '/orders/contabilidad',
+              type: 'order_pending_accounting',
+            })
+          );
+          if (requesterId) {
+            await notifyUser(
+              requesterId,
+              {
+                title: 'Tu orden sigue avanzando',
+                body: etaLabel
+                  ? `La orden ${orderId} ya entro a Contabilidad. Fecha estimada de entrega: ${etaLabel}.`
+                  : `La orden ${orderId} ya entro a Contabilidad.`,
+              },
+              notificationData({
+                orderId,
+                route: `/orders/${orderId}`,
+                type: 'order_in_accounting',
+              })
+            );
+          }
+          return null;
+        default:
+          return null;
+      }
+    } catch (error) {
+      functions.logger.warn('notifyStakeholdersOnOrderStatusChange failed', {
+        orderId: context.params.orderId ?? null,
+        beforeStatus,
+        afterStatus,
+        error: formatError(error),
+      });
+      return null;
+    }
+  });
+
+export const notifyStakeholdersOnQuoteStatusChange = functions
+  .region(REGION)
+  .database.ref('/supplierQuotes/{quoteId}')
+  .onWrite(async (change, context) => {
+    if (!change.after.exists()) {
+      return null;
+    }
+
+    const before = (change.before.exists() ? change.before.val() : null) as {
+      status?: unknown;
+    } | null;
+    const after = change.after.val() as {
+      status?: unknown;
+      supplier?: unknown;
+      orderIds?: unknown;
+      items?: unknown;
+    } | null;
+
+    const beforeStatus = typeof before?.status == 'string' ? before.status : '';
+    const afterStatus = typeof after?.status == 'string' ? after.status : '';
+    if (!afterStatus || beforeStatus == afterStatus) {
+      return null;
+    }
+
+    const quoteId = String(context.params.quoteId ?? '').trim();
+    const supplier = typeof after?.supplier == 'string' ? after.supplier.trim() : '';
+    const supplierLabel = supplier || `Compra ${quoteId}`;
+    const orderId = firstOrderIdFromQuote(after);
+
+    try {
+      switch (afterStatus) {
+        case 'pendingDireccion':
+          await notifyArea(
+            AREA_GERENCIA,
+            {
+              title: 'Compra pendiente de autorizacion',
+              body: `${supplierLabel} requiere revision en Direccion General.`,
+            },
+            notificationData({
+              quoteId,
+              orderId,
+              route: quoteId
+                  ? `/orders/direccion/cotizacion/${quoteId}`
+                  : '/orders/direccion/dashboard',
+              type: 'quote_pending_direccion',
+            })
+          );
+          return null;
+        case 'rejected':
+          await notifyArea(
+            AREA_COMPRAS,
+            {
+              title: 'Compra rechazada por Direccion General',
+              body: `${supplierLabel} requiere ajustes para continuar.`,
+            },
+            notificationData({
+              quoteId,
+              orderId,
+              route: '/orders/cotizaciones/dashboard',
+              type: 'quote_rejected',
+            })
+          );
+          return null;
+        default:
+          return null;
+      }
+    } catch (error) {
+      functions.logger.warn('notifyStakeholdersOnQuoteStatusChange failed', {
+        quoteId: context.params.quoteId ?? null,
+        beforeStatus,
+        afterStatus,
+        error: formatError(error),
+      });
+      return null;
+    }
+  });
+
 export const rebuildPurchaseOrderCounters = functions
   .region(REGION)
   .https.onCall(async (_data, context) => {
@@ -582,6 +824,76 @@ async function notifyUser(uid: string, notification: { title: string; body: stri
     notification,
     data,
   });
+}
+
+function notificationData(
+  values: Record<string, string | null | undefined>
+): Record<string, string> | undefined {
+  const entries = Object.entries(values).filter(
+    (entry): entry is [string, string] => Boolean(entry[1] && entry[1].trim().length > 0)
+  );
+  if (entries.length === 0) {
+    return undefined;
+  }
+  return Object.fromEntries(entries);
+}
+
+function formatShortDate(value: unknown): string {
+  const date = asDate(value);
+  if (!date) return '';
+  const day = date.getDate().toString().padStart(2, '0');
+  const month = (date.getMonth() + 1).toString().padStart(2, '0');
+  const year = date.getFullYear().toString();
+  return `${day}/${month}/${year}`;
+}
+
+function asDate(value: unknown): Date | null {
+  if (typeof value == 'number' && Number.isFinite(value)) {
+    return new Date(value);
+  }
+  if (typeof value == 'string') {
+    const parsed = Date.parse(value);
+    if (!Number.isNaN(parsed)) {
+      return new Date(parsed);
+    }
+  }
+  return null;
+}
+
+function firstOrderIdFromQuote(value: { orderIds?: unknown; items?: unknown } | null | undefined): string {
+  for (const orderId of extractStringArray(value?.orderIds)) {
+    if (orderId.trim().length > 0) {
+      return orderId.trim();
+    }
+  }
+
+  const rawItems = value?.items;
+  if (Array.isArray(rawItems)) {
+    for (const item of rawItems) {
+      if (item && typeof item == 'object' && typeof (item as { orderId?: unknown }).orderId == 'string') {
+        const orderId = (item as { orderId: string }).orderId.trim();
+        if (orderId) return orderId;
+      }
+    }
+  } else if (rawItems && typeof rawItems == 'object') {
+    for (const item of Object.values(rawItems)) {
+      if (item && typeof item == 'object' && typeof (item as { orderId?: unknown }).orderId == 'string') {
+        const orderId = (item as { orderId: string }).orderId.trim();
+        if (orderId) return orderId;
+      }
+    }
+  }
+
+  return '';
+}
+
+function extractStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => (typeof entry == 'string' ? entry.trim() : ''))
+      .filter((entry) => entry.length > 0);
+  }
+  return [];
 }
 
 async function upsertDefaultAreas(): Promise<{ created: boolean; added: number }> {

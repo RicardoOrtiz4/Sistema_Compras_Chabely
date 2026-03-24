@@ -99,7 +99,7 @@ class _OrderSummaryHeader extends StatelessWidget {
                 if (order.urgency == PurchaseOrderUrgency.urgente &&
                     urgentJustification.isNotEmpty)
                   Chip(label: Text(urgentJustification)),
-                Chip(label: Text(order.status.label)),
+                Chip(label: Text(requesterReceiptStatusLabel(order))),
               ],
             ),
             const SizedBox(height: 12),
@@ -200,7 +200,7 @@ class _CotizacionSection extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Cotizacion', style: Theme.of(context).textTheme.titleMedium),
+            Text('Compra', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
             if (quotesAsync.isLoading && quotes.isEmpty)
               const AppSplash(compact: true)
@@ -228,7 +228,7 @@ class _CotizacionSection extends ConsumerWidget {
                   ),
                 )
             else
-              const Text('Sin link de cotizacion.'),
+              const Text('Sin link de compra.'),
             if (hasLink) ...[
               for (final quote in quotes)
                 for (final link in quote.links) ...[
@@ -259,6 +259,8 @@ class _OrderItemProgressSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final committedCount = countItemsWithCommittedDeliveryDate(order);
     final committedDate = resolveCommittedDeliveryDate(order);
+    final arrivedCount = countArrivedItems(order);
+    final pendingArrivalCount = countPendingArrivalItems(order);
 
     return Card(
       child: Padding(
@@ -267,12 +269,16 @@ class _OrderItemProgressSection extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Proceso por item',
+              'Avance parcial por articulos',
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 8),
             Text(
               'Items con fecha estimada de entrega: $committedCount/${order.items.length}',
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Items llegados: $arrivedCount | Pendientes de llegada: $pendingArrivalCount',
             ),
             if (committedDate != null) ...[
               const SizedBox(height: 4),
@@ -300,6 +306,12 @@ class _OrderItemProgressSection extends StatelessWidget {
                       Text(
                         'Fecha estimada de entrega: ${item.deliveryEtaDate!.toShortDate()}',
                       ),
+                    if (item.arrivedAt != null)
+                      Text(
+                        'Llegada registrada: ${item.arrivedAt!.toFullDateTime()}',
+                      ),
+                    if (item.deliveryEtaDate != null || item.arrivedAt != null)
+                      Text(itemArrivalComplianceLabel(item)),
                   ],
                 ),
                 trailing: Chip(
@@ -403,26 +415,29 @@ class _OrderTimelineSection extends ConsumerWidget {
 }
 
 String _itemProgressLabel(PurchaseOrder order, PurchaseOrderItem item) {
+  if (item.isArrivalRegistered) {
+    return 'Llego';
+  }
+  if (item.deliveryEtaDate != null) {
+    return 'Pendiente de llegada';
+  }
   if (order.status == PurchaseOrderStatus.eta) {
     return 'Finalizada';
   }
   if (order.status == PurchaseOrderStatus.contabilidad) {
     return 'En Contabilidad';
   }
-  if (item.deliveryEtaDate != null) {
-    return 'Fecha estimada definida';
-  }
 
   switch (item.quoteStatus) {
     case PurchaseOrderItemQuoteStatus.pending:
       if (order.status == PurchaseOrderStatus.pendingCompras) {
-        return 'Ordenes por confirmar';
+        return pendingRequirementAuthorizationLabel;
       }
-      return 'Pendiente de cotizacion';
+      return 'Pendiente de compra';
     case PurchaseOrderItemQuoteStatus.draft:
-      return 'En dashboard de cotizaciones';
+      return 'En dashboard de compras';
     case PurchaseOrderItemQuoteStatus.pendingDireccion:
-      return 'En Direccion General';
+      return paymentAuthorizationLabel;
     case PurchaseOrderItemQuoteStatus.approved:
       return 'Aprobado, pendiente fecha estimada';
     case PurchaseOrderItemQuoteStatus.rejected:

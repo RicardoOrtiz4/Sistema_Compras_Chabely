@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/pdf_open_helper.dart';
 
+import 'package:sistema_compras/core/navigation/app_shell_keys.dart';
 import 'package:sistema_compras/features/screens.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
 import 'package:sistema_compras/core/providers.dart';
@@ -37,6 +38,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
   final navObserver = NavigationUnlockObserver();
 
   return GoRouter(
+    navigatorKey: appNavigatorKey,
     initialLocation: '/home',
     refreshListenable: refreshNotifier,
     observers: [navObserver, routeObserver],
@@ -205,14 +207,6 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const ContabilidadSupplierGroupsScreen(),
       ),
       GoRoute(
-        path: '/orders/contabilidad/group/:quoteId',
-        name: 'contabilidadGroupReview',
-        builder: (context, state) {
-          final quoteId = state.pathParameters['quoteId']!;
-          return ContabilidadSupplierGroupReviewScreen(quoteId: quoteId);
-        },
-      ),
-      GoRoute(
         path: '/orders/contabilidad/:orderId',
         name: 'contabilidadOrderReview',
         builder: (context, state) {
@@ -225,7 +219,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         name: 'orderPdfView',
         builder: (context, state) {
           final orderId = state.pathParameters['orderId']!;
-          return OrderPdfViewScreen(orderId: orderId);
+          final trackingView = state.uri.queryParameters['tracking'] == '1';
+          return OrderPdfViewScreen(
+            orderId: orderId,
+            hideBuyerFields: trackingView,
+          );
         },
       ),
       GoRoute(

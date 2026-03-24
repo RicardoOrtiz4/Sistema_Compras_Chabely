@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -136,10 +136,10 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
 
     await runOptimisticAction(
       context: context,
-      pendingLabel: 'Enviando $count orden(es) a Cotizaciones...',
+      pendingLabel: 'Enviando $count orden(es) a Compras...',
       successMessage: count == 1
-          ? '1 orden enviada a Cotizaciones.'
-          : '$count órdenes enviadas a Cotizaciones.',
+          ? '1 orden enviada a Compras.'
+          : '$count Ã³rdenes enviadas a Compras.',
       errorContext: 'PendingOrdersScreen.acceptAll',
       action: () async {
         for (final order in orders) {
@@ -177,18 +177,18 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
                   : () => _handleAcceptAll(filteredOrders),
             );
             if (compactAppBar) {
-              return const Text('Órdenes por confirmar');
+              return const Text(pendingRequirementAuthorizationLabel);
             }
             return OrderModuleAppBarTitle(
-              title: 'Órdenes por confirmar',
+              title: pendingRequirementAuthorizationLabel,
               counts: OrderUrgencyCounts.fromOrders(orders),
               filter: _urgencyFilter,
               onSelected: _setUrgencyFilter,
               trailing: acceptAllButton,
             );
           },
-          loading: () => const Text('Órdenes por confirmar'),
-          error: (_, __) => const Text('Órdenes por confirmar'),
+          loading: () => const Text(pendingRequirementAuthorizationLabel),
+          error: (_, __) => const Text(pendingRequirementAuthorizationLabel),
         ),
         bottom: !compactAppBar
             ? null
@@ -293,7 +293,7 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
                             OutlinedButton.icon(
                               onPressed: _loadMore,
                               icon: const Icon(Icons.expand_more),
-                              label: const Text('Ver más'),
+                              label: const Text('Ver mÃ¡s'),
                             ),
                           ],
                         ],
@@ -308,7 +308,7 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
                               child: OutlinedButton.icon(
                                 onPressed: _loadMore,
                                 icon: const Icon(Icons.expand_more),
-                                label: const Text('Ver más'),
+                                label: const Text('Ver mÃ¡s'),
                               ),
                             );
                           }
@@ -411,12 +411,12 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
         title: const Text('Aceptar todas'),
         content: Text(
           'Vas a aceptar $count orden(es) visibles con los filtros actuales. '
-          'Todas quedarán firmadas por "$reviewerName" del área "$reviewerArea" '
-          'y pasarán directamente a Cotizaciones sin revisión individual. '
+          'Todas quedarÃ¡n firmadas por "$reviewerName" del Ã¡rea "$reviewerArea" '
+          'y pasarÃ¡n directamente a Compras sin revisiÃ³n individual. '
           'Riesgo: si alguna orden trae errores en materiales, cantidades, cliente '
-          'o urgencia, el error avanzará en lote. Además, si algo falla a mitad del '
-          'proceso, puede quedar un avance parcial y tendrás que revisarlo manualmente. '
-          '¿Deseas continuar?',
+          'o urgencia, el error avanzarÃ¡ en lote. AdemÃ¡s, si algo falla a mitad del '
+          'proceso, puede quedar un avance parcial y tendrÃ¡s que revisarlo manualmente. '
+          'Â¿Deseas continuar?',
         ),
         actions: [
           TextButton(
@@ -573,7 +573,7 @@ class _PendingOrderCard extends StatelessWidget {
                       border: Border.all(color: Colors.orange.shade400),
                     ),
                     child: Text(
-                      'Rechazada por DG',
+                      'Rechazada por autorizacion de pago',
                       style: TextStyle(
                         color: Colors.orange.shade900,
                         fontSize: 12,
@@ -593,7 +593,9 @@ class _PendingOrderCard extends StatelessWidget {
                       border: Border.all(color: Colors.red.shade400),
                     ),
                     child: Text(
-                      returnCount > 1 ? 'Reenviada x$returnCount' : 'Reenviada',
+                      returnCount > 1
+                          ? 'Con historial de rechazo x$returnCount'
+                          : 'Con historial de rechazo',
                       style: TextStyle(
                         color: Colors.red.shade800,
                         fontSize: 12,
@@ -614,7 +616,7 @@ class _PendingOrderCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
 
-            // ✅ Reemplazo del widget corrupto:
+            // âœ… Reemplazo del widget corrupto:
             _OrderCardSummary(order: order),
             if (wasReturned && order.updatedAt != null)
               Text('Modificada: ${order.updatedAt!.toFullDateTime()}'),
@@ -676,7 +678,7 @@ class _PendingOrderReturnTimePill extends ConsumerWidget {
           return const SizedBox.shrink();
         }
         final label = timeInCotizaciones != null
-            ? 'Tiempo en cotizaciones: ${_formatDuration(timeInCotizaciones)}'
+            ? 'Tiempo en compras: ${_formatDuration(timeInCotizaciones)}'
             : 'Tiempo en rechazadas: ${_formatDuration(timeInRejected!)}';
         return StatusDurationPill(text: label, alignRight: false);
       },
@@ -833,7 +835,7 @@ String _formatDuration(Duration duration) {
   final minutes = duration.inMinutes % 60;
 
   if (days > 0) {
-    final dayLabel = days == 1 ? 'día' : 'días';
+    final dayLabel = days == 1 ? 'dÃ­a' : 'dÃ­as';
     final hourPart = hours > 0 ? ' $hours h' : '';
     return '$days $dayLabel$hourPart';
   }

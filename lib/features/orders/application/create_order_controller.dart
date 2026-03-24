@@ -348,6 +348,48 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
         );
         return;
       }
+      final isRejectedDraft = order.status == PurchaseOrderStatus.draft &&
+          ((order.lastReturnReason?.trim().isNotEmpty ?? false) ||
+              order.returnCount > 0);
+      if (isRejectedDraft) {
+        final items = order.items.isEmpty
+            ? [OrderItemDraft.empty(1)]
+            : [
+                for (var i = 0; i < order.items.length; i++)
+                  OrderItemDraft.fromModel(order.items[i]).copyWith(
+                    line: i + 1,
+                    removeEstimatedDate: true,
+                    reviewFlagged: false,
+                    clearReviewComment: true,
+                    clearReceivedQuantity: true,
+                    clearReceivedComment: true,
+                  ),
+              ];
+        final requestedDeliveryDate = _requestedDeliveryDateForUrgency(
+          resolveRequestedDeliveryDate(order),
+          order.urgency,
+        );
+        state = state.copyWith(
+          isLoadingDraft: false,
+          draftId: null,
+          urgency: order.urgency,
+          items: items,
+          requestedDeliveryDate: requestedDeliveryDate,
+          clearRequestedDeliveryDate: requestedDeliveryDate == null,
+          notes: order.clientNote ?? '',
+          urgentJustification: order.urgentJustification ?? '',
+          returnCount: 0,
+          resubmissionDates: const [],
+          previewCreatedAt: DateTime.now(),
+          previewAccepted: false,
+          clearPreviewUpdatedAt: true,
+          clearBaselineSignature: true,
+          clearBaselineUpdatedAt: true,
+          message:
+              'La orden fue rechazada. Se cargo como copia para crear una nueva requisicion.',
+        );
+        return;
+      }
       final items = order.items.isEmpty
           ? [OrderItemDraft.empty(1)]
           : [
@@ -507,7 +549,7 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
     if (user == null) return null;
     if (state.returnCount >= _maxCorrections) {
       state = state.copyWith(
-        error: 'Máximo de correcciones alcanzado. Crea otra requisición.',
+        error: 'Esta orden ya no puede seguir corrigiendose. Crea una nueva requisicion.',
       );
       return null;
     }

@@ -65,6 +65,7 @@ class SupplierQuoteHistoryEntry {
     required this.supplier,
     required this.links,
     required this.facturaLinks,
+    required this.paymentLinks,
     required this.orderIds,
     required this.orders,
     required this.version,
@@ -98,6 +99,7 @@ class SupplierQuoteHistoryEntry {
   final String supplier;
   final List<String> links;
   final List<String> facturaLinks;
+  final List<String> paymentLinks;
   final List<String> orderIds;
   final List<SupplierQuoteHistoryOrderEntry> orders;
   final int version;
@@ -129,19 +131,19 @@ class SupplierQuoteHistoryEntry {
       case 'draft_updated':
         return 'Borrador actualizado';
       case 'sent_to_direccion':
-        return 'Enviada a Direccion General';
+        return 'Enviada para autorizacion de pago';
       case 'approved':
         return 'Autorizada';
       case 'rejected':
         return 'Rechazada';
       case 'factura_links_updated':
-        return 'Facturas actualizadas';
+        return 'Links contables actualizados';
       case 'items_sent_to_contabilidad':
         return 'Items enviados a Contabilidad';
       case 'deleted':
         return 'Eliminada';
       case 'returned_to_cotizaciones':
-        return 'Devuelta a cotizaciones';
+        return 'Devuelta a compras';
       case 'returned_from_contabilidad':
         return 'Regresada desde Contabilidad';
       default:
@@ -162,6 +164,7 @@ class SupplierQuoteHistoryEntry {
       supplier: (data['supplier'] as String?) ?? '',
       links: _parseLinks(data['links']),
       facturaLinks: _parseLinks(data['facturaLinks']),
+      paymentLinks: _parseLinks(data['paymentLinks']),
       orderIds: _parseStringList(data['orderIds']),
       orders: _parseHistoryOrders(data['orders']),
       version: (data['version'] as num?)?.toInt() ?? 1,

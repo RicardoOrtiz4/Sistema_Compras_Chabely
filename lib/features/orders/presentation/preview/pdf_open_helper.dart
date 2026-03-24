@@ -290,6 +290,8 @@ class _RejectedOrderCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final pdfRoute = '/orders/${order.id}/pdf';
+    final copyRoute =
+        '/orders/create?copyFromId=${Uri.encodeComponent(order.id)}';
 
     final reason = (order.lastReturnReason ?? '').trim();
     final lastReturn = ref.watch(orderEventsProvider(order.id)).maybeWhen(
@@ -347,6 +349,11 @@ class _RejectedOrderCard extends ConsumerWidget {
                     icon: const Icon(Icons.picture_as_pdf_outlined),
                     label: const Text('Ver PDF'),
                   ),
+                  OutlinedButton.icon(
+                    onPressed: () => guardedPush(context, copyRoute),
+                    icon: const Icon(Icons.content_copy_outlined),
+                    label: const Text('Copiar orden'),
+                  ),
                 ],
               ),
             ),
@@ -375,15 +382,15 @@ String _rejectedByLabel(String? rawRole) {
 String _rejectedFromLabel(PurchaseOrderStatus? status) {
   switch (status) {
     case PurchaseOrderStatus.pendingCompras:
-      return 'ordenes por confirmar';
+      return 'autorizacion de requerimiento';
     case PurchaseOrderStatus.cotizaciones:
-      return 'cotizaciones';
+      return 'compras';
     case PurchaseOrderStatus.dataComplete:
-      return 'datos completos';
+      return 'proceso de liberacion';
     case PurchaseOrderStatus.authorizedGerencia:
-      return 'Direccion General';
+      return 'autorizacion de pago';
     case PurchaseOrderStatus.paymentDone:
-      return 'en proceso';
+      return 'en transito de llegada';
     case PurchaseOrderStatus.contabilidad:
       return 'contabilidad';
     case PurchaseOrderStatus.orderPlaced:

@@ -10,7 +10,6 @@ import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/domain/supplier_quote.dart';
-import 'package:sistema_compras/features/orders/presentation/monitoring/order_monitoring_support.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 
 class ReportsScreen extends ConsumerStatefulWidget {
@@ -68,98 +67,61 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                         rangeLabel: _rangeLabel(_dateRange),
                       ),
                       const SizedBox(height: 16),
-                      _SectionTitle(title: 'Operacion actual'),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 12,
-                        children: [
-                          _SimpleBreakdownCard(
-                            title: 'Ordenes por estatus',
-                            subtitle: 'Foto actual del flujo',
-                            items: data.statusItems,
-                            emptyText: 'Sin ordenes en el periodo.',
-                          ),
-                          _SimpleBreakdownCard(
-                            title: 'Cuellos de botella',
-                            subtitle: 'Promedio de espera por cola activa',
-                            items: data.bottleneckItems,
-                            emptyText: 'No hay colas activas.',
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      _SectionTitle(title: 'Tiempos y cumplimiento'),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 12,
-                        children: [
-                          _SimpleBreakdownCard(
-                            title: 'Promedio acumulado por estatus',
-                            subtitle: 'Tomado de statusDurations',
-                            items: data.statusDurationItems,
-                            emptyText: 'Sin tiempos disponibles.',
-                          ),
-                          _SimpleBreakdownCard(
-                            title: 'Top ordenes activas mas atrasadas',
-                            subtitle: 'Mayor tiempo en el estatus actual',
-                            items: data.delayedOrderItems,
-                            emptyText: 'No hay ordenes activas.',
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      _SectionTitle(title: 'Presupuesto y proveedores'),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 12,
-                        children: [
-                          _SimpleBreakdownCard(
-                            title: 'Top areas por volumen',
-                            subtitle: 'Cantidad de ordenes',
-                            items: data.areaItems,
-                            emptyText: 'Sin datos de areas.',
-                          ),
-                          _SimpleBreakdownCard(
-                            title: 'Top proveedores por presupuesto',
-                            subtitle: 'Basado en budget de la orden',
-                            items: data.supplierBudgetItems,
-                            emptyText: 'Sin presupuesto capturado.',
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      _SectionTitle(title: 'Cotizaciones'),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 12,
-                        children: [
-                          _SimpleBreakdownCard(
-                            title: 'Estado de cotizaciones',
-                            subtitle: 'Pendientes, aprobadas y rechazadas',
-                            items: data.quoteStatusItems,
-                            emptyText: 'Sin cotizaciones en el periodo.',
-                          ),
-                          _SimpleBreakdownCard(
-                            title: 'Top proveedores por monto cotizado',
-                            subtitle: 'Basado en totalAmount de la cotizacion',
-                            items: data.quoteSupplierItems,
-                            emptyText: 'Sin montos cotizados.',
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      _SectionTitle(title: 'Tendencia'),
-                      const SizedBox(height: 8),
-                      _SimpleBreakdownCard(
-                        title: 'Ultimos 6 meses',
-                        subtitle: 'Volumen y presupuesto creado',
-                        items: data.monthlyTrendItems,
-                        fullWidth: true,
-                        emptyText: 'Sin datos historicos suficientes.',
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final isWide = constraints.maxWidth >= 980;
+                          if (isWide) {
+                            return Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                SizedBox(
+                                  width: 360,
+                                  child: _SimpleBreakdownCard(
+                                    title: 'Top proveedores por monto',
+                                    subtitle: 'Monto cotizado acumulado en el rango',
+                                    items: data.quoteSupplierItems
+                                        .take(8)
+                                        .toList(growable: false),
+                                    emptyText: 'Sin montos cotizados.',
+                                    totalLabel:
+                                        'Total general: ${_money(data.totalQuotedAmount)}',
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: _TrendCard(
+                                    title: 'Tendencia',
+                                    subtitle: 'Ultimos 6 meses de ordenes y compras',
+                                    buckets: data.monthlyTrendBuckets,
+                                    totalQuotes: data.filteredQuotes.length,
+                                    fullWidth: true,
+                                  ),
+                                ),
+                              ],
+                            );
+                          }
+                          return Column(
+                            children: [
+                              _SimpleBreakdownCard(
+                                title: 'Top proveedores por monto',
+                                subtitle: 'Monto cotizado acumulado en el rango',
+                                items: data.quoteSupplierItems.take(8).toList(growable: false),
+                                emptyText: 'Sin montos cotizados.',
+                                totalLabel:
+                                    'Total general: ${_money(data.totalQuotedAmount)}',
+                                fullWidth: true,
+                              ),
+                              const SizedBox(height: 12),
+                              _TrendCard(
+                                title: 'Tendencia',
+                                subtitle: 'Ultimos 6 meses de ordenes y compras',
+                                buckets: data.monthlyTrendBuckets,
+                                totalQuotes: data.filteredQuotes.length,
+                                fullWidth: true,
+                              ),
+                            ],
+                          );
+                        },
                       ),
                     ],
                   );
@@ -221,54 +183,24 @@ _ReportsData _buildReportsData({
       .where((order) => order.urgency == PurchaseOrderUrgency.urgente)
       .toList(growable: false);
 
-  final ordersWithBudget = filteredOrders.where((order) => (order.budget ?? 0) > 0).toList();
-  final totalBudget = ordersWithBudget.fold<num>(0, (sum, order) => sum + (order.budget ?? 0));
-  final avgBudget = ordersWithBudget.isEmpty ? 0 : totalBudget / ordersWithBudget.length;
-
-  final completedCycles = completedOrders
-      .map((order) => _completionCycle(order, now))
-      .whereType<Duration>()
-      .toList(growable: false);
-  final avgCompletionCycle = completedCycles.isEmpty
-      ? Duration.zero
-      : Duration(
-          milliseconds: completedCycles
-                  .fold<int>(0, (sum, value) => sum + value.inMilliseconds) ~/
-              completedCycles.length,
-        );
-
-  final currentWaits = activeOrders
-      .map((order) => currentStatusElapsed(order, now))
-      .toList(growable: false);
-  final avgCurrentWait = currentWaits.isEmpty
-      ? Duration.zero
-      : Duration(
-          milliseconds:
-              currentWaits.fold<int>(0, (sum, value) => sum + value.inMilliseconds) ~/
-                  currentWaits.length,
-        );
-
   return _ReportsData(
     filteredOrders: filteredOrders,
     filteredQuotes: filteredQuotes,
-    totalBudget: totalBudget,
-    avgBudget: avgBudget,
     totalOrders: filteredOrders.length,
     activeOrders: activeOrders.length,
     completedOrders: completedOrders.length,
     rejectedOrders: rejectedOrders.length,
     urgentOrders: urgentOrders.length,
-    avgCompletionCycle: avgCompletionCycle,
-    avgCurrentWait: avgCurrentWait,
-    statusItems: _buildStatusItems(filteredOrders),
-    bottleneckItems: _buildBottleneckItems(activeOrders, now),
-    statusDurationItems: _buildStatusDurationItems(filteredOrders, now),
-    areaItems: _buildAreaItems(filteredOrders),
-    supplierBudgetItems: _buildSupplierBudgetItems(filteredOrders),
-    quoteStatusItems: _buildQuoteStatusItems(filteredQuotes),
+    totalQuotedAmount: filteredQuotes.fold<num>(
+      0,
+      (sum, quote) => sum + (quote.totalAmount > 0 ? quote.totalAmount : 0),
+    ),
     quoteSupplierItems: _buildQuoteSupplierItems(filteredQuotes),
-    delayedOrderItems: _buildDelayedOrderItems(activeOrders, now),
-    monthlyTrendItems: _buildMonthlyTrendItems(filteredOrders, now),
+    monthlyTrendBuckets: _buildMonthlyTrendBuckets(
+      orders: filteredOrders,
+      quotes: filteredQuotes,
+      now: now,
+    ),
   );
 }
 
@@ -287,103 +219,6 @@ bool _isRejectedOrder(PurchaseOrder order) {
       (reason.isNotEmpty || order.returnCount > 0);
 }
 
-Duration? _completionCycle(PurchaseOrder order, DateTime now) {
-  final start = order.createdAt;
-  if (start == null) return null;
-  final end = order.completedAt ?? order.updatedAt ?? now;
-  final diff = end.difference(start);
-  return diff.isNegative ? Duration.zero : diff;
-}
-
-List<_ReportItem> _buildStatusItems(List<PurchaseOrder> orders) {
-  final counts = <String, int>{};
-  for (final order in orders) {
-    final label =
-        _isRejectedOrder(order) ? 'Rechazadas / correccion' : order.status.label;
-    counts[label] = (counts[label] ?? 0) + 1;
-  }
-  return _mapToSortedItems(counts, formatter: (value) => '$value');
-}
-
-List<_ReportItem> _buildBottleneckItems(List<PurchaseOrder> orders, DateTime now) {
-  final totals = <String, int>{};
-  final counts = <String, int>{};
-  for (final order in orders) {
-    final label = order.status.label;
-    totals[label] = (totals[label] ?? 0) + currentStatusElapsed(order, now).inMilliseconds;
-    counts[label] = (counts[label] ?? 0) + 1;
-  }
-  final items = <_ReportItem>[];
-  for (final entry in totals.entries) {
-    final count = counts[entry.key] ?? 1;
-    final avg = Duration(milliseconds: entry.value ~/ count);
-    items.add(
-      _ReportItem(
-        label: entry.key,
-        value: formatMonitoringDuration(avg),
-        order: avg.inMilliseconds,
-      ),
-    );
-  }
-  items.sort((a, b) => b.order.compareTo(a.order));
-  return items;
-}
-
-List<_ReportItem> _buildStatusDurationItems(List<PurchaseOrder> orders, DateTime now) {
-  final totals = <PurchaseOrderStatus, int>{};
-  final counts = <PurchaseOrderStatus, int>{};
-  for (final order in orders) {
-    for (final status in PurchaseOrderStatus.values) {
-      final elapsed = accumulatedStatusElapsed(order, status, now);
-      if (elapsed <= Duration.zero) continue;
-      totals[status] = (totals[status] ?? 0) + elapsed.inMilliseconds;
-      counts[status] = (counts[status] ?? 0) + 1;
-    }
-  }
-  final items = <_ReportItem>[];
-  for (final entry in totals.entries) {
-    final count = counts[entry.key] ?? 1;
-    final avg = Duration(milliseconds: entry.value ~/ count);
-    items.add(
-      _ReportItem(
-        label: entry.key.label,
-        value: formatMonitoringDuration(avg),
-        order: avg.inMilliseconds,
-      ),
-    );
-  }
-  items.sort((a, b) => b.order.compareTo(a.order));
-  return items;
-}
-
-List<_ReportItem> _buildAreaItems(List<PurchaseOrder> orders) {
-  final counts = <String, int>{};
-  for (final order in orders) {
-    final key = order.areaName.trim().isEmpty ? 'Sin area' : order.areaName.trim();
-    counts[key] = (counts[key] ?? 0) + 1;
-  }
-  return _mapToSortedItems(counts, formatter: (value) => '$value');
-}
-
-List<_ReportItem> _buildSupplierBudgetItems(List<PurchaseOrder> orders) {
-  final totals = <String, num>{};
-  for (final order in orders) {
-    final supplier = order.supplier?.trim() ?? '';
-    final budget = order.budget ?? 0;
-    if (supplier.isEmpty || budget <= 0) continue;
-    totals[supplier] = (totals[supplier] ?? 0) + budget;
-  }
-  return _mapToSortedItems(totals, formatter: (value) => _money(value));
-}
-
-List<_ReportItem> _buildQuoteStatusItems(List<SupplierQuote> quotes) {
-  final counts = <String, int>{};
-  for (final quote in quotes) {
-    counts[quote.status.label] = (counts[quote.status.label] ?? 0) + 1;
-  }
-  return _mapToSortedItems(counts, formatter: (value) => '$value');
-}
-
 List<_ReportItem> _buildQuoteSupplierItems(List<SupplierQuote> quotes) {
   final totals = <String, num>{};
   for (final quote in quotes) {
@@ -395,31 +230,20 @@ List<_ReportItem> _buildQuoteSupplierItems(List<SupplierQuote> quotes) {
   return _mapToSortedItems(totals, formatter: (value) => _money(value));
 }
 
-List<_ReportItem> _buildDelayedOrderItems(List<PurchaseOrder> orders, DateTime now) {
-  final sorted = [...orders]
-    ..sort((a, b) => currentStatusElapsed(b, now).compareTo(currentStatusElapsed(a, now)));
-  return sorted
-      .take(6)
-      .map(
-        (order) => _ReportItem(
-          label: '${order.id} | ${order.status.label}',
-          value:
-              '${formatMonitoringDuration(currentStatusElapsed(order, now))} | ${order.requesterName}',
-          order: currentStatusElapsed(order, now).inMilliseconds,
-        ),
-      )
-      .toList(growable: false);
-}
-
-List<_ReportItem> _buildMonthlyTrendItems(List<PurchaseOrder> orders, DateTime now) {
+List<_MonthBucket> _buildMonthlyTrendBuckets({
+  required List<PurchaseOrder> orders,
+  required List<SupplierQuote> quotes,
+  required DateTime now,
+}) {
   final buckets = <String, _MonthBucket>{};
   for (var offset = 5; offset >= 0; offset--) {
     final date = DateTime(now.year, now.month - offset, 1);
     final key = _monthKey(date);
     buckets[key] = _MonthBucket(
       label: DateFormat('MMM yyyy').format(date),
-      count: 0,
-      budget: 0,
+      ordersCount: 0,
+      quotesCount: 0,
+      quotesAmount: 0,
     );
   }
   for (final order in orders) {
@@ -428,18 +252,18 @@ List<_ReportItem> _buildMonthlyTrendItems(List<PurchaseOrder> orders, DateTime n
     final key = _monthKey(DateTime(createdAt.year, createdAt.month, 1));
     final bucket = buckets[key];
     if (bucket == null) continue;
-    bucket.count += 1;
-    bucket.budget += order.budget ?? 0;
+    bucket.ordersCount += 1;
   }
-  return buckets.values
-      .map(
-        (bucket) => _ReportItem(
-          label: bucket.label,
-          value: '${bucket.count} ord | ${_money(bucket.budget)}',
-          order: bucket.count * 1000000 + bucket.budget.toInt(),
-        ),
-      )
-      .toList(growable: false);
+  for (final quote in quotes) {
+    final createdAt = quote.createdAt ?? quote.updatedAt;
+    if (createdAt == null) continue;
+    final key = _monthKey(DateTime(createdAt.year, createdAt.month, 1));
+    final bucket = buckets[key];
+    if (bucket == null) continue;
+    bucket.quotesCount += 1;
+    bucket.quotesAmount += quote.totalAmount > 0 ? quote.totalAmount : 0;
+  }
+  return buckets.values.toList(growable: false);
 }
 
 String _monthKey(DateTime date) =>
@@ -473,46 +297,26 @@ class _ReportsData {
   const _ReportsData({
     required this.filteredOrders,
     required this.filteredQuotes,
-    required this.totalBudget,
-    required this.avgBudget,
     required this.totalOrders,
     required this.activeOrders,
     required this.completedOrders,
     required this.rejectedOrders,
     required this.urgentOrders,
-    required this.avgCompletionCycle,
-    required this.avgCurrentWait,
-    required this.statusItems,
-    required this.bottleneckItems,
-    required this.statusDurationItems,
-    required this.areaItems,
-    required this.supplierBudgetItems,
-    required this.quoteStatusItems,
+    required this.totalQuotedAmount,
     required this.quoteSupplierItems,
-    required this.delayedOrderItems,
-    required this.monthlyTrendItems,
+    required this.monthlyTrendBuckets,
   });
 
   final List<PurchaseOrder> filteredOrders;
   final List<SupplierQuote> filteredQuotes;
-  final num totalBudget;
-  final num avgBudget;
   final int totalOrders;
   final int activeOrders;
   final int completedOrders;
   final int rejectedOrders;
   final int urgentOrders;
-  final Duration avgCompletionCycle;
-  final Duration avgCurrentWait;
-  final List<_ReportItem> statusItems;
-  final List<_ReportItem> bottleneckItems;
-  final List<_ReportItem> statusDurationItems;
-  final List<_ReportItem> areaItems;
-  final List<_ReportItem> supplierBudgetItems;
-  final List<_ReportItem> quoteStatusItems;
+  final num totalQuotedAmount;
   final List<_ReportItem> quoteSupplierItems;
-  final List<_ReportItem> delayedOrderItems;
-  final List<_ReportItem> monthlyTrendItems;
+  final List<_MonthBucket> monthlyTrendBuckets;
 }
 
 class _ReportItem {
@@ -530,13 +334,15 @@ class _ReportItem {
 class _MonthBucket {
   _MonthBucket({
     required this.label,
-    required this.count,
-    required this.budget,
+    required this.ordersCount,
+    required this.quotesCount,
+    required this.quotesAmount,
   });
 
   final String label;
-  int count;
-  num budget;
+  int ordersCount;
+  int quotesCount;
+  num quotesAmount;
 }
 
 class _ReportsFiltersBar extends StatelessWidget {
@@ -588,87 +394,144 @@ class _ReportsOverview extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(color: scheme.outlineVariant),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Resumen ejecutivo',
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-          const SizedBox(height: 4),
-          Text(rangeLabel, style: Theme.of(context).textTheme.bodySmall),
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            children: [
-              _MetricCard(
-                title: 'Ordenes',
-                value: '${data.totalOrders}',
-                caption: 'Creadas en el rango',
-                icon: Icons.inventory_2_outlined,
-              ),
-              _MetricCard(
-                title: 'Activas',
-                value: '${data.activeOrders}',
-                caption: 'Aun en flujo',
-                icon: Icons.radar_outlined,
-              ),
-              _MetricCard(
-                title: 'Finalizadas',
-                value: '${data.completedOrders}',
-                caption: 'Cerradas',
-                icon: Icons.task_alt_outlined,
-              ),
-              _MetricCard(
-                title: 'Rechazadas',
-                value: '${data.rejectedOrders}',
-                caption: 'Devueltas a correccion',
-                icon: Icons.report_problem_outlined,
-              ),
-              _MetricCard(
-                title: 'Urgentes',
-                value: '${data.urgentOrders}',
-                caption: 'Prioridad alta',
-                icon: Icons.priority_high,
-              ),
-              _MetricCard(
-                title: 'Presupuesto',
-                value: _money(data.totalBudget),
-                caption: 'Suma de budget',
-                icon: Icons.payments_outlined,
-              ),
-              _MetricCard(
-                title: 'Promedio por orden',
-                value: _money(data.avgBudget),
-                caption: 'Solo con budget',
-                icon: Icons.bar_chart_outlined,
-              ),
-              _MetricCard(
-                title: 'Ciclo promedio',
-                value: formatMonitoringDuration(data.avgCompletionCycle),
-                caption: 'Ordenes finalizadas',
-                icon: Icons.timelapse_outlined,
-              ),
-              _MetricCard(
-                title: 'Espera promedio',
-                value: formatMonitoringDuration(data.avgCurrentWait),
-                caption: 'Ordenes activas',
-                icon: Icons.hourglass_top_outlined,
-              ),
-              _MetricCard(
-                title: 'Cotizaciones',
-                value: '${data.filteredQuotes.length}',
-                caption: 'Total en el rango',
-                icon: Icons.request_quote_outlined,
-              ),
-            ],
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final isNarrow = constraints.maxWidth < 720;
+              final metrics = [
+                _MetricCard(
+                  title: 'Ordenes',
+                  value: '${data.totalOrders}',
+                  caption: 'en el rango',
+                  icon: Icons.inventory_2_outlined,
+                  compact: isNarrow,
+                ),
+                _MetricCard(
+                  title: 'Activas',
+                  value: '${data.activeOrders}',
+                  caption: 'en proceso',
+                  icon: Icons.radar_outlined,
+                  compact: isNarrow,
+                ),
+                _MetricCard(
+                  title: 'Finalizadas',
+                  value: '${data.completedOrders}',
+                  caption: 'cerradas',
+                  icon: Icons.task_alt_outlined,
+                  compact: isNarrow,
+                ),
+                _MetricCard(
+                  title: 'Rechazadas',
+                  value: '${data.rejectedOrders}',
+                  caption: 'con devolucion',
+                  icon: Icons.report_problem_outlined,
+                  compact: isNarrow,
+                ),
+                _MetricCard(
+                  title: 'Urgentes',
+                  value: '${data.urgentOrders}',
+                  caption: 'prioridad alta',
+                  icon: Icons.priority_high,
+                  compact: isNarrow,
+                ),
+                _MetricCard(
+                  title: 'Compras',
+                  value: '${data.filteredQuotes.length}',
+                  caption: 'registradas',
+                  icon: Icons.request_quote_outlined,
+                  compact: isNarrow,
+                ),
+              ];
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  isNarrow
+                      ? SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: [
+                              Text(
+                                'Resumen ejecutivo',
+                                style: Theme.of(context).textTheme.titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 6,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: scheme.surface,
+                                  borderRadius: BorderRadius.circular(999),
+                                  border: Border.all(color: scheme.outlineVariant),
+                                ),
+                                child: Text(
+                                  rangeLabel,
+                                  style: Theme.of(context).textTheme.labelMedium,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            Text(
+                              'Resumen ejecutivo',
+                              style: Theme.of(context).textTheme.titleMedium
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: scheme.surface,
+                                borderRadius: BorderRadius.circular(999),
+                                border: Border.all(color: scheme.outlineVariant),
+                              ),
+                              child: Text(
+                                rangeLabel,
+                                style: Theme.of(context).textTheme.labelMedium,
+                              ),
+                            ),
+                          ],
+                        ),
+                  const SizedBox(height: 12),
+                  if (isNarrow)
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          for (var index = 0; index < metrics.length; index++) ...[
+                            metrics[index],
+                            if (index != metrics.length - 1) const SizedBox(width: 10),
+                          ],
+                        ],
+                      ),
+                    )
+                  else
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: metrics,
+                    ),
+                ],
+              );
+            },
           ),
         ],
       ),
@@ -682,52 +545,65 @@ class _MetricCard extends StatelessWidget {
     required this.value,
     required this.caption,
     required this.icon,
+    this.compact = false,
   });
 
   final String title;
   final String value;
   final String caption;
   final IconData icon;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Container(
-      width: 210,
-      padding: const EdgeInsets.all(14),
+      width: compact ? 138 : 156,
+      padding: EdgeInsets.all(compact ? 10 : 12),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+        color: scheme.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: scheme.outlineVariant),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon),
-          const SizedBox(height: 10),
-          Text(title, style: Theme.of(context).textTheme.bodySmall),
-          const SizedBox(height: 4),
+          Container(
+            width: compact ? 30 : 34,
+            height: compact ? 30 : 34,
+            decoration: BoxDecoration(
+              color: scheme.primary.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, size: compact ? 16 : 18, color: scheme.primary),
+          ),
+          SizedBox(height: compact ? 6 : 8),
+          Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 2),
           Text(
             value,
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
               fontWeight: FontWeight.w700,
+              fontSize: compact ? 17 : null,
             ),
           ),
           const SizedBox(height: 4),
-          Text(caption, style: Theme.of(context).textTheme.bodySmall),
+          Text(
+            caption,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              fontSize: compact ? 11 : null,
+            ),
+          ),
         ],
       ),
     );
-  }
-}
-
-class _SectionTitle extends StatelessWidget {
-  const _SectionTitle({required this.title});
-
-  final String title;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(title, style: Theme.of(context).textTheme.titleMedium);
   }
 }
 
@@ -737,6 +613,7 @@ class _SimpleBreakdownCard extends StatelessWidget {
     required this.subtitle,
     required this.items,
     required this.emptyText,
+    this.totalLabel,
     this.fullWidth = false,
   });
 
@@ -744,13 +621,16 @@ class _SimpleBreakdownCard extends StatelessWidget {
   final String subtitle;
   final List<_ReportItem> items;
   final String emptyText;
+  final String? totalLabel;
   final bool fullWidth;
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return SizedBox(
-      width: fullWidth ? double.infinity : 420,
+      width: fullWidth ? double.infinity : 360,
       child: Card(
+        color: scheme.surface,
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
@@ -759,35 +639,292 @@ class _SimpleBreakdownCard extends StatelessWidget {
               Text(title, style: Theme.of(context).textTheme.titleSmall),
               const SizedBox(height: 4),
               Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
+              if (totalLabel != null) ...[
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: scheme.outlineVariant),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.summarize_outlined, size: 16, color: scheme.primary),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          totalLabel!,
+                          style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               if (items.isEmpty)
                 Text(emptyText)
               else
-                for (final item in items) ...[
+                for (var index = 0; index < items.length; index++) ...[
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      Container(
+                        width: 28,
+                        height: 28,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: scheme.primary.withOpacity(0.10),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          '${index + 1}',
+                          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            color: scheme.primary,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          item.label,
+                          items[index].label,
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
                       ),
                       const SizedBox(width: 12),
                       Text(
-                        item.value,
+                        items[index].value,
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           fontWeight: FontWeight.w700,
                         ),
                       ),
                     ],
                   ),
-                  if (item != items.last) const SizedBox(height: 8),
+                  if (index != items.length - 1) const SizedBox(height: 10),
                 ],
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+class _TrendCard extends StatelessWidget {
+  const _TrendCard({
+    required this.title,
+    required this.subtitle,
+    required this.buckets,
+    required this.totalQuotes,
+    this.fullWidth = false,
+  });
+
+  final String title;
+  final String subtitle;
+  final List<_MonthBucket> buckets;
+  final int totalQuotes;
+  final bool fullWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final maxOrders = buckets.fold<int>(0, (max, item) => item.ordersCount > max ? item.ordersCount : max);
+    final maxAmount = buckets.fold<num>(0, (max, item) => item.quotesAmount > max ? item.quotesAmount : max);
+    final totalOrders = buckets.fold<int>(0, (sum, item) => sum + item.ordersCount);
+    final totalAmount = buckets.fold<num>(0, (sum, item) => sum + item.quotesAmount);
+
+    return SizedBox(
+      width: fullWidth ? double.infinity : 520,
+      child: Card(
+        color: scheme.surface,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: Theme.of(context).textTheme.titleSmall),
+              const SizedBox(height: 4),
+              Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _TrendStatChip(
+                    icon: Icons.inventory_2_outlined,
+                    label: 'Total ordenes: $totalOrders',
+                  ),
+                  _TrendStatChip(
+                    icon: Icons.request_quote_outlined,
+                    label: 'Total compras: $totalQuotes',
+                  ),
+                  _TrendStatChip(
+                    icon: Icons.attach_money_outlined,
+                    label: 'Total monto: ${_money(totalAmount)}',
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              if (buckets.isEmpty)
+                const Text('Sin datos historicos suficientes.')
+              else
+                for (var index = 0; index < buckets.length; index++) ...[
+                  _TrendRow(
+                    bucket: buckets[index],
+                    maxOrders: maxOrders,
+                    maxAmount: maxAmount,
+                  ),
+                  if (index != buckets.length - 1) const SizedBox(height: 14),
+                ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TrendRow extends StatelessWidget {
+  const _TrendRow({
+    required this.bucket,
+    required this.maxOrders,
+    required this.maxAmount,
+  });
+
+  final _MonthBucket bucket;
+  final int maxOrders;
+  final num maxAmount;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final ordersFactor = maxOrders <= 0 ? 0.0 : bucket.ordersCount / maxOrders;
+    final amountFactor = maxAmount <= 0 ? 0.0 : bucket.quotesAmount / maxAmount;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            SizedBox(
+              width: 82,
+              child: Text(
+                bucket.label,
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            Expanded(
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.end,
+                children: [
+                  _TrendStatChip(
+                    icon: Icons.inventory_2_outlined,
+                    label: '${bucket.ordersCount} ord',
+                  ),
+                  _TrendStatChip(
+                    icon: Icons.request_quote_outlined,
+                    label: '${bucket.quotesCount} compras',
+                  ),
+                  _TrendStatChip(
+                    icon: Icons.attach_money_outlined,
+                    label: _money(bucket.quotesAmount),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        _TrendBar(
+          label: 'Ordenes',
+          factor: ordersFactor,
+          color: scheme.primary,
+          background: scheme.primary.withOpacity(0.12),
+        ),
+        const SizedBox(height: 6),
+        _TrendBar(
+          label: 'Monto',
+          factor: amountFactor.toDouble(),
+          color: scheme.tertiary,
+          background: scheme.tertiary.withOpacity(0.12),
+        ),
+      ],
+    );
+  }
+}
+
+class _TrendStatChip extends StatelessWidget {
+  const _TrendStatChip({
+    required this.icon,
+    required this.label,
+  });
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: scheme.primary),
+          const SizedBox(width: 6),
+          Text(label, style: Theme.of(context).textTheme.labelMedium),
+        ],
+      ),
+    );
+  }
+}
+
+class _TrendBar extends StatelessWidget {
+  const _TrendBar({
+    required this.label,
+    required this.factor,
+    required this.color,
+    required this.background,
+  });
+
+  final String label;
+  final double factor;
+  final Color color;
+  final Color background;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 54,
+          child: Text(label, style: Theme.of(context).textTheme.bodySmall),
+        ),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: factor.clamp(0.0, 1.0),
+              minHeight: 10,
+              backgroundColor: background,
+              valueColor: AlwaysStoppedAnimation<Color>(color),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
