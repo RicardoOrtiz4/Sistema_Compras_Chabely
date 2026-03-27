@@ -437,12 +437,37 @@ class PurchaseOrder {
       facturaUrls.insert(0, singleFactura);
     }
 
+    final requesterId = _firstNonEmptyString(
+      data,
+      const ['requesterId', 'requestedById', 'userId', 'createdBy'],
+    );
+    final requesterName = _firstNonEmptyString(
+      data,
+      const [
+        'requesterName',
+        'requestedByName',
+        'requesterDisplayName',
+        'requester',
+        'userName',
+        'displayName',
+        'name',
+      ],
+    );
+    final areaId = _firstNonEmptyString(
+      data,
+      const ['areaId', 'requesterAreaId', 'departmentId', 'area'],
+    );
+    final areaName = _firstNonEmptyString(
+      data,
+      const ['areaName', 'requesterArea', 'departmentName', 'areaLabel'],
+    );
+
     return PurchaseOrder(
       id: id,
-      requesterId: (data['requesterId'] as String?) ?? '',
-      requesterName: (data['requesterName'] as String?) ?? '',
-      areaId: (data['areaId'] as String?) ?? '',
-      areaName: normalizeAreaLabel((data['areaName'] as String?) ?? ''),
+      requesterId: requesterId,
+      requesterName: requesterName,
+      areaId: areaId,
+      areaName: normalizeAreaLabel(areaName),
       companyId: data['companyId'] as String?,
       urgency: _urgencyFromString(data['urgency'] as String?) ?? PurchaseOrderUrgency.normal,
       status: _statusFromString(data['status'] as String?) ?? PurchaseOrderStatus.draft,
@@ -492,6 +517,37 @@ class PurchaseOrder {
       isDraft: (data['isDraft'] as bool?) ?? false,
     );
   }
+}
+
+String _firstNonEmptyString(
+  Map<String, dynamic> data,
+  List<String> keys,
+) {
+  for (final key in keys) {
+    final raw = data[key];
+    if (raw is String) {
+      final trimmed = raw.trim();
+      if (trimmed.isNotEmpty) return trimmed;
+    }
+    if (raw is Map) {
+      final nested = Map<String, dynamic>.from(raw);
+      final nestedValue = _firstNonEmptyString(
+        nested,
+        const [
+          'name',
+          'displayName',
+          'fullName',
+          'nombre',
+          'requesterName',
+          'requestedByName',
+          'label',
+          'value',
+        ],
+      );
+      if (nestedValue.isNotEmpty) return nestedValue;
+    }
+  }
+  return '';
 }
 
 DateTime? resolveRequestedDeliveryDate(PurchaseOrder order) {
@@ -642,8 +698,9 @@ DateTime? _dateOnly(DateTime? value) {
 
 PurchaseOrderStatus? _statusFromString(String? raw) {
   if (raw == null) return null;
+  final normalized = raw.trim();
   for (final status in PurchaseOrderStatus.values) {
-    if (status.name == raw) return status;
+    if (status.name == normalized) return status;
   }
   return null;
 }

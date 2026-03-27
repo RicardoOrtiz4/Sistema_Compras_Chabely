@@ -8,6 +8,8 @@ import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_b
 OrderPdfData buildPdfDataFromOrder(
   PurchaseOrder order, {
   required CompanyBranding branding,
+  String? requesterName,
+  String? requesterArea,
   String? supplier,
   String? internalOrder,
   num? budget,
@@ -59,6 +61,8 @@ OrderPdfData buildPdfDataFromOrder(
     final built = _buildPdfDataFromOrderImpl(
       order,
       branding: branding,
+      requesterName: requesterName,
+      requesterArea: requesterArea,
       supplier: supplier,
       internalOrder: internalOrder,
       budget: budget,
@@ -91,6 +95,8 @@ OrderPdfData buildPdfDataFromOrder(
   return _buildPdfDataFromOrderImpl(
     order,
     branding: branding,
+    requesterName: requesterName,
+    requesterArea: requesterArea,
     supplier: supplier,
     internalOrder: internalOrder,
     budget: budget,
@@ -117,6 +123,8 @@ OrderPdfData buildPdfDataFromOrder(
 OrderPdfData _buildPdfDataFromOrderImpl(
   PurchaseOrder order, {
   required CompanyBranding branding,
+  String? requesterName,
+  String? requesterArea,
   String? supplier,
   String? internalOrder,
   num? budget,
@@ -162,8 +170,8 @@ OrderPdfData _buildPdfDataFromOrderImpl(
 
   return OrderPdfData(
     branding: effectiveBranding,
-    requesterName: order.requesterName,
-    requesterArea: order.areaName,
+    requesterName: requesterName ?? order.requesterName,
+    requesterArea: requesterArea ?? order.areaName,
     areaName: order.areaName,
     urgency: order.urgency,
     items: effectiveItems,
@@ -321,4 +329,3 @@ num _sumBudgets(Map<String, num> budgets) {
   }
   return total;
 }
-

@@ -1,27 +1,44 @@
 {
   "project_info": {
-    "project_number": "646841655886",
-    "firebase_url": "https://sistemacompraschabely-default-rtdb.firebaseio.com",
-    "project_id": "sistemacompraschabely",
-    "storage_bucket": "sistemacompraschabely.firebasestorage.app"
+    "project_number": "130125072749",
+    "firebase_url": "https://compraschabelyacerpro-default-rtdb.firebaseio.com",
+    "project_id": "compraschabelyacerpro",
+    "storage_bucket": "compraschabelyacerpro.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:646841655886:android:1db980686a21a5a002991f",
+        "mobilesdk_app_id": "1:130125072749:android:331c3e9d85ed91898b7264",
         "android_client_info": {
           "package_name": "com.example.sistema_compras"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "130125072749-rtkrshcpl5s68jc1bib13q259ub5qubf.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
-          "current_key": "AIzaSyBLBL4Y77HAJ4XHGsqn0bYwNUt2Zl6GlGI"
+          "current_key": "AIzaSyCmGEIZiC7OD4atyqKIiBCU-2Tdmk8DiD8"
         }
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "130125072749-rtkrshcpl5s68jc1bib13q259ub5qubf.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "130125072749-0s9mlicak2bfscjucqudsi8hcgslpl5d.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.sistemaCompras"
+              }
+            }
+          ]
         }
       }
     }

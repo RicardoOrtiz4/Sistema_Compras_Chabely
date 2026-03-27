@@ -507,6 +507,10 @@ class _PendingEtaPreviewScreenState
         etaDate: etaDate,
         actor: actor,
       );
+      refreshOrderModuleTransitionData(
+        ref,
+        orderIds: <String>[order.id],
+      );
       if (!mounted) return;
       Navigator.of(context).pop(true);
     } catch (error, stack) {

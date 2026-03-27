@@ -268,8 +268,9 @@ List<String> _parseLinks(dynamic value) {
 
 SupplierQuoteStatus? _statusFromString(String? raw) {
   if (raw == null) return null;
+  final normalized = raw.trim();
   for (final status in SupplierQuoteStatus.values) {
-    if (status.name == raw) return status;
+    if (status.name == normalized) return status;
   }
   return null;
 }

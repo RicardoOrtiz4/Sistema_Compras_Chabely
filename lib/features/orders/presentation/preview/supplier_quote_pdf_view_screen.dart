@@ -12,6 +12,7 @@ class SupplierQuotePdfViewScreen extends StatefulWidget {
     this.onPrimaryAction,
     this.primaryActionEnabled = true,
     this.closeOnPrimaryAction = false,
+    this.returnPrimaryActionResult = false,
     super.key,
   });
 
@@ -21,6 +22,7 @@ class SupplierQuotePdfViewScreen extends StatefulWidget {
   final Future<bool> Function()? onPrimaryAction;
   final bool primaryActionEnabled;
   final bool closeOnPrimaryAction;
+  final bool returnPrimaryActionResult;
 
   @override
   State<SupplierQuotePdfViewScreen> createState() =>
@@ -64,7 +66,8 @@ class _SupplierQuotePdfViewScreenState extends State<SupplierQuotePdfViewScreen>
                 child: FilledButton.icon(
                   onPressed: _runningPrimaryAction ||
                           !widget.primaryActionEnabled ||
-                          widget.onPrimaryAction == null
+                          (!widget.returnPrimaryActionResult &&
+                              widget.onPrimaryAction == null)
                       ? null
                       : _runPrimaryAction,
                   icon: _runningPrimaryAction
@@ -100,6 +103,10 @@ class _SupplierQuotePdfViewScreenState extends State<SupplierQuotePdfViewScreen>
   }
 
   Future<void> _runPrimaryAction() async {
+    if (widget.returnPrimaryActionResult) {
+      Navigator.of(context).pop(true);
+      return;
+    }
     final action = widget.onPrimaryAction;
     if (action == null || _runningPrimaryAction) return;
     setState(() => _runningPrimaryAction = true);

@@ -41,53 +41,56 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyDSj-VgMO00ImwLFEFJ5JoVWpYzHUFKfm8',
-    appId: '1:646841655886:web:98198b772ddcdd3902991f',
-    messagingSenderId: '646841655886',
-    projectId: 'sistemacompraschabely',
-    authDomain: 'sistemacompraschabely.firebaseapp.com',
-    databaseURL: 'https://sistemacompraschabely-default-rtdb.firebaseio.com',
-    storageBucket: 'sistemacompraschabely.firebasestorage.app',
-    measurementId: 'G-N8EJKZXG1X',
+    apiKey: 'AIzaSyDqGlqXBMHtpBBWX80MDNJXiFkU89spXpg',
+    appId: '1:130125072749:web:e06da6a5477fc0698b7264',
+    messagingSenderId: '130125072749',
+    projectId: 'compraschabelyacerpro',
+    authDomain: 'compraschabelyacerpro.firebaseapp.com',
+    databaseURL: 'https://compraschabelyacerpro-default-rtdb.firebaseio.com',
+    storageBucket: 'compraschabelyacerpro.firebasestorage.app',
+    measurementId: 'G-2NBVQD0SS4',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyBLBL4Y77HAJ4XHGsqn0bYwNUt2Zl6GlGI',
-    appId: '1:646841655886:android:1db980686a21a5a002991f',
-    messagingSenderId: '646841655886',
-    projectId: 'sistemacompraschabely',
-    databaseURL: 'https://sistemacompraschabely-default-rtdb.firebaseio.com',
-    storageBucket: 'sistemacompraschabely.firebasestorage.app',
+    apiKey: 'AIzaSyCmGEIZiC7OD4atyqKIiBCU-2Tdmk8DiD8',
+    appId: '1:130125072749:android:331c3e9d85ed91898b7264',
+    messagingSenderId: '130125072749',
+    projectId: 'compraschabelyacerpro',
+    databaseURL: 'https://compraschabelyacerpro-default-rtdb.firebaseio.com',
+    storageBucket: 'compraschabelyacerpro.firebasestorage.app',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyB8-mqDf9m4tjJlW3sQhI0Icy7beWhapa8',
-    appId: '1:646841655886:ios:22c0e26b01518d7402991f',
-    messagingSenderId: '646841655886',
-    projectId: 'sistemacompraschabely',
-    databaseURL: 'https://sistemacompraschabely-default-rtdb.firebaseio.com',
-    storageBucket: 'sistemacompraschabely.firebasestorage.app',
+    apiKey: 'AIzaSyDxzLwiQ8ayGCs1wOyAsh8Ct8Xl2L-7gEY',
+    appId: '1:130125072749:ios:626f7a5121c795508b7264',
+    messagingSenderId: '130125072749',
+    projectId: 'compraschabelyacerpro',
+    databaseURL: 'https://compraschabelyacerpro-default-rtdb.firebaseio.com',
+    storageBucket: 'compraschabelyacerpro.firebasestorage.app',
+    iosClientId: '130125072749-0s9mlicak2bfscjucqudsi8hcgslpl5d.apps.googleusercontent.com',
     iosBundleId: 'com.example.sistemaCompras',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
-    apiKey: 'AIzaSyB8-mqDf9m4tjJlW3sQhI0Icy7beWhapa8',
-    appId: '1:646841655886:ios:22c0e26b01518d7402991f',
-    messagingSenderId: '646841655886',
-    projectId: 'sistemacompraschabely',
-    databaseURL: 'https://sistemacompraschabely-default-rtdb.firebaseio.com',
-    storageBucket: 'sistemacompraschabely.firebasestorage.app',
+    apiKey: 'AIzaSyDxzLwiQ8ayGCs1wOyAsh8Ct8Xl2L-7gEY',
+    appId: '1:130125072749:ios:626f7a5121c795508b7264',
+    messagingSenderId: '130125072749',
+    projectId: 'compraschabelyacerpro',
+    databaseURL: 'https://compraschabelyacerpro-default-rtdb.firebaseio.com',
+    storageBucket: 'compraschabelyacerpro.firebasestorage.app',
+    iosClientId: '130125072749-0s9mlicak2bfscjucqudsi8hcgslpl5d.apps.googleusercontent.com',
     iosBundleId: 'com.example.sistemaCompras',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: 'AIzaSyDSj-VgMO00ImwLFEFJ5JoVWpYzHUFKfm8',
-    appId: '1:646841655886:web:d1156b9c00fb451002991f',
-    messagingSenderId: '646841655886',
-    projectId: 'sistemacompraschabely',
-    authDomain: 'sistemacompraschabely.firebaseapp.com',
-    databaseURL: 'https://sistemacompraschabely-default-rtdb.firebaseio.com',
-    storageBucket: 'sistemacompraschabely.firebasestorage.app',
-    measurementId: 'G-X83K59CHS7',
+    apiKey: 'AIzaSyDqGlqXBMHtpBBWX80MDNJXiFkU89spXpg',
+    appId: '1:130125072749:web:05e7f238d9c1173d8b7264',
+    messagingSenderId: '130125072749',
+    projectId: 'compraschabelyacerpro',
+    authDomain: 'compraschabelyacerpro.firebaseapp.com',
+    databaseURL: 'https://compraschabelyacerpro-default-rtdb.firebaseio.com',
+    storageBucket: 'compraschabelyacerpro.firebasestorage.app',
+    measurementId: 'G-9TXERRMC45',
   );
+
 }

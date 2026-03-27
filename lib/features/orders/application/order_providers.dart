@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
 
@@ -26,6 +27,14 @@ bool _awaitingProfile(Ref ref) {
 const _sessionCacheDuration = Duration(minutes: 4);
 const _sharedOrderDataScope = sharedCompanyDataId;
 final _sessionSnapshotCache = <String, Object?>{};
+final _pendingComprasTransitionHiddenOrderIds = <String>{};
+final _cotizacionesTransitionHiddenOrderIds = <String>{};
+
+bool get _shouldUsePersistedSnapshots =>
+    !(!kIsWeb && defaultTargetPlatform == TargetPlatform.windows);
+
+bool get useManualOrderRefreshOnWindowsRelease =>
+    kReleaseMode && !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
 
 String _orderSnapshotKey(String scope, String orderId) =>
     '$scope:orderById:$orderId';
@@ -51,6 +60,175 @@ String _profileCacheScope(Ref ref, AppUser user) {
 
 void clearOrderSessionSnapshotCache() {
   _sessionSnapshotCache.clear();
+}
+
+void markPendingComprasOrdersAsMoved(Iterable<String> orderIds) {
+  _pendingComprasTransitionHiddenOrderIds.addAll(
+    orderIds.map((id) => id.trim()).where((id) => id.isNotEmpty),
+  );
+}
+
+void unmarkPendingComprasOrdersAsMoved(Iterable<String> orderIds) {
+  for (final orderId in orderIds.map((id) => id.trim()).where((id) => id.isNotEmpty)) {
+    _pendingComprasTransitionHiddenOrderIds.remove(orderId);
+  }
+}
+
+void markCotizacionesOrdersAsMoved(Iterable<String> orderIds) {
+  _cotizacionesTransitionHiddenOrderIds.addAll(
+    orderIds.map((id) => id.trim()).where((id) => id.isNotEmpty),
+  );
+}
+
+void unmarkCotizacionesOrdersAsMoved(Iterable<String> orderIds) {
+  for (final orderId in orderIds.map((id) => id.trim()).where((id) => id.isNotEmpty)) {
+    _cotizacionesTransitionHiddenOrderIds.remove(orderId);
+  }
+}
+
+void refreshOrderModuleDataFromContainer(
+  ProviderContainer container, {
+  String? quoteId,
+  Iterable<String> orderIds = const <String>[],
+}) {
+  clearOrderSessionSnapshotCache();
+
+  container.invalidate(userOrdersProvider);
+  container.invalidate(allOrdersProvider);
+  container.invalidate(historyAllOrdersProvider);
+  container.invalidate(monitoringOrdersProvider);
+  container.invalidate(operationalOrdersProvider);
+  container.invalidate(pendingComprasOrdersProvider);
+  container.invalidate(cotizacionesOrdersProvider);
+  container.invalidate(dataCompleteOrdersProvider);
+  container.invalidate(supplierQuotesProvider);
+  container.invalidate(rejectedOrdersProvider);
+  container.invalidate(globalActionMonitoringOrdersProvider);
+  container.invalidate(homeDashboardCountsProvider);
+  container.invalidate(contabilidadOrdersProvider);
+  container.invalidate(pendingEtaOrdersProvider);
+
+  if (quoteId != null && quoteId.trim().isNotEmpty) {
+    container.invalidate(supplierQuoteByIdProvider(quoteId));
+    container.invalidate(supplierQuoteHistoryProvider(quoteId));
+  }
+
+  for (final orderId in orderIds.map((id) => id.trim()).where((id) => id.isNotEmpty).toSet()) {
+    container.invalidate(orderByIdStreamProvider(orderId));
+    container.invalidate(orderEventsProvider(orderId));
+  }
+}
+
+void refreshOrderModuleTransitionDataFromContainer(
+  ProviderContainer container, {
+  String? quoteId,
+  Iterable<String> orderIds = const <String>[],
+}) {
+  clearOrderSessionSnapshotCache();
+
+  container.invalidate(userOrdersProvider);
+  container.invalidate(operationalOrdersProvider);
+  container.invalidate(pendingComprasOrdersProvider);
+  container.invalidate(cotizacionesOrdersProvider);
+  container.invalidate(dataCompleteOrdersProvider);
+  container.invalidate(supplierQuotesProvider);
+  container.invalidate(homeDashboardCountsProvider);
+  container.invalidate(contabilidadOrdersProvider);
+  container.invalidate(pendingEtaOrdersProvider);
+
+  if (quoteId != null && quoteId.trim().isNotEmpty) {
+    container.invalidate(supplierQuoteByIdProvider(quoteId));
+    container.invalidate(supplierQuoteHistoryProvider(quoteId));
+  }
+
+  for (final orderId in orderIds
+      .map((id) => id.trim())
+      .where((id) => id.isNotEmpty)
+      .toSet()) {
+    container.invalidate(orderByIdStreamProvider(orderId));
+    container.invalidate(orderEventsProvider(orderId));
+  }
+}
+
+void refreshOrderModuleData(
+  WidgetRef ref, {
+  String? quoteId,
+  Iterable<String> orderIds = const <String>[],
+}) {
+  clearOrderSessionSnapshotCache();
+
+  ref.invalidate(userOrdersProvider);
+  ref.invalidate(allOrdersProvider);
+  ref.invalidate(historyAllOrdersProvider);
+  ref.invalidate(monitoringOrdersProvider);
+  ref.invalidate(operationalOrdersProvider);
+  ref.invalidate(pendingComprasOrdersProvider);
+  ref.invalidate(cotizacionesOrdersProvider);
+  ref.invalidate(dataCompleteOrdersProvider);
+  ref.invalidate(supplierQuotesProvider);
+  ref.invalidate(rejectedOrdersProvider);
+  ref.invalidate(globalActionMonitoringOrdersProvider);
+  ref.invalidate(homeDashboardCountsProvider);
+  ref.invalidate(contabilidadOrdersProvider);
+  ref.invalidate(pendingEtaOrdersProvider);
+
+  if (quoteId != null && quoteId.trim().isNotEmpty) {
+    ref.invalidate(supplierQuoteByIdProvider(quoteId));
+    ref.invalidate(supplierQuoteHistoryProvider(quoteId));
+  }
+
+  for (final orderId in orderIds.map((id) => id.trim()).where((id) => id.isNotEmpty).toSet()) {
+    ref.invalidate(orderByIdStreamProvider(orderId));
+    ref.invalidate(orderEventsProvider(orderId));
+  }
+}
+
+void refreshOrderModuleTransitionData(
+  WidgetRef ref, {
+  String? quoteId,
+  Iterable<String> orderIds = const <String>[],
+}) {
+  clearOrderSessionSnapshotCache();
+
+  ref.invalidate(userOrdersProvider);
+  ref.invalidate(operationalOrdersProvider);
+  ref.invalidate(pendingComprasOrdersProvider);
+  ref.invalidate(cotizacionesOrdersProvider);
+  ref.invalidate(dataCompleteOrdersProvider);
+  ref.invalidate(supplierQuotesProvider);
+  ref.invalidate(homeDashboardCountsProvider);
+  ref.invalidate(contabilidadOrdersProvider);
+  ref.invalidate(pendingEtaOrdersProvider);
+
+  if (quoteId != null && quoteId.trim().isNotEmpty) {
+    ref.invalidate(supplierQuoteByIdProvider(quoteId));
+    ref.invalidate(supplierQuoteHistoryProvider(quoteId));
+  }
+
+  for (final orderId in orderIds
+      .map((id) => id.trim())
+      .where((id) => id.isNotEmpty)
+      .toSet()) {
+    ref.invalidate(orderByIdStreamProvider(orderId));
+    ref.invalidate(orderEventsProvider(orderId));
+  }
+}
+
+void refreshQuoteWorkflowCounts(
+  WidgetRef ref, {
+  String? quoteId,
+}) {
+  clearOrderSessionSnapshotCache();
+
+  ref.invalidate(supplierQuotesProvider);
+  ref.invalidate(cotizacionesOrdersProvider);
+  ref.invalidate(dataCompleteOrdersProvider);
+  ref.invalidate(homeDashboardCountsProvider);
+
+  if (quoteId != null && quoteId.trim().isNotEmpty) {
+    ref.invalidate(supplierQuoteByIdProvider(quoteId));
+    ref.invalidate(supplierQuoteHistoryProvider(quoteId));
+  }
 }
 
 void _cacheProviderForSession(
@@ -223,6 +401,65 @@ List<PurchaseOrder> _filterContabilidadOrders(List<PurchaseOrder> orders) {
       .toList(growable: false);
 }
 
+List<PurchaseOrder> _filterOrdersByStatus(
+  List<PurchaseOrder> orders,
+  PurchaseOrderStatus status,
+) {
+  return orders
+      .where((order) => order.status == status)
+      .toList(growable: false);
+}
+
+List<PurchaseOrder> _filterPendingComprasOrdersWithTransitionExclusions(
+  List<PurchaseOrder> orders,
+) {
+  final visible = <PurchaseOrder>[];
+  final presentOrderIds = <String>{};
+
+  for (final order in orders) {
+    presentOrderIds.add(order.id);
+    if (order.status != PurchaseOrderStatus.pendingCompras) {
+      _pendingComprasTransitionHiddenOrderIds.remove(order.id);
+      continue;
+    }
+    if (_pendingComprasTransitionHiddenOrderIds.contains(order.id)) {
+      continue;
+    }
+    visible.add(order);
+  }
+
+  _pendingComprasTransitionHiddenOrderIds.removeWhere(
+    (orderId) => !presentOrderIds.contains(orderId),
+  );
+
+  return visible;
+}
+
+List<PurchaseOrder> _filterCotizacionesOrdersWithTransitionExclusions(
+  List<PurchaseOrder> orders,
+) {
+  final visible = <PurchaseOrder>[];
+  final presentOrderIds = <String>{};
+
+  for (final order in orders) {
+    presentOrderIds.add(order.id);
+    if (order.status != PurchaseOrderStatus.cotizaciones) {
+      _cotizacionesTransitionHiddenOrderIds.remove(order.id);
+      continue;
+    }
+    if (_cotizacionesTransitionHiddenOrderIds.contains(order.id)) {
+      continue;
+    }
+    visible.add(order);
+  }
+
+  _cotizacionesTransitionHiddenOrderIds.removeWhere(
+    (orderId) => !presentOrderIds.contains(orderId),
+  );
+
+  return visible;
+}
+
 Stream<List<PurchaseOrder>> _withCachedOrders({
   required String key,
   required Stream<List<PurchaseOrder>> source,
@@ -233,7 +470,7 @@ Stream<List<PurchaseOrder>> _withCachedOrders({
   if (cached is List<PurchaseOrder>) {
     lastEmitted = cached;
     yield cached;
-  } else {
+  } else if (_shouldUsePersistedSnapshots) {
     final persisted = await OrderLocalSnapshotStore.readOrders(key);
     if (persisted != null) {
       final snapshot = List<PurchaseOrder>.unmodifiable(persisted);
@@ -249,13 +486,41 @@ Stream<List<PurchaseOrder>> _withCachedOrders({
     for (final order in snapshot) {
       _sessionSnapshotCache[_orderSnapshotKey(scope, order.id)] = order;
     }
-    unawaited(OrderLocalSnapshotStore.writeOrders(key, orders));
+    if (_shouldUsePersistedSnapshots) {
+      unawaited(OrderLocalSnapshotStore.writeOrders(key, orders));
+    }
     if (lastEmitted != null && _sameOrderList(lastEmitted, snapshot)) {
       continue;
     }
     lastEmitted = snapshot;
     yield snapshot;
   }
+}
+
+Stream<List<PurchaseOrder>> _withLiveOrders(Stream<List<PurchaseOrder>> source) async* {
+  await for (final orders in source) {
+    yield List<PurchaseOrder>.unmodifiable(orders);
+  }
+}
+
+Stream<List<SupplierQuote>> _withLiveSupplierQuotes(
+  Stream<List<SupplierQuote>> source,
+) async* {
+  await for (final quotes in source) {
+    yield List<SupplierQuote>.unmodifiable(quotes);
+  }
+}
+
+List<PurchaseOrder> _filterOrdersByStatusLimited(
+  List<PurchaseOrder> orders,
+  PurchaseOrderStatus status, {
+  int? limit,
+}) {
+  final filtered = _filterOrdersByStatus(orders, status);
+  if (limit == null || limit <= 0 || filtered.length <= limit) {
+    return filtered;
+  }
+  return filtered.take(limit).toList(growable: false);
 }
 
 Stream<List<SupplierQuote>> _withCachedSupplierQuotes({
@@ -267,7 +532,7 @@ Stream<List<SupplierQuote>> _withCachedSupplierQuotes({
   if (cached is List<SupplierQuote>) {
     lastEmitted = cached;
     yield cached;
-  } else {
+  } else if (_shouldUsePersistedSnapshots) {
     final persisted = await OrderLocalSnapshotStore.readSupplierQuotes(key);
     if (persisted != null) {
       final snapshot = List<SupplierQuote>.unmodifiable(persisted);
@@ -280,7 +545,9 @@ Stream<List<SupplierQuote>> _withCachedSupplierQuotes({
   await for (final quotes in source) {
     final snapshot = List<SupplierQuote>.unmodifiable(quotes);
     _sessionSnapshotCache[key] = snapshot;
-    unawaited(OrderLocalSnapshotStore.writeSupplierQuotes(key, quotes));
+    if (_shouldUsePersistedSnapshots) {
+      unawaited(OrderLocalSnapshotStore.writeSupplierQuotes(key, quotes));
+    }
     if (lastEmitted != null && _sameSupplierQuoteList(lastEmitted, snapshot)) {
       continue;
     }
@@ -298,7 +565,7 @@ Stream<OrderDashboardCounts?> _withCachedDashboardCounts({
   if (cached is OrderDashboardCounts) {
     lastEmitted = cached;
     yield cached;
-  } else {
+  } else if (_shouldUsePersistedSnapshots) {
     final persisted = await OrderLocalSnapshotStore.readDashboardCounts(key);
     if (persisted != null) {
       _sessionSnapshotCache[key] = persisted;
@@ -310,7 +577,9 @@ Stream<OrderDashboardCounts?> _withCachedDashboardCounts({
   await for (final counts in source) {
     if (counts != null) {
       _sessionSnapshotCache[key] = counts;
-      unawaited(OrderLocalSnapshotStore.writeDashboardCounts(key, counts));
+      if (_shouldUsePersistedSnapshots) {
+        unawaited(OrderLocalSnapshotStore.writeDashboardCounts(key, counts));
+      }
     }
     if (_sameDashboardCounts(lastEmitted, counts)) {
       continue;
@@ -527,8 +796,15 @@ final pendingComprasOrdersProvider =
       if (!isAdminRole(user.role) && !isCompras) {
         return Stream.value(const <PurchaseOrder>[]);
       }
-      final cacheScope = _profileCacheScope(ref, user);
       final repository = ref.watch(purchaseOrderRepositoryProvider);
+      if (useManualOrderRefreshOnWindowsRelease) {
+        return _withLiveOrders(
+          repository
+              .watchAllOrders()
+              .map(_filterPendingComprasOrdersWithTransitionExclusions),
+        );
+      }
+      final cacheScope = _profileCacheScope(ref, user);
       return _withCachedOrders(
         key: '$cacheScope:pendingComprasOrders',
         source: repository.watchOrdersByStatus(
@@ -551,8 +827,22 @@ final pendingComprasOrdersPagedProvider = StreamProvider.autoDispose
       if (!isAdminRole(user.role) && !isCompras) {
         return Stream.value(const <PurchaseOrder>[]);
       }
-      final cacheScope = _profileCacheScope(ref, user);
       final repository = ref.watch(purchaseOrderRepositoryProvider);
+      if (useManualOrderRefreshOnWindowsRelease) {
+        return _withLiveOrders(
+          repository.watchAllOrders().map(
+            (orders) {
+              final filtered =
+                  _filterPendingComprasOrdersWithTransitionExclusions(orders);
+              if (limit <= 0 || filtered.length <= limit) {
+                return filtered;
+              }
+              return filtered.take(limit).toList(growable: false);
+            },
+          ),
+        );
+      }
+      final cacheScope = _profileCacheScope(ref, user);
       return _withCachedOrders(
         key: '$cacheScope:pendingComprasOrdersPaged:$limit',
         source: repository.watchOrdersByStatus(
@@ -576,8 +866,15 @@ final cotizacionesOrdersProvider =
       if (!isAdminRole(user.role) && !isCompras) {
         return Stream.value(const <PurchaseOrder>[]);
       }
-      final cacheScope = _profileCacheScope(ref, user);
       final repository = ref.watch(purchaseOrderRepositoryProvider);
+      if (useManualOrderRefreshOnWindowsRelease) {
+        return _withLiveOrders(
+          repository
+              .watchAllOrders()
+              .map(_filterCotizacionesOrdersWithTransitionExclusions),
+        );
+      }
+      final cacheScope = _profileCacheScope(ref, user);
       return _withCachedOrders(
         key: '$cacheScope:cotizacionesOrders',
         source: repository.watchOrdersByStatus(
@@ -600,8 +897,20 @@ final dataCompleteOrdersProvider =
       if (!isAdminRole(user.role) && !isCompras) {
         return Stream.value(const <PurchaseOrder>[]);
       }
-      final cacheScope = _profileCacheScope(ref, user);
       final repository = ref.watch(purchaseOrderRepositoryProvider);
+      if (useManualOrderRefreshOnWindowsRelease) {
+        return _withLiveOrders(
+          repository
+              .watchAllOrders()
+              .map(
+                (orders) => _filterOrdersByStatus(
+                  orders,
+                  PurchaseOrderStatus.dataComplete,
+                ),
+              ),
+        );
+      }
+      final cacheScope = _profileCacheScope(ref, user);
       return _withCachedOrders(
         key: '$cacheScope:dataCompleteOrders',
         source: repository.watchOrdersByStatus(
@@ -631,6 +940,9 @@ final operationalOrdersProvider =
       }
       final cacheScope = _profileCacheScope(ref, user);
       final repository = ref.watch(purchaseOrderRepositoryProvider);
+      if (useManualOrderRefreshOnWindowsRelease) {
+        return _withLiveOrders(repository.watchAllOrders());
+      }
       return _withCachedOrders(
         key: '$cacheScope:operationalOrders',
         source: repository.watchAllOrders(),
@@ -651,8 +963,22 @@ final cotizacionesOrdersPagedProvider = StreamProvider.autoDispose
       if (!isAdminRole(user.role) && !isCompras) {
         return Stream.value(const <PurchaseOrder>[]);
       }
-      final cacheScope = _profileCacheScope(ref, user);
       final repository = ref.watch(purchaseOrderRepositoryProvider);
+      if (useManualOrderRefreshOnWindowsRelease) {
+        return _withLiveOrders(
+          repository.watchAllOrders().map(
+            (orders) {
+              final filtered =
+                  _filterCotizacionesOrdersWithTransitionExclusions(orders);
+              if (limit == null || limit <= 0 || filtered.length <= limit) {
+                return filtered;
+              }
+              return filtered.take(limit).toList(growable: false);
+            },
+          ),
+        );
+      }
+      final cacheScope = _profileCacheScope(ref, user);
       return _withCachedOrders(
         key: '$cacheScope:cotizacionesOrdersPaged:$limit',
         source: repository.watchOrdersByStatus(
@@ -684,6 +1010,9 @@ final supplierQuotesProvider = StreamProvider.autoDispose<List<SupplierQuote>>((
   }
   final cacheScope = _profileCacheScope(ref, user);
   final repository = ref.watch(purchaseOrderRepositoryProvider);
+  if (useManualOrderRefreshOnWindowsRelease) {
+    return _withLiveSupplierQuotes(repository.watchSupplierQuotes());
+  }
   return _withCachedSupplierQuotes(
     key: '$cacheScope:supplierQuotes',
     source: repository.watchSupplierQuotes(),
@@ -727,8 +1056,20 @@ final pendingEtaOrdersProvider =
       if (!isAdminRole(user.role) && !isCompras) {
         return Stream.value(const <PurchaseOrder>[]);
       }
-      final cacheScope = _profileCacheScope(ref, user);
       final repository = ref.watch(purchaseOrderRepositoryProvider);
+      if (useManualOrderRefreshOnWindowsRelease) {
+        return _withLiveOrders(
+          repository
+              .watchAllOrders()
+              .map(
+                (orders) => _filterOrdersByStatus(
+                  orders,
+                  PurchaseOrderStatus.paymentDone,
+                ),
+              ),
+        );
+      }
+      final cacheScope = _profileCacheScope(ref, user);
       return _withCachedOrders(
         key: '$cacheScope:pendingEtaOrders',
         source: repository.watchOrdersByStatus(PurchaseOrderStatus.paymentDone),
@@ -749,8 +1090,19 @@ final pendingEtaOrdersPagedProvider = StreamProvider.autoDispose
       if (!isAdminRole(user.role) && !isCompras) {
         return Stream.value(const <PurchaseOrder>[]);
       }
-      final cacheScope = _profileCacheScope(ref, user);
       final repository = ref.watch(purchaseOrderRepositoryProvider);
+      if (useManualOrderRefreshOnWindowsRelease) {
+        return _withLiveOrders(
+          repository.watchAllOrders().map(
+            (orders) => _filterOrdersByStatusLimited(
+              orders,
+              PurchaseOrderStatus.paymentDone,
+              limit: limit,
+            ),
+          ),
+        );
+      }
+      final cacheScope = _profileCacheScope(ref, user);
       return _withCachedOrders(
         key: '$cacheScope:pendingEtaOrdersPaged:$limit',
         source: repository.watchOrdersByStatus(
@@ -945,14 +1297,19 @@ final cotizacionesModuleCountProvider = Provider.autoDispose<AsyncValue<int>>((
   }
 
   final pendingCount = pendingOrders.length;
-  final dashboardCount = dashboardOrders.where(_orderNeedsSupplierQuote).length;
-  final activeQuotes = quotes
+  final blockedQuoteItemKeys = _buildBlockedQuoteItemKeysForComprasCount(quotes);
+  final dashboardCount = dashboardOrders
       .where(
-        (quote) =>
-            quote.status == SupplierQuoteStatus.draft ||
-            quote.status == SupplierQuoteStatus.rejected,
+        (order) => _orderNeedsSupplierQuote(
+          order,
+          blockedQuoteItemKeys: blockedQuoteItemKeys,
+        ),
       )
       .length;
+  final editableQuotes = quotes
+      .where((quote) => quote.status == SupplierQuoteStatus.rejected)
+      .toList(growable: false);
+  final activeQuotes = editableQuotes.length;
   return AsyncValue<int>.data(pendingCount + dashboardCount + activeQuotes);
 });
 
@@ -1078,9 +1435,15 @@ final globalActionMonitoringCountProvider = Provider.autoDispose<AsyncValue<int>
   return ordersAsync.whenData((orders) => orders.length);
 });
 
-bool _orderNeedsSupplierQuote(PurchaseOrder order) {
+bool _orderNeedsSupplierQuote(
+  PurchaseOrder order, {
+  Set<String> blockedQuoteItemKeys = const <String>{},
+}) {
   if (order.items.isEmpty) return false;
   return order.items.any((item) {
+    if (blockedQuoteItemKeys.contains(_quoteItemKeyForComprasCount(order.id, item.line))) {
+      return false;
+    }
     final supplier = (item.supplier ?? '').trim();
     final budget = item.budget ?? 0;
     final missingAssignment = supplier.isEmpty || budget <= 0;
@@ -1090,6 +1453,88 @@ bool _orderNeedsSupplierQuote(PurchaseOrder order) {
     return missingAssignment || missingQuote;
   });
 }
+
+Map<String, SupplierQuote> _quotesBySupplierForComprasCount(
+  List<SupplierQuote> quotes,
+) {
+  final bySupplier = <String, SupplierQuote>{};
+  for (final quote in quotes) {
+    final supplier = quote.supplier.trim();
+    if (supplier.isEmpty || bySupplier.containsKey(supplier)) continue;
+    bySupplier[supplier] = quote;
+  }
+  return bySupplier;
+}
+
+List<String> _supplierOptionsForComprasCount(
+  List<PurchaseOrder> orders,
+  Map<String, SupplierQuote> editableQuotesBySupplier,
+  {required Set<String> blockedQuoteItemKeys,}
+) {
+  final suppliers = <String>{};
+  for (final order in orders) {
+    for (final item in order.items) {
+      if (blockedQuoteItemKeys.contains(_quoteItemKeyForComprasCount(order.id, item.line))) {
+        continue;
+      }
+      final supplier = (item.supplier ?? '').trim();
+      final amount = item.budget ?? 0;
+      if (supplier.isEmpty || amount <= 0) continue;
+      if (!_supplierHasDashboardItemsForComprasCount(
+        orders: orders,
+        supplier: supplier,
+        editableQuoteId: editableQuotesBySupplier[supplier]?.id,
+        blockedQuoteItemKeys: blockedQuoteItemKeys,
+      )) {
+        continue;
+      }
+      suppliers.add(supplier);
+    }
+  }
+  return suppliers.toList(growable: false);
+}
+
+bool _supplierHasDashboardItemsForComprasCount({
+  required List<PurchaseOrder> orders,
+  required String supplier,
+  required String? editableQuoteId,
+  required Set<String> blockedQuoteItemKeys,
+}) {
+  for (final order in orders) {
+    for (final item in order.items) {
+      if (blockedQuoteItemKeys.contains(_quoteItemKeyForComprasCount(order.id, item.line))) {
+        continue;
+      }
+      final itemSupplier = (item.supplier ?? '').trim();
+      final amount = item.budget ?? 0;
+      final quoteId = item.quoteId?.trim();
+      final include =
+          itemSupplier == supplier &&
+          amount > 0 &&
+          (quoteId == null ||
+              quoteId.isEmpty ||
+              quoteId == editableQuoteId ||
+              item.quoteStatus == PurchaseOrderItemQuoteStatus.rejected);
+      if (include) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+Set<String> _buildBlockedQuoteItemKeysForComprasCount(List<SupplierQuote> quotes) {
+  final keys = <String>{};
+  for (final quote in quotes) {
+    for (final ref in quote.items) {
+      keys.add(_quoteItemKeyForComprasCount(ref.orderId, ref.line));
+    }
+  }
+  return keys;
+}
+
+String _quoteItemKeyForComprasCount(String orderId, int line) =>
+    '${orderId.trim()}#$line';
 
 bool _isMonitoringVisibleOrder(PurchaseOrder order) {
   if (!order.isDraft) return true;

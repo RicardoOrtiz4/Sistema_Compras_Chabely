@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sistema_compras/app/router.dart';
-import 'package:sistema_compras/core/app_logger.dart';
 import 'package:sistema_compras/core/app_auth.dart';
 import 'package:sistema_compras/core/navigation/app_shell_keys.dart';
 import 'package:sistema_compras/core/app_theme.dart';
@@ -66,61 +64,22 @@ class _SistemaComprasAppState extends ConsumerState<SistemaComprasApp> {
   Widget build(BuildContext context) {
     final router = ref.watch(appRouterProvider);
     final branding = ref.watch(currentBrandingProvider);
-    return Shortcuts(
-      shortcuts: <LogicalKeySet, Intent>{
-        LogicalKeySet(
-          LogicalKeyboardKey.control,
-          LogicalKeyboardKey.shift,
-          LogicalKeyboardKey.keyL,
-        ): const _LogDumpIntent(),
-        LogicalKeySet(
-          LogicalKeyboardKey.meta,
-          LogicalKeyboardKey.shift,
-          LogicalKeyboardKey.keyL,
-        ): const _LogDumpIntent(),
-      },
-      child: Actions(
-        actions: <Type, Action<Intent>>{
-          _LogDumpIntent: CallbackAction<_LogDumpIntent>(
-            onInvoke: (intent) {
-              AppLogger.dumpToConsole(reason: 'shortcut');
-              final rootContext = appNavigatorKey.currentContext;
-              if (rootContext != null) {
-                ScaffoldMessenger.of(rootContext)
-                  ..clearSnackBars()
-                  ..showSnackBar(
-                    const SnackBar(
-                      content: Text('Log enviado a consola.'),
-                      duration: Duration(seconds: 2),
-                    ),
-                  );
-              }
-              return null;
-            },
-          ),
-        },
-        child: FocusTraversalGroup(
-          policy: WidgetOrderTraversalPolicy(),
-          child: MaterialApp.router(
-            title: 'Sistema de Compras - ${branding.displayName}',
-            debugShowCheckedModeBanner: false,
-            theme: AppTheme.lightFor(branding),
-            darkTheme: AppTheme.darkFor(branding),
-            scaffoldMessengerKey: appScaffoldMessengerKey,
-            routerConfig: router,
-            builder: (context, child) => Stack(
-              children: [
-                child ?? const SizedBox.shrink(),
-                const OptimisticSyncBanner(),
-              ],
-            ),
-          ),
+    return FocusTraversalGroup(
+      policy: WidgetOrderTraversalPolicy(),
+      child: MaterialApp.router(
+        title: 'Sistema de Compras - ${branding.displayName}',
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.lightFor(branding),
+        darkTheme: AppTheme.darkFor(branding),
+        scaffoldMessengerKey: appScaffoldMessengerKey,
+        routerConfig: router,
+        builder: (context, child) => Stack(
+          children: [
+            child ?? const SizedBox.shrink(),
+            const OptimisticSyncBanner(),
+          ],
         ),
       ),
     );
   }
-}
-
-class _LogDumpIntent extends Intent {
-  const _LogDumpIntent();
 }

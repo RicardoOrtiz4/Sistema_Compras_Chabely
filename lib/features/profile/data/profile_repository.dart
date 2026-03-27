@@ -27,6 +27,15 @@ class ProfileRepository {
     });
   }
 
+  Future<AppUser?> fetchProfile(String uid) async {
+    final trimmedUid = uid.trim();
+    if (trimmedUid.isEmpty) return null;
+    final snapshot = await _database.ref('users/$trimmedUid').get();
+    final value = snapshot.value;
+    if (value is! Map) return null;
+    return AppUser.fromMap(trimmedUid, Map<String, dynamic>.from(value));
+  }
+
   Stream<List<AppUser>> watchUsers() {
     return _database.ref('users').onValue.map((event) {
       final value = event.snapshot.value;

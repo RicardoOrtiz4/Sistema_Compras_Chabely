@@ -41,6 +41,9 @@ AppAuthClient createAppAuthClient() {
   return FirebaseAppAuthClient(FirebaseAuth.instance);
 }
 
+bool get _useWindowsReleaseRestAuthCompatibility =>
+    kReleaseMode && !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+
 class FirebaseAppAuthClient implements AppAuthClient {
   FirebaseAppAuthClient(this._auth);
 
@@ -138,12 +141,13 @@ class RestAppAuthClient implements AppAuthClient {
     required String email,
     required String password,
   }) async {
-    final response = await _client.post(
+    final response = await _postRequest(
       Uri.parse(
         'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$_apiKey',
       ),
       headers: const <String, String>{
         'Content-Type': 'application/json',
+        'Connection': 'close',
       },
       body: jsonEncode(<String, Object>{
         'email': email,
@@ -213,9 +217,18 @@ class RestAppAuthClient implements AppAuthClient {
   }
 
   Future<String?> getIdToken({bool forceRefresh = false}) async {
+    _logWindowsReleaseAuthStep(
+      'getIdToken:start forceRefresh=$forceRefresh hasSession=${_session != null}',
+    );
     await _restorePersistedSession();
+    _logWindowsReleaseAuthStep(
+      'getIdToken:restored hasSession=${_session != null}',
+    );
     if (_session == null) return null;
     await _ensureFreshToken(forceRefresh: forceRefresh || _session!.needsRefresh);
+    _logWindowsReleaseAuthStep(
+      'getIdToken:done hasToken=${_session?.idToken.isNotEmpty ?? false}',
+    );
     return _session?.idToken;
   }
 
@@ -233,12 +246,14 @@ class RestAppAuthClient implements AppAuthClient {
   }
 
   Future<void> _refreshToken(String refreshToken) async {
-    final response = await _client.post(
+    _logWindowsReleaseAuthStep('refreshToken:start');
+    final response = await _postRequest(
       Uri.parse(
         'https://securetoken.googleapis.com/v1/token?key=$_apiKey',
       ),
       headers: const <String, String>{
         'Content-Type': 'application/x-www-form-urlencoded',
+        'Connection': 'close',
       },
       body: <String, String>{
         'grant_type': 'refresh_token',
@@ -259,6 +274,7 @@ class RestAppAuthClient implements AppAuthClient {
     final refreshed = current.refresh(body);
     await _persistSession(refreshed);
     _setSession(refreshed, emit: true);
+    _logWindowsReleaseAuthStep('refreshToken:done');
   }
 
   Future<void> _persistSession(_RestAuthSession session) async {
@@ -271,6 +287,39 @@ class RestAppAuthClient implements AppAuthClient {
     await prefs.remove(_prefsKey);
   }
 
+  Future<http.Response> _postRequest(
+    Uri uri, {
+    required Map<String, String> headers,
+    required Object body,
+  }) async {
+    _logWindowsReleaseAuthStep('_postRequest:start uri=${uri.host}${uri.path}');
+    if (_useWindowsReleaseRestAuthCompatibility) {
+      final client = http.Client();
+      try {
+        final response = await client.post(
+          uri,
+          headers: headers,
+          body: body,
+        );
+        _logWindowsReleaseAuthStep(
+          '_postRequest:done uri=${uri.host}${uri.path} status=${response.statusCode}',
+        );
+        return response;
+      } finally {
+        client.close();
+      }
+    }
+    final response = await _client.post(
+      uri,
+      headers: headers,
+      body: body,
+    );
+    _logWindowsReleaseAuthStep(
+      '_postRequest:done uri=${uri.host}${uri.path} status=${response.statusCode}',
+    );
+    return response;
+  }
+
   void _setSession(_RestAuthSession? session, {required bool emit}) {
     _session = session;
     _currentUser = session == null ? null : _RestAppAuthUser(this, session);
@@ -278,6 +327,10 @@ class RestAppAuthClient implements AppAuthClient {
       _controller.add(_currentUser);
     }
   }
+}
+
+void _logWindowsReleaseAuthStep(String message) {
+  // Crash investigation instrumentation removed.
 }
 
 class _RestAppAuthUser implements AppAuthUser {

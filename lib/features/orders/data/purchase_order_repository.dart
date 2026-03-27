@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sistema_compras/core/company_branding.dart';
@@ -11,6 +12,38 @@ import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/domain/supplier_quote.dart';
 import 'package:sistema_compras/features/orders/domain/supplier_quote_history_entry.dart';
 
+class SupplierQuoteSubmissionResult {
+  const SupplierQuoteSubmissionResult({
+    required this.quote,
+    required this.updatedOrders,
+  });
+
+  final SupplierQuote quote;
+  final List<PurchaseOrder> updatedOrders;
+}
+
+class SupplierQuoteMutationResult {
+  const SupplierQuoteMutationResult({
+    required this.quote,
+    required this.updatedOrders,
+  });
+
+  final SupplierQuote quote;
+  final List<PurchaseOrder> updatedOrders;
+}
+
+class _PreparedOrderQuoteSync {
+  const _PreparedOrderQuoteSync({
+    required this.order,
+    required this.nextOrder,
+    required this.updates,
+  });
+
+  final PurchaseOrder order;
+  final PurchaseOrder nextOrder;
+  final Map<String, Object?> updates;
+}
+
 class PurchaseOrderRepository {
   PurchaseOrderRepository(this._database, this._company);
 
@@ -22,6 +55,16 @@ class PurchaseOrderRepository {
   AppDatabaseRef get _supplierQuoteHistoryRef =>
       _database.ref('supplierQuoteHistory');
   AppDatabaseRef get _orderCountersRef => _database.ref('purchaseOrderCounters');
+
+  bool get _skipAuditWritesOnWindowsRelease =>
+      kReleaseMode &&
+      !kIsWeb &&
+      defaultTargetPlatform == TargetPlatform.windows;
+
+  bool get _useLightweightQuoteTransitionsOnWindowsRelease =>
+      kReleaseMode &&
+      !kIsWeb &&
+      defaultTargetPlatform == TargetPlatform.windows;
 
   PurchaseOrder? _parseOrderEntry(String id, Object? raw) {
     if (raw is! Map) return null;
@@ -127,6 +170,34 @@ class PurchaseOrderRepository {
     final snapshot = await _ordersRef.child(orderId).get();
     if (!snapshot.exists) return null;
     return _parseOrderEntry(orderId, snapshot.value);
+  }
+
+  Future<List<PurchaseOrder>> fetchOrdersByIds(Iterable<String> orderIds) async {
+    final ordersById = await _fetchOrdersByIds(_database, orderIds);
+    final orders = ordersById.values.toList(growable: false)
+      ..sort((a, b) => a.id.compareTo(b.id));
+    return orders;
+  }
+
+  Future<List<PurchaseOrder>> fetchAllOrders({int? limit}) async {
+    AppDatabaseQuery query = _ordersRef;
+    if (limit != null && limit > 0) {
+      query = query.limitToLast(limit);
+    }
+    final snapshot = await query.get();
+    return _parseOrdersMap(snapshot.value);
+  }
+
+  Future<List<PurchaseOrder>> fetchOrdersByStatus(
+    PurchaseOrderStatus status, {
+    int? limit,
+  }) async {
+    AppDatabaseQuery query = _ordersRef.orderByChild('status').equalTo(status.name);
+    if (limit != null && limit > 0) {
+      query = query.limitToLast(limit);
+    }
+    final snapshot = await query.get();
+    return _parseOrdersMap(snapshot.value);
   }
 
   Future<String> submitOrder({
@@ -620,6 +691,31 @@ class PurchaseOrderRepository {
     });
   }
 
+  Future<List<SupplierQuote>> fetchSupplierQuotes() async {
+    final snapshot = await _supplierQuotesRef.get();
+    final value = snapshot.value;
+    if (value is! Map) return <SupplierQuote>[];
+
+    final quotes = <SupplierQuote>[];
+    value.forEach((key, raw) {
+      if (raw is Map) {
+        quotes.add(
+          SupplierQuote.fromMap(
+            key.toString(),
+            Map<String, dynamic>.from(raw),
+          ),
+        );
+      }
+    });
+
+    quotes.sort((a, b) {
+      final aTime = (a.updatedAt ?? a.createdAt)?.millisecondsSinceEpoch ?? 0;
+      final bTime = (b.updatedAt ?? b.createdAt)?.millisecondsSinceEpoch ?? 0;
+      return bTime.compareTo(aTime);
+    });
+    return quotes;
+  }
+
   Stream<SupplierQuote?> watchSupplierQuoteById(String quoteId) {
     return _supplierQuotesRef.child(quoteId).onValue.map((event) {
       final value = event.snapshot.value;
@@ -669,12 +765,22 @@ class PurchaseOrderRepository {
     String? comprasComment,
     AppUser? actor,
   }) async {
+    _logWindowsReleaseRepoStep(
+      'createSupplierQuote:start supplier=${supplier.trim()} items=${items.length} links=${links.length}',
+    );
     final ref = _supplierQuotesRef.push();
     final quoteId = ref.key;
     if (quoteId == null || quoteId.isEmpty) {
       throw StateError('No se pudo crear la compra del proveedor.');
     }
-    final folio = await _reserveNextSupplierQuoteFolio(_database);
+    _logWindowsReleaseRepoStep('createSupplierQuote:key quoteId=$quoteId');
+    _logWindowsReleaseRepoStep('createSupplierQuote:beforeFolio quoteId=$quoteId');
+    final folio =
+        kReleaseMode && !kIsWeb && defaultTargetPlatform == TargetPlatform.windows
+            ? _buildWindowsReleaseSupplierQuoteFolio()
+            : await _reserveNextSupplierQuoteFolio(_database);
+    _logWindowsReleaseRepoStep('createSupplierQuote:folio quoteId=$quoteId folio=$folio');
+    _logWindowsReleaseRepoStep('createSupplierQuote:beforeModel quoteId=$quoteId');
 
     final quote = SupplierQuote(
       id: quoteId,
@@ -686,21 +792,25 @@ class PurchaseOrderRepository {
       status: SupplierQuoteStatus.draft,
       version: 1,
     );
+    _logWindowsReleaseRepoStep('createSupplierQuote:modelDone quoteId=$quoteId');
     await ref.set({
       ...quote.toMap(),
       'createdAt': appServerTimestamp,
       'updatedAt': appServerTimestamp,
     });
+    _logWindowsReleaseRepoStep('createSupplierQuote:setDone quoteId=$quoteId');
     await _appendSupplierQuoteHistorySnapshot(
       quote: quote,
       eventType: 'created',
       actor: actor,
     );
+    _logWindowsReleaseRepoStep('createSupplierQuote:historyDone quoteId=$quoteId');
     await _syncQuoteItemsOnOrders(
       quote: quote,
       itemStatus: PurchaseOrderItemQuoteStatus.draft,
       clearRemovedItems: false,
     );
+    _logWindowsReleaseRepoStep('createSupplierQuote:syncDone quoteId=$quoteId');
     return quote;
   }
 
@@ -711,6 +821,9 @@ class PurchaseOrderRepository {
     String? comprasComment,
     AppUser? actor,
   }) async {
+    _logWindowsReleaseRepoStep(
+      'updateSupplierQuoteDraft:start quoteId=${quote.id} items=${items.length} links=${links.length}',
+    );
     final next = SupplierQuote(
       id: quote.id,
       folio: quote.folio,
@@ -739,15 +852,284 @@ class PurchaseOrderRepository {
       'processedByArea': null,
       'sentToDireccionAt': null,
     });
+    _logWindowsReleaseRepoStep('updateSupplierQuoteDraft:updateDone quoteId=${quote.id}');
     await _appendSupplierQuoteHistorySnapshot(
       quote: next,
       eventType: 'draft_updated',
       actor: actor,
     );
+    _logWindowsReleaseRepoStep('updateSupplierQuoteDraft:historyDone quoteId=${quote.id}');
     await _syncQuoteItemsOnOrders(
       quote: next,
       itemStatus: PurchaseOrderItemQuoteStatus.draft,
       clearRemovedItems: true,
+    );
+    _logWindowsReleaseRepoStep('updateSupplierQuoteDraft:syncDone quoteId=${quote.id}');
+  }
+
+  Future<SupplierQuote> submitSupplierQuoteForDireccion({
+    SupplierQuote? existingQuote,
+    required String supplier,
+    required List<SupplierQuoteItemRef> items,
+    required List<String> links,
+    String? comprasComment,
+    required AppUser actor,
+  }) async {
+    _logWindowsReleaseRepoStep(
+      'submitSupplierQuoteForDireccion:start quoteId=${existingQuote?.id ?? 'NEW'} items=${items.length} links=${links.length}',
+    );
+    final trimmedSupplier = supplier.trim();
+    if (trimmedSupplier.isEmpty) {
+      throw StateError('Proveedor no disponible.');
+    }
+
+    final cleanedLinks = _sanitizeQuoteLinks(links);
+    if (cleanedLinks.isEmpty) {
+      throw StateError('Agrega al menos un link de compra.');
+    }
+
+    final quoteRef = existingQuote == null
+        ? _supplierQuotesRef.push()
+        : _supplierQuotesRef.child(existingQuote.id);
+    final quoteId = existingQuote?.id ?? quoteRef.key;
+    if (quoteId == null || quoteId.isEmpty) {
+      throw StateError('No se pudo crear la compra del proveedor.');
+    }
+
+    final folio = existingQuote?.folio ??
+        (kReleaseMode && !kIsWeb && defaultTargetPlatform == TargetPlatform.windows
+            ? _buildWindowsReleaseSupplierQuoteFolio()
+            : await _reserveNextSupplierQuoteFolio(_database));
+
+    final pendingQuote = SupplierQuote(
+      id: quoteId,
+      folio: folio,
+      supplier: trimmedSupplier,
+      items: items,
+      links: cleanedLinks,
+      facturaLinks: existingQuote?.facturaLinks ?? const <String>[],
+      paymentLinks: existingQuote?.paymentLinks ?? const <String>[],
+      comprasComment: comprasComment,
+      status: SupplierQuoteStatus.pendingDireccion,
+      createdAt: existingQuote?.createdAt,
+      updatedAt: DateTime.now(),
+      processedByName: actor.name,
+      processedByArea: actor.areaDisplay,
+      sentToDireccionAt: DateTime.now(),
+      version: existingQuote == null ? 1 : existingQuote.version + 1,
+    );
+
+    final payload = <String, Object?>{
+      'folio': (folio.trim().isEmpty) ? null : folio.trim(),
+      'supplier': trimmedSupplier,
+      'items': items.map((item) => item.toMap()).toList(),
+      'status': SupplierQuoteStatus.pendingDireccion.name,
+      'links': cleanedLinks,
+      'pdfUrls': cleanedLinks,
+      'pdfUrl': cleanedLinks.first,
+      'facturaLinks': pendingQuote.facturaLinks.isEmpty
+          ? null
+          : pendingQuote.facturaLinks,
+      'paymentLinks': pendingQuote.paymentLinks.isEmpty
+          ? null
+          : pendingQuote.paymentLinks,
+      'comprasComment': (comprasComment?.trim().isEmpty ?? true)
+          ? null
+          : comprasComment!.trim(),
+      'processedByName': actor.name.trim().isEmpty ? null : actor.name.trim(),
+      'processedByArea': actor.areaDisplay.trim().isEmpty
+          ? null
+          : actor.areaDisplay.trim(),
+      'sentToDireccionAt': appServerTimestamp,
+      'approvedAt': null,
+      'approvedByName': null,
+      'approvedByArea': null,
+      'rejectionComment': null,
+      'rejectedAt': null,
+      'rejectedByName': null,
+      'rejectedByArea': null,
+      'updatedAt': appServerTimestamp,
+      'version': pendingQuote.version,
+    };
+
+    if (existingQuote == null) {
+      await quoteRef.set({
+        ...payload,
+        'createdAt': appServerTimestamp,
+      });
+      _logWindowsReleaseRepoStep(
+        'submitSupplierQuoteForDireccion:setDone quoteId=$quoteId',
+      );
+    } else {
+      await quoteRef.update(payload);
+      _logWindowsReleaseRepoStep(
+        'submitSupplierQuoteForDireccion:updateDone quoteId=$quoteId',
+      );
+    }
+
+    await _syncQuoteItemsOnOrders(
+      quote: pendingQuote,
+      itemStatus: PurchaseOrderItemQuoteStatus.pendingDireccion,
+      clearRemovedItems: existingQuote != null,
+    );
+    _logWindowsReleaseRepoStep(
+      'submitSupplierQuoteForDireccion:syncDone quoteId=$quoteId',
+    );
+
+    await _appendSupplierQuoteHistorySnapshot(
+      quote: pendingQuote,
+      eventType: 'sent_to_direccion',
+      actor: actor,
+    );
+    _logWindowsReleaseRepoStep(
+      'submitSupplierQuoteForDireccion:historyDone quoteId=$quoteId',
+    );
+
+    return pendingQuote;
+  }
+
+  Future<SupplierQuoteSubmissionResult>
+      submitSupplierQuoteForDireccionWithResolvedOrders({
+    SupplierQuote? existingQuote,
+    required String supplier,
+    required List<SupplierQuoteItemRef> items,
+    required List<String> links,
+    String? comprasComment,
+    required AppUser actor,
+    required List<PurchaseOrder> relatedOrders,
+  }) async {
+    final trimmedSupplier = supplier.trim();
+    if (trimmedSupplier.isEmpty) {
+      throw StateError('Proveedor no disponible.');
+    }
+
+    final cleanedLinks = _sanitizeQuoteLinks(links);
+    if (cleanedLinks.isEmpty) {
+      throw StateError('Agrega al menos un link de compra.');
+    }
+
+    final quoteRef = existingQuote == null
+        ? _supplierQuotesRef.push()
+        : _supplierQuotesRef.child(existingQuote.id);
+    final quoteId = existingQuote?.id ?? quoteRef.key;
+    if (quoteId == null || quoteId.isEmpty) {
+      throw StateError('No se pudo crear la compra del proveedor.');
+    }
+
+    final folio = existingQuote?.folio ??
+        (kReleaseMode && !kIsWeb && defaultTargetPlatform == TargetPlatform.windows
+            ? _buildWindowsReleaseSupplierQuoteFolio()
+            : await _reserveNextSupplierQuoteFolio(_database));
+
+    final pendingQuote = SupplierQuote(
+      id: quoteId,
+      folio: folio,
+      supplier: trimmedSupplier,
+      items: items,
+      links: cleanedLinks,
+      facturaLinks: existingQuote?.facturaLinks ?? const <String>[],
+      paymentLinks: existingQuote?.paymentLinks ?? const <String>[],
+      comprasComment: comprasComment,
+      status: SupplierQuoteStatus.pendingDireccion,
+      createdAt: existingQuote?.createdAt,
+      updatedAt: DateTime.now(),
+      processedByName: actor.name,
+      processedByArea: actor.areaDisplay,
+      sentToDireccionAt: DateTime.now(),
+      version: existingQuote == null ? 1 : existingQuote.version + 1,
+    );
+
+    final requiredOrderIds = <String>{
+      ...pendingQuote.orderIds,
+      if (existingQuote != null) ...existingQuote.orderIds,
+    };
+    final relatedOrdersById = <String, PurchaseOrder>{
+      for (final order in relatedOrders) order.id: order,
+    };
+    final missingOrderIds = requiredOrderIds
+        .where((orderId) => !relatedOrdersById.containsKey(orderId))
+        .toList(growable: false);
+    if (missingOrderIds.isNotEmpty) {
+      throw StateError(
+        'No se pudieron resolver las ordenes relacionadas: ${missingOrderIds.join(', ')}.',
+      );
+    }
+
+    final payload = <String, Object?>{
+      'folio': (folio.trim().isEmpty) ? null : folio.trim(),
+      'supplier': trimmedSupplier,
+      'items': items.map((item) => item.toMap()).toList(),
+      'status': SupplierQuoteStatus.pendingDireccion.name,
+      'links': cleanedLinks,
+      'pdfUrls': cleanedLinks,
+      'pdfUrl': cleanedLinks.first,
+      'facturaLinks': pendingQuote.facturaLinks.isEmpty
+          ? null
+          : pendingQuote.facturaLinks,
+      'paymentLinks': pendingQuote.paymentLinks.isEmpty
+          ? null
+          : pendingQuote.paymentLinks,
+      'comprasComment': (comprasComment?.trim().isEmpty ?? true)
+          ? null
+          : comprasComment!.trim(),
+      'processedByName': actor.name.trim().isEmpty ? null : actor.name.trim(),
+      'processedByArea': actor.areaDisplay.trim().isEmpty
+          ? null
+          : actor.areaDisplay.trim(),
+      'sentToDireccionAt': appServerTimestamp,
+      'approvedAt': null,
+      'approvedByName': null,
+      'approvedByArea': null,
+      'rejectionComment': null,
+      'rejectedAt': null,
+      'rejectedByName': null,
+      'rejectedByArea': null,
+      'updatedAt': appServerTimestamp,
+      'version': pendingQuote.version,
+    };
+
+    if (existingQuote == null) {
+      await quoteRef.set({
+        ...payload,
+        'createdAt': appServerTimestamp,
+      });
+    } else {
+      await quoteRef.update(payload);
+    }
+
+    if (_useLightweightQuoteTransitionsOnWindowsRelease) {
+      return SupplierQuoteSubmissionResult(
+        quote: pendingQuote,
+        updatedOrders: [
+          for (final orderId in requiredOrderIds) relatedOrdersById[orderId]!,
+        ],
+      );
+    }
+
+    final syncPlan = _prepareQuoteItemsSyncOnOrders(
+      quote: pendingQuote,
+      itemStatus: PurchaseOrderItemQuoteStatus.pendingDireccion,
+      clearRemovedItems: existingQuote != null,
+      relatedOrders: [
+        for (final orderId in requiredOrderIds) relatedOrdersById[orderId]!,
+      ],
+    );
+
+    for (final change in syncPlan) {
+      await _ordersRef.child(change.order.id).update(change.updates);
+    }
+
+    await _appendSupplierQuoteHistorySnapshot(
+      quote: pendingQuote,
+      eventType: 'sent_to_direccion',
+      actor: actor,
+    );
+
+    return SupplierQuoteSubmissionResult(
+      quote: pendingQuote,
+      updatedOrders: [
+        for (final change in syncPlan) change.nextOrder,
+      ],
     );
   }
 
@@ -755,6 +1137,9 @@ class PurchaseOrderRepository {
     required SupplierQuote quote,
     required AppUser actor,
   }) async {
+    _logWindowsReleaseRepoStep(
+      'sendSupplierQuoteToDireccion:start quoteId=${quote.id} items=${quote.items.length} links=${quote.links.length}',
+    );
     final links = _sanitizeQuoteLinks(quote.links);
     if (links.isEmpty) {
       throw StateError('Agrega al menos un link de compra.');
@@ -767,6 +1152,9 @@ class PurchaseOrderRepository {
     }
 
     final relatedOrders = await _fetchOrdersByIds(_database, refsByOrder.keys);
+    _logWindowsReleaseRepoStep(
+      'sendSupplierQuoteToDireccion:ordersLoaded quoteId=${quote.id} orders=${relatedOrders.length}',
+    );
     for (final entry in refsByOrder.entries) {
       final orderId = entry.key;
       final order = relatedOrders[orderId];
@@ -818,6 +1206,7 @@ class PurchaseOrderRepository {
       'sentToDireccionAt': appServerTimestamp,
       'updatedAt': appServerTimestamp,
     });
+    _logWindowsReleaseRepoStep('sendSupplierQuoteToDireccion:updateDone quoteId=${quote.id}');
     await _syncQuoteItemsOnOrders(
       quote: SupplierQuote(
         id: quote.id,
@@ -838,6 +1227,7 @@ class PurchaseOrderRepository {
       itemStatus: PurchaseOrderItemQuoteStatus.pendingDireccion,
       clearRemovedItems: false,
     );
+    _logWindowsReleaseRepoStep('sendSupplierQuoteToDireccion:syncDone quoteId=${quote.id}');
     await _appendSupplierQuoteHistorySnapshot(
       quote: SupplierQuote(
         id: quote.id,
@@ -859,6 +1249,7 @@ class PurchaseOrderRepository {
       eventType: 'sent_to_direccion',
       actor: actor,
     );
+    _logWindowsReleaseRepoStep('sendSupplierQuoteToDireccion:historyDone quoteId=${quote.id}');
   }
 
   Future<void> approveSupplierQuote({
@@ -904,6 +1295,83 @@ class PurchaseOrderRepository {
       quote: approvedQuote,
       eventType: 'approved',
       actor: actor,
+    );
+  }
+
+  Future<SupplierQuoteMutationResult> approveSupplierQuoteWithResolvedOrders({
+    required SupplierQuote quote,
+    required AppUser actor,
+    required List<PurchaseOrder> relatedOrders,
+  }) async {
+    final approvedQuote = SupplierQuote(
+      id: quote.id,
+      folio: quote.folio,
+      supplier: quote.supplier,
+      items: quote.items,
+      links: quote.links,
+      facturaLinks: quote.facturaLinks,
+      paymentLinks: quote.paymentLinks,
+      comprasComment: quote.comprasComment,
+      status: SupplierQuoteStatus.approved,
+      createdAt: quote.createdAt,
+      updatedAt: DateTime.now(),
+      approvedAt: DateTime.now(),
+      approvedByName: actor.name,
+      approvedByArea: actor.areaDisplay,
+      processedByName: quote.processedByName,
+      processedByArea: quote.processedByArea,
+      sentToDireccionAt: quote.sentToDireccionAt,
+      version: quote.version + 1,
+    );
+
+    final requiredOrderIds = approvedQuote.orderIds.toSet();
+    final relatedOrdersById = <String, PurchaseOrder>{
+      for (final order in relatedOrders) order.id: order,
+    };
+    final missingOrderIds = requiredOrderIds
+        .where((orderId) => !relatedOrdersById.containsKey(orderId))
+        .toList(growable: false);
+    if (missingOrderIds.isNotEmpty) {
+      throw StateError(
+        'No se pudieron resolver las ordenes relacionadas: ${missingOrderIds.join(', ')}.',
+      );
+    }
+
+    final syncPlan = _prepareQuoteItemsSyncOnOrders(
+      quote: approvedQuote,
+      itemStatus: PurchaseOrderItemQuoteStatus.approved,
+      clearRemovedItems: false,
+      relatedOrders: [
+        for (final orderId in requiredOrderIds) relatedOrdersById[orderId]!,
+      ],
+      approver: actor,
+    );
+
+    await _supplierQuotesRef.child(quote.id).update({
+      'status': SupplierQuoteStatus.approved.name,
+      'approvedAt': appServerTimestamp,
+      'approvedByName': actor.name.trim().isEmpty ? null : actor.name.trim(),
+      'approvedByArea': actor.areaDisplay.trim().isEmpty
+          ? null
+          : actor.areaDisplay.trim(),
+      'updatedAt': appServerTimestamp,
+    });
+
+    for (final change in syncPlan) {
+      await _ordersRef.child(change.order.id).update(change.updates);
+    }
+
+    await _appendSupplierQuoteHistorySnapshot(
+      quote: approvedQuote,
+      eventType: 'approved',
+      actor: actor,
+    );
+
+    return SupplierQuoteMutationResult(
+      quote: approvedQuote,
+      updatedOrders: [
+        for (final change in syncPlan) change.nextOrder,
+      ],
     );
   }
 
@@ -1295,6 +1763,103 @@ class PurchaseOrderRepository {
     );
   }
 
+  Future<SupplierQuoteMutationResult> rejectSupplierQuoteWithResolvedOrders({
+    required SupplierQuote quote,
+    required String comment,
+    required AppUser actor,
+    required List<PurchaseOrder> relatedOrders,
+  }) async {
+    final trimmedComment = comment.trim();
+    final rejectedQuote = SupplierQuote(
+      id: quote.id,
+      folio: quote.folio,
+      supplier: quote.supplier,
+      items: quote.items,
+      links: quote.links,
+      facturaLinks: quote.facturaLinks,
+      paymentLinks: quote.paymentLinks,
+      comprasComment: quote.comprasComment,
+      status: SupplierQuoteStatus.rejected,
+      createdAt: quote.createdAt,
+      updatedAt: DateTime.now(),
+      rejectionComment: trimmedComment,
+      rejectedAt: DateTime.now(),
+      rejectedByName: actor.name,
+      rejectedByArea: actor.areaDisplay,
+      processedByName: quote.processedByName,
+      processedByArea: quote.processedByArea,
+      sentToDireccionAt: quote.sentToDireccionAt,
+      version: quote.version + 1,
+    );
+
+    final requiredOrderIds = rejectedQuote.orderIds.toSet();
+    final relatedOrdersById = <String, PurchaseOrder>{
+      for (final order in relatedOrders) order.id: order,
+    };
+    final missingOrderIds = requiredOrderIds
+        .where((orderId) => !relatedOrdersById.containsKey(orderId))
+        .toList(growable: false);
+    if (missingOrderIds.isNotEmpty) {
+      throw StateError(
+        'No se pudieron resolver las ordenes relacionadas: ${missingOrderIds.join(', ')}.',
+      );
+    }
+
+    await _supplierQuotesRef.child(quote.id).update({
+      'status': SupplierQuoteStatus.rejected.name,
+      'rejectionComment': trimmedComment.isEmpty ? null : trimmedComment,
+      'rejectedAt': appServerTimestamp,
+      'rejectedByName': actor.name.trim().isEmpty ? null : actor.name.trim(),
+      'rejectedByArea': actor.areaDisplay.trim().isEmpty
+          ? null
+          : actor.areaDisplay.trim(),
+      'updatedAt': appServerTimestamp,
+    });
+
+    if (_useLightweightQuoteTransitionsOnWindowsRelease) {
+      await _appendSupplierQuoteHistorySnapshot(
+        quote: rejectedQuote,
+        eventType: 'rejected',
+        actor: actor,
+        comment: trimmedComment,
+      );
+
+      return SupplierQuoteMutationResult(
+        quote: rejectedQuote,
+        updatedOrders: [
+          for (final orderId in requiredOrderIds) relatedOrdersById[orderId]!,
+        ],
+      );
+    }
+
+    final syncPlan = _prepareQuoteItemsSyncOnOrders(
+      quote: rejectedQuote,
+      itemStatus: PurchaseOrderItemQuoteStatus.rejected,
+      clearRemovedItems: false,
+      relatedOrders: [
+        for (final orderId in requiredOrderIds) relatedOrdersById[orderId]!,
+      ],
+    );
+
+    for (final change in syncPlan) {
+      await _ordersRef.child(change.order.id).update(change.updates);
+    }
+
+    await _appendSupplierQuoteHistorySnapshot(
+      quote: rejectedQuote,
+      eventType: 'rejected',
+      actor: actor,
+      comment: trimmedComment,
+    );
+
+    return SupplierQuoteMutationResult(
+      quote: rejectedQuote,
+      updatedOrders: [
+        for (final change in syncPlan) change.nextOrder,
+      ],
+    );
+  }
+
   Future<void> deleteSupplierQuote({
     required SupplierQuote quote,
   }) async {
@@ -1304,6 +1869,68 @@ class PurchaseOrderRepository {
     );
     await _clearQuoteItemsOnOrders(quote.id);
     await _supplierQuotesRef.child(quote.id).remove();
+  }
+
+  Future<int> cleanupResidualSupplierQuotes({
+    required List<PurchaseOrder> allOrders,
+    required List<SupplierQuote> quotes,
+  }) async {
+    final dataCompleteOrders = allOrders
+        .where((order) => order.status == PurchaseOrderStatus.dataComplete)
+        .toList(growable: false);
+    final idsToRemove = <String>{};
+    final rejectedBySupplier = <String, List<SupplierQuote>>{};
+
+    for (final quote in quotes) {
+      switch (quote.status) {
+        case SupplierQuoteStatus.draft:
+          idsToRemove.add(quote.id);
+          break;
+        case SupplierQuoteStatus.rejected:
+          final supplier = quote.supplier.trim();
+          if (supplier.isEmpty || quote.items.isEmpty) {
+            idsToRemove.add(quote.id);
+            break;
+          }
+          rejectedBySupplier.putIfAbsent(supplier, () => <SupplierQuote>[]).add(quote);
+          break;
+        case SupplierQuoteStatus.pendingDireccion:
+        case SupplierQuoteStatus.approved:
+          break;
+      }
+    }
+
+    for (final entry in rejectedBySupplier.entries) {
+      final supplier = entry.key;
+      final supplierQuotes = entry.value
+        ..sort((left, right) => _quoteSortTimestamp(right).compareTo(_quoteSortTimestamp(left)));
+      final newestQuote = supplierQuotes.first;
+      final hasActionableItems = _supplierHasResidualDashboardItems(
+        orders: dataCompleteOrders,
+        supplier: supplier,
+        editableQuoteId: newestQuote.id,
+      );
+
+      if (!hasActionableItems) {
+        idsToRemove.addAll(supplierQuotes.map((quote) => quote.id));
+        continue;
+      }
+
+      for (final duplicate in supplierQuotes.skip(1)) {
+        idsToRemove.add(duplicate.id);
+      }
+    }
+
+    if (idsToRemove.isEmpty) {
+      return 0;
+    }
+
+    for (final quoteId in idsToRemove) {
+      await _clearQuoteItemsOnOrders(quoteId);
+      await _supplierQuotesRef.child(quoteId).remove();
+    }
+
+    return idsToRemove.length;
   }
 
   Future<void> cancelSupplierQuoteToCotizaciones({
@@ -1316,6 +1943,10 @@ class PurchaseOrderRepository {
       actor: actor,
       comment: 'Compra cancelada desde dashboard de compras.',
     );
+    if (_useLightweightQuoteTransitionsOnWindowsRelease) {
+      await _supplierQuotesRef.child(quote.id).remove();
+      return;
+    }
     final relatedOrders = await _fetchOrdersByIds(_database, quote.orderIds);
     for (final order in relatedOrders.values) {
       final updatedItems = <PurchaseOrderItem>[];
@@ -1364,6 +1995,63 @@ class PurchaseOrderRepository {
     }
 
     await _supplierQuotesRef.child(quote.id).remove();
+  }
+
+  Future<SupplierQuote> updateRejectedSupplierQuote({
+    required SupplierQuote quote,
+    required String supplier,
+    required List<SupplierQuoteItemRef> items,
+    required List<String> links,
+    String? comprasComment,
+  }) async {
+    final trimmedSupplier = supplier.trim();
+    if (trimmedSupplier.isEmpty) {
+      throw StateError('Proveedor no disponible.');
+    }
+    if (items.isEmpty) {
+      throw StateError('La compra debe conservar al menos un item.');
+    }
+
+    final cleanedLinks = _sanitizeQuoteLinks(links);
+    final updatedQuote = SupplierQuote(
+      id: quote.id,
+      folio: quote.folio,
+      supplier: trimmedSupplier,
+      items: items,
+      links: cleanedLinks,
+      facturaLinks: quote.facturaLinks,
+      paymentLinks: quote.paymentLinks,
+      comprasComment: comprasComment,
+      status: quote.status,
+      createdAt: quote.createdAt,
+      updatedAt: DateTime.now(),
+      processedByName: quote.processedByName,
+      processedByArea: quote.processedByArea,
+      sentToDireccionAt: quote.sentToDireccionAt,
+      approvedAt: quote.approvedAt,
+      approvedByName: quote.approvedByName,
+      approvedByArea: quote.approvedByArea,
+      rejectionComment: quote.rejectionComment,
+      rejectedAt: quote.rejectedAt,
+      rejectedByName: quote.rejectedByName,
+      rejectedByArea: quote.rejectedByArea,
+      version: quote.version + 1,
+    );
+
+    await _supplierQuotesRef.child(quote.id).update({
+      'supplier': trimmedSupplier,
+      'items': items.map((item) => item.toMap()).toList(),
+      'links': cleanedLinks.isEmpty ? null : cleanedLinks,
+      'pdfUrls': cleanedLinks.isEmpty ? null : cleanedLinks,
+      'pdfUrl': cleanedLinks.isEmpty ? null : cleanedLinks.first,
+      'comprasComment': (comprasComment?.trim().isEmpty ?? true)
+          ? null
+          : comprasComment!.trim(),
+      'updatedAt': appServerTimestamp,
+      'version': updatedQuote.version,
+    });
+
+    return updatedQuote;
   }
 
 
@@ -1440,6 +2128,7 @@ class PurchaseOrderRepository {
     AppUser? actor,
     String? comment,
   }) async {
+    if (_skipAuditWritesOnWindowsRelease) return;
     final relatedOrders = await _fetchOrdersByIds(_database, quote.orderIds);
     final ref = _supplierQuoteHistoryRef.child(quote.id).push();
     final snapshotKey = ref.key;
@@ -1531,6 +2220,141 @@ class PurchaseOrderRepository {
     return ordersPayload;
   }
 
+  List<_PreparedOrderQuoteSync> _prepareQuoteItemsSyncOnOrders({
+    required SupplierQuote quote,
+    required PurchaseOrderItemQuoteStatus itemStatus,
+    required bool clearRemovedItems,
+    required List<PurchaseOrder> relatedOrders,
+    AppUser? approver,
+  }) {
+    final refsByOrder = <String, Map<int, SupplierQuoteItemRef>>{};
+    for (final ref in quote.items) {
+      final orderId = ref.orderId.trim();
+      if (orderId.isEmpty) continue;
+      refsByOrder.putIfAbsent(orderId, () => <int, SupplierQuoteItemRef>{})[ref.line] =
+          ref;
+    }
+
+    final prepared = <_PreparedOrderQuoteSync>[];
+    for (final order in relatedOrders) {
+      final refsByLine = refsByOrder[order.id] ?? const <int, SupplierQuoteItemRef>{};
+      final hasCurrentQuoteItems = order.items.any((item) => item.quoteId == quote.id);
+      if (refsByLine.isEmpty && !(clearRemovedItems && hasCurrentQuoteItems)) {
+        continue;
+      }
+
+      final updatedItems = <PurchaseOrderItem>[];
+      var changed = false;
+      for (final item in order.items) {
+        final ref = refsByLine[item.line];
+        if (ref != null) {
+          final nextItem = item.copyWith(
+            supplier: quote.supplier.trim().isEmpty ? item.supplier : quote.supplier.trim(),
+            budget: ref.amount ?? item.budget,
+            quoteId: quote.id,
+            quoteStatus: itemStatus,
+            clearDeliveryEtaDate: itemStatus != PurchaseOrderItemQuoteStatus.approved,
+            clearSentToContabilidadAt:
+                itemStatus != PurchaseOrderItemQuoteStatus.approved,
+          );
+          updatedItems.add(nextItem);
+          changed = changed || !_itemsDeepEqual(item, nextItem);
+          continue;
+        }
+
+        if (clearRemovedItems && item.quoteId == quote.id) {
+          final nextItem = item.copyWith(
+            quoteId: null,
+            clearQuoteId: true,
+            quoteStatus: PurchaseOrderItemQuoteStatus.pending,
+            clearDeliveryEtaDate: true,
+            clearSentToContabilidadAt: true,
+          );
+          updatedItems.add(nextItem);
+          changed = changed || !_itemsDeepEqual(item, nextItem);
+          continue;
+        }
+
+        updatedItems.add(item);
+      }
+
+      final nextStatus = _statusForQuoteProgress(updatedItems);
+      final updates = <String, Object?>{
+        'items': updatedItems.map((item) => item.toMap()).toList(),
+        'etaDate':
+            _resolveCommittedDeliveryDate(updatedItems)?.millisecondsSinceEpoch,
+        'updatedAt': appServerTimestamp,
+        'status': nextStatus.name,
+      };
+      if (itemStatus == PurchaseOrderItemQuoteStatus.pendingDireccion) {
+        updates['processedByName'] = quote.processedByName?.trim().isEmpty ?? true
+            ? null
+            : quote.processedByName!.trim();
+        updates['processedByArea'] = quote.processedByArea?.trim().isEmpty ?? true
+            ? null
+            : quote.processedByArea!.trim();
+      }
+      if (nextStatus != order.status) {
+        updates.addAll(_statusTimingUpdate(order));
+      }
+      if (nextStatus == PurchaseOrderStatus.paymentDone) {
+        updates['direccionGeneralName'] = approver?.name.trim().isEmpty ?? true
+            ? null
+            : approver!.name.trim();
+        updates['direccionGeneralArea'] =
+            approver?.areaDisplay.trim().isEmpty ?? true
+                ? null
+                : approver!.areaDisplay.trim();
+      }
+
+      if (!changed &&
+          nextStatus == order.status &&
+          itemStatus != PurchaseOrderItemQuoteStatus.pendingDireccion) {
+        continue;
+      }
+
+      final nextOrder = PurchaseOrder.fromMap(
+        order.id,
+        <String, dynamic>{
+          ...order.toMap(),
+          'items': updatedItems.map((item) => item.toMap()).toList(),
+          'etaDate':
+              _resolveCommittedDeliveryDate(updatedItems)?.millisecondsSinceEpoch,
+          'updatedAt': DateTime.now().millisecondsSinceEpoch,
+          'status': nextStatus.name,
+          if (itemStatus == PurchaseOrderItemQuoteStatus.pendingDireccion) ...{
+            'processedByName': quote.processedByName?.trim().isEmpty ?? true
+                ? null
+                : quote.processedByName!.trim(),
+            'processedByArea': quote.processedByArea?.trim().isEmpty ?? true
+                ? null
+                : quote.processedByArea!.trim(),
+          },
+          if (nextStatus != order.status) ..._statusTimingUpdate(order),
+          if (nextStatus == PurchaseOrderStatus.paymentDone) ...{
+            'direccionGeneralName': approver?.name.trim().isEmpty ?? true
+                ? null
+                : approver!.name.trim(),
+            'direccionGeneralArea':
+                approver?.areaDisplay.trim().isEmpty ?? true
+                    ? null
+                    : approver!.areaDisplay.trim(),
+          },
+        },
+      );
+
+      prepared.add(
+        _PreparedOrderQuoteSync(
+          order: order,
+          nextOrder: nextOrder,
+          updates: updates,
+        ),
+      );
+    }
+
+    return prepared;
+  }
+
   Future<void> _syncQuoteItemsOnOrders({
     required SupplierQuote quote,
     required PurchaseOrderItemQuoteStatus itemStatus,
@@ -1540,6 +2364,9 @@ class PurchaseOrderRepository {
     String? eventType,
     String? eventComment,
   }) async {
+    _logWindowsReleaseRepoStep(
+      '_syncQuoteItemsOnOrders:start quoteId=${quote.id} orders=${quote.orderIds.length} itemStatus=${itemStatus.name} clearRemovedItems=$clearRemovedItems',
+    );
     final refsByOrder = <String, Map<int, SupplierQuoteItemRef>>{};
     for (final ref in quote.items) {
       final orderId = ref.orderId.trim();
@@ -1548,6 +2375,9 @@ class PurchaseOrderRepository {
     }
 
     for (final entry in refsByOrder.entries) {
+      _logWindowsReleaseRepoStep(
+        '_syncQuoteItemsOnOrders:loadOrder quoteId=${quote.id} orderId=${entry.key} refs=${entry.value.length}',
+      );
       final order = await fetchOrderById(entry.key);
       if (order == null) continue;
 
@@ -1618,6 +2448,9 @@ class PurchaseOrderRepository {
       }
 
       await _ordersRef.child(order.id).update(updates);
+      _logWindowsReleaseRepoStep(
+        '_syncQuoteItemsOnOrders:updateDone quoteId=${quote.id} orderId=${order.id} nextStatus=${nextStatus.name}',
+      );
 
       final trimmedEventType = eventType?.trim() ?? '';
       if (trimmedEventType.isNotEmpty && eventActor != null) {
@@ -1633,6 +2466,7 @@ class PurchaseOrderRepository {
         );
       }
     }
+    _logWindowsReleaseRepoStep('_syncQuoteItemsOnOrders:done quoteId=${quote.id}');
   }
 
   Future<void> _clearQuoteItemsOnOrders(String quoteId) async {
@@ -1719,6 +2553,20 @@ Future<String> _reserveNextSupplierQuoteFolio(AppDatabase database) async {
   return 'CP-${nextValue.toString().padLeft(6, '0')}';
 }
 
+String _buildWindowsReleaseSupplierQuoteFolio() {
+  final now = DateTime.now();
+  final datePart =
+      '${now.year.toString().padLeft(4, '0')}'
+      '${now.month.toString().padLeft(2, '0')}'
+      '${now.day.toString().padLeft(2, '0')}';
+  final timePart =
+      '${now.hour.toString().padLeft(2, '0')}'
+      '${now.minute.toString().padLeft(2, '0')}'
+      '${now.second.toString().padLeft(2, '0')}';
+  final millisPart = now.millisecond.toString().padLeft(3, '0');
+  return 'CP-W$datePart-$timePart$millisPart';
+}
+
 int _parseCounterValue(Object? raw) {
   if (raw is int) return raw;
   if (raw is num) return raw.toInt();
@@ -1757,6 +2605,39 @@ bool _hasQuoteAssignmentData(PurchaseOrderItem item) {
 
 bool _hasSentToContabilidad(PurchaseOrderItem item) {
   return item.sentToContabilidadAt != null;
+}
+
+void _logWindowsReleaseRepoStep(String message) {
+  // Crash investigation instrumentation removed.
+}
+
+int _quoteSortTimestamp(SupplierQuote quote) {
+  return (quote.updatedAt ?? quote.createdAt)?.millisecondsSinceEpoch ?? 0;
+}
+
+bool _supplierHasResidualDashboardItems({
+  required List<PurchaseOrder> orders,
+  required String supplier,
+  required String? editableQuoteId,
+}) {
+  for (final order in orders) {
+    for (final item in order.items) {
+      final itemSupplier = (item.supplier ?? '').trim();
+      final amount = item.budget ?? 0;
+      final quoteId = item.quoteId?.trim();
+      final include =
+          itemSupplier == supplier &&
+          amount > 0 &&
+          (quoteId == null ||
+              quoteId.isEmpty ||
+              quoteId == editableQuoteId ||
+              item.quoteStatus == PurchaseOrderItemQuoteStatus.rejected);
+      if (include) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 PurchaseOrderStatus _statusForQuoteProgress(List<PurchaseOrderItem> items) {
@@ -1847,6 +2728,10 @@ Future<int> _resolveLegacyMax(AppDatabase database) async {
 
 bool _isFolioId(String? value) => isFolioId(value);
 
+bool _itemsDeepEqual(PurchaseOrderItem left, PurchaseOrderItem right) {
+  return mapEquals(left.toMap(), right.toMap());
+}
+
 String _actorRoleLabel(AppUser actor) {
   final area = actor.areaDisplay.trim();
   if (area.isNotEmpty) return area;
@@ -1864,6 +2749,11 @@ Future<void> _appendEvent(
   String? comment,
   List<PurchaseOrderItem>? itemsSnapshot,
 }) async {
+  if (kReleaseMode &&
+      !kIsWeb &&
+      defaultTargetPlatform == TargetPlatform.windows) {
+    return;
+  }
   final eventRef = orderRef.child('events').push();
   final payload = <String, dynamic>{
     'fromStatus': fromStatus?.name,

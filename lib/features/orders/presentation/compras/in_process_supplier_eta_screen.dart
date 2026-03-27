@@ -259,6 +259,11 @@ class _InProcessSupplierEtaScreenState
             actor: actor,
             selectedLinesByOrder: selectedLinesByOrder,
           );
+      refreshOrderModuleTransitionData(
+        ref,
+        quoteId: quote.id,
+        orderIds: quote.orderIds,
+      );
       _showMessage('Items enviados a Contabilidad.');
     } catch (error, stack) {
       _showMessage(
@@ -321,6 +326,10 @@ class _InProcessSupplierEtaScreenState
             actor: actor,
             registeredAt: registeredAt,
           );
+      refreshOrderModuleTransitionData(
+        ref,
+        orderIds: <String>[order.id],
+      );
 
       final users = await ref.read(allUsersProvider.future);
       AppUser? requester;

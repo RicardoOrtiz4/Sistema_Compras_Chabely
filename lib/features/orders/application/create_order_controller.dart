@@ -305,6 +305,22 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
            requestedDeliveryDate.day,
           );
     if (normalized != null &&
+        normalizeCalendarDate(normalized)
+            .isBefore(normalizeCalendarDate(DateTime.now()))) {
+      state = state.copyWith(
+        error: 'La fecha maxima solicitada no puede ser anterior a hoy.',
+      );
+      return;
+    }
+    if (normalized != null &&
+        state.urgency != PurchaseOrderUrgency.urgente &&
+        !isBusinessDay(normalized)) {
+      state = state.copyWith(
+        error: 'La fecha maxima solicitada debe ser un dia habil.',
+      );
+      return;
+    }
+    if (normalized != null &&
         state.urgency == PurchaseOrderUrgency.urgente &&
         !isAllowedUrgentRequestedDeliveryDate(normalized)) {
       state = state.copyWith(
@@ -632,8 +648,19 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
 
   String? requestedDeliveryDateError() {
     final requestedDeliveryDate = state.requestedDeliveryDate;
-    if (requestedDeliveryDate == null) return null;
-    if (state.urgency != PurchaseOrderUrgency.urgente) return null;
+    if (requestedDeliveryDate == null) {
+      return 'La fecha maxima solicitada es obligatoria.';
+    }
+    if (normalizeCalendarDate(requestedDeliveryDate)
+        .isBefore(normalizeCalendarDate(DateTime.now()))) {
+      return 'La fecha maxima solicitada no puede ser anterior a hoy.';
+    }
+    if (state.urgency != PurchaseOrderUrgency.urgente) {
+      if (!isBusinessDay(requestedDeliveryDate)) {
+        return 'La fecha maxima solicitada debe ser un dia habil.';
+      }
+      return null;
+    }
     if (isAllowedUrgentRequestedDeliveryDate(requestedDeliveryDate)) return null;
     return _urgentRequestedDeliveryDateErrorMessage();
   }

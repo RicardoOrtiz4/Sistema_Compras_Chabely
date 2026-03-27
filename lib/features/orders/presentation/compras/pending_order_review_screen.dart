@@ -55,6 +55,16 @@ class _PendingOrderReviewScreenState
     return Scaffold(
       appBar: AppBar(
         title: const Text('Revisar PDF'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            if (context.canPop()) {
+              context.pop();
+            } else {
+              guardedGo(context, '/orders/pending');
+            }
+          },
+        ),
         actions: [
           ...actions,
         ],
@@ -141,7 +151,7 @@ class _PendingOrderReviewScreenState
   }
 
   Future<void> _handleReject(PurchaseOrder order) async {
-
+    final container = ProviderScope.containerOf(context, listen: false);
     final review = await showItemReviewDialog(
       context: context,
       order: order,
@@ -162,6 +172,8 @@ class _PendingOrderReviewScreenState
       }
       return;
     }
+    final repo = container.read(purchaseOrderRepositoryProvider);
+    final branding = container.read(currentBrandingProvider);
 
     await runOptimisticAction(
       context: context,
@@ -170,13 +182,15 @@ class _PendingOrderReviewScreenState
       successMessage: 'Orden movida a ordenes rechazadas.',
       errorContext: 'PendingOrderReviewScreen.reject',
       action: () async {
-        final repo = ref.read(purchaseOrderRepositoryProvider);
-        final branding = ref.read(currentBrandingProvider);
         await repo.requestEdit(
           order: order,
           comment: review.summary,
           items: review.items,
           actor: actor,
+        );
+        refreshOrderModuleTransitionDataFromContainer(
+          container,
+          orderIds: <String>[order.id],
         );
         try {
           PurchaseOrder? refreshed;
@@ -322,6 +336,16 @@ class _PendingOrderApprovalScreenState
     return Scaffold(
       appBar: AppBar(
         title: const Text('Confirmar orden'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            if (context.canPop()) {
+              context.pop();
+            } else {
+              guardedGo(context, '/orders/pending');
+            }
+          },
+        ),
       ),
       body: orderAsync.when(
         data: (order) {
@@ -373,6 +397,7 @@ class _PendingOrderApprovalScreenState
       _isSubmitting = true;
       _frozenPdfData = _buildPdfData(order);
     });
+    final container = ProviderScope.containerOf(context, listen: false);
     final actor = ref.read(currentUserProfileProvider).value;
     if (actor == null) {
       if (mounted) {
@@ -407,21 +432,34 @@ class _PendingOrderApprovalScreenState
     final reviewerArea = (order.comprasReviewerArea ?? '').trim().isEmpty
         ? actor.areaDisplay
         : order.comprasReviewerArea;
+    final repo = container.read(purchaseOrderRepositoryProvider);
+    markPendingComprasOrdersAsMoved(<String>[order.id]);
 
-    await runOptimisticAction(
-      context: context,
-      onNavigate: () => guardedGo(context, '/orders/pending'),
-      pendingLabel: 'Enviando a Compras...',
-      successMessage: 'Orden enviada a Compras.',
-      errorContext: 'PendingOrderApprovalScreen.approve',
-      action: () => ref.read(purchaseOrderRepositoryProvider).transitionStatus(
-            order: order,
-            targetStatus: PurchaseOrderStatus.cotizaciones,
-            actor: actor,
-            comprasReviewerName: reviewerName,
-            comprasReviewerArea: reviewerArea,
-          ),
-    );
+    try {
+      await runOptimisticAction(
+        context: context,
+        onNavigate: () => guardedGo(context, '/home'),
+        pendingLabel: 'Enviando a Compras...',
+        successMessage: 'Orden enviada a Compras.',
+        errorContext: 'PendingOrderApprovalScreen.approve',
+        action: () async {
+          await repo.transitionStatus(
+                order: order,
+                targetStatus: PurchaseOrderStatus.cotizaciones,
+                actor: actor,
+                comprasReviewerName: reviewerName,
+                comprasReviewerArea: reviewerArea,
+              );
+          refreshOrderModuleTransitionDataFromContainer(
+            container,
+            orderIds: <String>[order.id],
+          );
+        },
+      );
+    } catch (_) {
+      unmarkPendingComprasOrdersAsMoved(<String>[order.id]);
+      rethrow;
+    }
 
     if (mounted) {
       setState(() {

@@ -316,6 +316,10 @@ class _UserInProcessOrdersScreenState
       await ref.read(purchaseOrderRepositoryProvider).autoConfirmRequesterReceived(
             order: order,
           );
+      refreshOrderModuleTransitionData(
+        ref,
+        orderIds: <String>[order.id],
+      );
     } catch (error, stack) {
       logError(
         error,
@@ -696,6 +700,10 @@ class _UserOrderTrackingScreenState
             order: order,
             actor: actor,
           );
+      refreshOrderModuleTransitionData(
+        ref,
+        orderIds: <String>[order.id],
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('La orden se movio al historial.')),

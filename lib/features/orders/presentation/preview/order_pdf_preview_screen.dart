@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import 'package:sistema_compras/core/area_labels.dart';
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
+import 'package:sistema_compras/core/navigation_guard.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/features/auth/domain/app_user.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
@@ -172,14 +173,13 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
                                 .read(createOrderControllerProvider.notifier)
                                 .submit();
                             if (orderId != null) {
+                              refreshOrderModuleData(
+                                ref,
+                                orderIds: <String>[orderId],
+                              );
                               unawaited(_warmPendingCache(orderId));
                               if (!mounted) return;
-                              final navigator = Navigator.of(context);
-                              if (navigator.canPop()) {
-                                navigator.pop();
-                              } else {
-                                context.go('/orders/create');
-                              }
+                              guardedGo(context, '/home');
                             }
                           },
                     child: controller.isSubmitting

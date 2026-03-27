@@ -29,14 +29,30 @@ class AppUser {
     final createdAt = _parseDateTime(data['createdAt']);
     final tokensRaw = data['fcmTokens'];
     final tokens = _parseTokens(tokensRaw);
+    final resolvedName = _firstNonEmptyString(
+      data,
+      const ['name', 'displayName', 'fullName', 'nombre', 'userName'],
+    );
+    final resolvedEmail = _firstNonEmptyString(
+      data,
+      const ['email', 'mail', 'userEmail'],
+    );
+    final resolvedAreaId = _firstNonEmptyString(
+      data,
+      const ['areaId', 'departmentId', 'area'],
+    );
+    final resolvedAreaName = _firstNonEmptyString(
+      data,
+      const ['areaName', 'departmentName', 'areaLabel'],
+    );
     return AppUser(
       id: id,
-      name: (data['name'] as String?) ?? 'Sin nombre',
-      email: (data['email'] as String?) ?? '',
+      name: resolvedName.isEmpty ? 'Sin nombre' : resolvedName,
+      email: resolvedEmail,
       contactEmail: data['contactEmail'] as String?,
       role: (data['role'] as String?) ?? 'usuario',
-      areaId: (data['areaId'] as String?) ?? '',
-      areaName: data['areaName'] as String?,
+      areaId: resolvedAreaId,
+      areaName: resolvedAreaName.isEmpty ? null : resolvedAreaName,
       isActive: (data['isActive'] as bool?) ?? true,
       createdAt: createdAt,
       fcmTokens: tokens,
@@ -87,4 +103,26 @@ List<String> _parseTokens(dynamic value) {
     return tokens;
   }
   return const [];
+}
+
+String _firstNonEmptyString(
+  Map<String, dynamic> data,
+  List<String> keys,
+) {
+  for (final key in keys) {
+    final raw = data[key];
+    if (raw is String) {
+      final trimmed = raw.trim();
+      if (trimmed.isNotEmpty) return trimmed;
+    }
+    if (raw is Map) {
+      final nested = Map<String, dynamic>.from(raw);
+      final nestedValue = _firstNonEmptyString(
+        nested,
+        const ['name', 'displayName', 'fullName', 'nombre', 'label', 'value'],
+      );
+      if (nestedValue.isNotEmpty) return nestedValue;
+    }
+  }
+  return '';
 }

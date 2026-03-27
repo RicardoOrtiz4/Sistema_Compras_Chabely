@@ -16,6 +16,7 @@ import 'package:sistema_compras/features/orders/presentation/preview/supplier_qu
 import 'package:sistema_compras/features/orders/presentation/preview/supplier_quote_pdf_view_screen.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:sistema_compras/core/navigation_guard.dart';
 
 class DireccionQuoteReviewScreen extends ConsumerStatefulWidget {
   const DireccionQuoteReviewScreen({required this.quoteId, super.key});
@@ -30,7 +31,6 @@ class DireccionQuoteReviewScreen extends ConsumerStatefulWidget {
 class _DireccionQuoteReviewScreenState
     extends ConsumerState<DireccionQuoteReviewScreen> {
   bool _isBusy = false;
-  String? _scheduledPdfCacheKey;
 
   @override
   Widget build(BuildContext context) {
@@ -42,7 +42,19 @@ class _DireccionQuoteReviewScreenState
     final canAuthorize = actor != null && _canAuthorizeQuote(actor);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Revisar ordenes')),
+      appBar: AppBar(
+        title: const Text('Revisar ordenes'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            if (Navigator.of(context).canPop()) {
+              Navigator.of(context).pop();
+            } else {
+              guardedGo(context, '/orders/direccion');
+            }
+          },
+        ),
+      ),
       body: quoteAsync.when(
         data: (quote) {
           if (quote == null) {
@@ -241,10 +253,33 @@ class _DireccionQuoteReviewScreenState
     if (accepted != true) return;
     setState(() => _isBusy = true);
     try {
-      await ref.read(purchaseOrderRepositoryProvider).approveSupplierQuote(
-            quote: quote,
-            actor: actor,
-          );
+      final repository = ref.read(purchaseOrderRepositoryProvider);
+      if (useManualOrderRefreshOnWindowsRelease) {
+        await repository.approveSupplierQuoteWithResolvedOrders(
+          quote: quote,
+          actor: actor,
+          relatedOrders: _resolveRelatedOrdersForQuote(quote),
+        );
+      } else {
+        await repository.approveSupplierQuote(
+          quote: quote,
+          actor: actor,
+        );
+      }
+      refreshOrderModuleTransitionData(
+        ref,
+        quoteId: quote.id,
+        orderIds: quote.orderIds,
+      );
+      refreshQuoteWorkflowCounts(
+        ref,
+        quoteId: quote.id,
+      );
+      if (useManualOrderRefreshOnWindowsRelease) {
+        if (!mounted) return;
+        Navigator.of(context).pop();
+        return;
+      }
       if (!mounted) return;
       Navigator.of(context).pop();
       _showMessage('Compra autorizada.');
@@ -291,11 +326,35 @@ class _DireccionQuoteReviewScreenState
     if (accepted != true) return;
     setState(() => _isBusy = true);
     try {
-      await ref.read(purchaseOrderRepositoryProvider).rejectSupplierQuote(
-            quote: quote,
-            comment: controller.text,
-            actor: actor,
-          );
+      final repository = ref.read(purchaseOrderRepositoryProvider);
+      if (useManualOrderRefreshOnWindowsRelease) {
+        await repository.rejectSupplierQuoteWithResolvedOrders(
+          quote: quote,
+          comment: controller.text,
+          actor: actor,
+          relatedOrders: _resolveRelatedOrdersForQuote(quote),
+        );
+      } else {
+        await repository.rejectSupplierQuote(
+          quote: quote,
+          comment: controller.text,
+          actor: actor,
+        );
+      }
+      refreshOrderModuleTransitionData(
+        ref,
+        quoteId: quote.id,
+        orderIds: quote.orderIds,
+      );
+      refreshQuoteWorkflowCounts(
+        ref,
+        quoteId: quote.id,
+      );
+      if (useManualOrderRefreshOnWindowsRelease) {
+        if (!mounted) return;
+        Navigator.of(context).pop();
+        return;
+      }
       if (!mounted) return;
       Navigator.of(context).pop();
       _showMessage('Compra rechazada.');
@@ -318,13 +377,15 @@ class _DireccionQuoteReviewScreenState
   }
 
   void _schedulePdfCache(SupplierQuotePdfData data) {
-    final cacheKey = supplierQuotePdfCacheKey(data);
-    if (_scheduledPdfCacheKey == cacheKey) return;
-    _scheduledPdfCacheKey = cacheKey;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _scheduledPdfCacheKey != cacheKey) return;
-      cacheSupplierQuotePdfs([data], limit: 1);
-    });
+  }
+
+  List<PurchaseOrder> _resolveRelatedOrdersForQuote(SupplierQuote quote) {
+    final orders = ref.read(operationalOrdersProvider).valueOrNull ?? const <PurchaseOrder>[];
+    final orderIds = quote.orderIds.toSet();
+    return [
+      for (final order in orders)
+        if (orderIds.contains(order.id)) order,
+    ];
   }
 }
 

@@ -1,37 +1,20 @@
-flutter pub get
-Resolving dependencies... (1.4s)
-Because no versions of firebase_messaging match >15.2.10
-  <16.0.0 and firebase_messaging >=14.7.0 <15.0.1 depends on
-  firebase_core_platform_interface ^5.0.0, firebase_messaging    
-  >=14.7.0 <15.0.1-∞ or >15.2.10 <16.0.0 requires
-  firebase_core_platform_interface ^5.0.0.
-And because firebase_messaging >=15.0.1 <15.0.4 depends on       
-  firebase_core_platform_interface ^5.1.0 and firebase_messaging 
-  >=15.0.4 <15.1.0 depends on firebase_core_platform_interface   
-  ^5.2.0, firebase_messaging >=14.7.0 <15.1.0-∞ or >15.2.10      
-  <16.0.0 requires firebase_core_platform_interface ^5.0.0.      
-And because firebase_messaging >=15.1.0 <15.1.2 depends on       
-  firebase_core_platform_interface ^5.2.1 and firebase_messaging 
-  >=15.1.2 <15.1.6 depends on firebase_core_platform_interface   
-  ^5.3.0, firebase_messaging >=14.7.0 <15.1.6-∞ or >15.2.10      
-  <16.0.0 requires firebase_core_platform_interface ^5.0.0.      
-And because firebase_messaging >=15.1.6 <15.2.8 depends on       
-  firebase_core_platform_interface ^5.3.1 and firebase_messaging 
-  >=15.2.8 <15.2.9 depends on firebase_core_platform_interface   
-  ^5.4.1, firebase_messaging >=14.7.0 <15.2.9-∞ or >15.2.10      
-  <16.0.0 requires firebase_core_platform_interface ^5.0.0.      
-Because firebase_messaging 15.2.10 depends on firebase_core      
-  ^3.15.2 and firebase_messaging >=15.2.9 <15.2.10 depends on    
-  firebase_core ^3.15.1, firebase_messaging >=15.2.9 <=15.2.10   
-  requires firebase_core ^3.15.1.
-Thus, firebase_messaging >=14.7.0 <16.0.0 requires
-  firebase_core from hosted or firebase_core_platform_interface  
-  ^5.0.0.
-And because every version of firebase_core from path depends on  
-  firebase_core_platform_interface ^6.0.0, firebase_core from    
-  path is incompatible with firebase_messaging >=14.7.0 <16.0.0. 
-So, because sistema_compras depends on both firebase_core from   
-  path and firebase_messaging ^15.0.0, version solving failed.   
-Failed to update packages.
+ flutter build windows
+CMake Deprecation Warning at D:/chabely/Sistema_Compras_Chabely/build/windows/x64/extracted/firebase_cpp_sdk_windows/CMakeLists.txt:17 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
 
-The include file 'package:flutter_lints/flutter.yaml' in 'D:\chabely\Sistema_Compras_Chabely\analysis_options.yaml' can't be found when analyzing 'D:\chabely\Sistema_Compras_Chabely\third_party\firebase_core'.dart(include_file_not_found)
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+
+
+lib/features/orders/presentation/compras/cotizaciones_orders_screen.dart(1251,10): error G5FE39F1E: Type 'AppUser' not found. [D:\chabely\Sistema_Compras_Chabely\build\windows\x64\flutter\flutter_assemble.vcxproj]
+lib/features/orders/presentation/compras/cotizaciones_orders_screen.dart(1258,54): error G5FE39F1E: Type 'AppUser' not found. [D:\chabely\Sistema_Compras_Chabely\build\windows\x64\flutter\flutter_assemble.vcxproj]
+lib/features/orders/presentation/compras/cotizaciones_orders_screen.dart(1266,54): error G5FE39F1E: Type 'AppUser' not found. [D:\chabely\Sistema_Compras_Chabely\build\windows\x64\flutter\flutter_assemble.vcxproj]
+lib/features/orders/presentation/preview/order_pdf_mapper.dart(167,20): error GC9768DF9: Undefined name 'requesterName'. [D:\chabely\Sistema_Compras_Chabely\build\windows\x64\flutter\flutter_assemble.vcxproj]
+lib/features/orders/presentation/preview/order_pdf_mapper.dart(168,20): error GC9768DF9: Undefined name 'requesterArea'. [D:\chabely\Sistema_Compras_Chabely\build\windows\x64\flutter\flutter_assemble.vcxproj]
+lib/features/orders/presentation/compras/cotizaciones_orders_screen.dart(1258,54): error G9DC8A7EE: 'AppUser' isn't a type. [D:\chabely\Sistema_Compras_Chabely\build\windows\x64\flutter\flutter_assemble.vcxproj]
+lib/features/orders/presentation/compras/cotizaciones_orders_screen.dart(1266,54): error G9DC8A7EE: 'AppUser' isn't a type. [D:\chabely\Sistema_Compras_Chabely\build\windows\x64\flutter\flutter_assemble.vcxproj]
+C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VC\v180\Microsoft.CppCommon.targets(254,5): error MSB8066: Compilación personalizada de "D:\chabely\Sistema_Compras_Chabely\build\windows\x64\CMakeFiles\d1c10c0883c778b2a0d71be54510db32\flutter_windows.dll.rule;D:\chabely\Sistema_Compras_Chabely\build\windows\x64\CMakeFiles\cabc772ff430fb7663a0ffa3f8625008\flutter_assemble.rule" terminada con el código 1. [D:\chabely\Sistema_Compras_Chabely\build\windows\x64\flutter\flutter_assemble.vcxproj]
+Building Windows application...                                    67.8s
+Build process failed.

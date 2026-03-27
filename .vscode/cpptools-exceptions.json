@@ -1,0 +1,9 @@
+{
+  "exceptions": [
+    {
+      "name": "C++ Exceptions",
+      "description": "Break on C++ exceptions",
+      "enabled": true
+    }
+  ]
+}

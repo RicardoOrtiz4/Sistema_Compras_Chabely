@@ -398,11 +398,21 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
     final picked = await showDatePicker(
       context: context,
       initialDate: initialDate,
-      firstDate: isUrgent ? urgentDates.first : DateTime(1900, 1, 1),
+      firstDate: isUrgent ? urgentDates.first : normalizedNow,
       lastDate: isUrgent ? urgentDates.last : DateTime(2100, 12, 31),
-      selectableDayPredicate: isUrgent
-          ? (day) => isAllowedUrgentRequestedDeliveryDate(day, today: normalizedNow)
-          : null,
+      selectableDayPredicate: (day) {
+        final normalizedDay = normalizeCalendarDate(day);
+        if (normalizedDay.isBefore(normalizedNow)) {
+          return false;
+        }
+        if (!isUrgent) {
+          return isBusinessDay(normalizedDay);
+        }
+        return isAllowedUrgentRequestedDeliveryDate(
+          normalizedDay,
+          today: normalizedNow,
+        );
+      },
     );
     if (picked == null) return;
     notifier.setRequestedDeliveryDate(picked);

@@ -224,13 +224,9 @@ class _ContabilidadGroupPdfScreenState
     }
 
     final repo = ref.read(purchaseOrderRepositoryProvider);
-    final refreshedOrders = <PurchaseOrder>[];
-    for (final order in initialOrders) {
-      final refreshed = await repo.fetchOrderById(order.id);
-      if (refreshed != null) {
-        refreshedOrders.add(refreshed);
-      }
-    }
+    final refreshedOrders = await repo.fetchOrdersByIds(
+      initialOrders.map((order) => order.id),
+    );
 
     final blockedOrders = refreshedOrders
         .where((order) => !canFinalizeOrder(order))
@@ -252,17 +248,16 @@ class _ContabilidadGroupPdfScreenState
       if (!savedAll) return;
     }
 
-    final finalizedOrders = <PurchaseOrder>[];
-    for (final order in refreshedOrders) {
-      final latest = await repo.fetchOrderById(order.id);
-      if (latest == null) continue;
+    final finalizedOrders = await repo.fetchOrdersByIds(
+      refreshedOrders.map((order) => order.id),
+    );
+    for (final latest in finalizedOrders) {
       if (!hasAllInternalOrders(latest)) {
         _showMessage(
           'Falta capturar la OC interna de todos los articulos antes de finalizar.',
         );
         return;
       }
-      finalizedOrders.add(latest);
     }
 
     final confirmed = await showDialog<bool>(
@@ -306,6 +301,11 @@ class _ContabilidadGroupPdfScreenState
           items: order.items,
         );
       }
+      refreshOrderModuleTransitionData(
+        ref,
+        quoteId: quote.id,
+        orderIds: finalizedOrders.map((order) => order.id),
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -459,6 +459,10 @@ class _ContabilidadInternalOrdersFlowScreenState
             order: _currentOrder,
             internalOrdersByLine: _currentDraftInternalOrders,
           );
+      refreshOrderModuleTransitionData(
+        ref,
+        orderIds: <String>[_currentOrder.id],
+      );
       if (!mounted) return;
       final isLastOrder = _currentIndex >= widget.orders.length - 1;
       if (isLastOrder) {

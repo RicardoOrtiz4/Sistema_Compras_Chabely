@@ -156,9 +156,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ],
         ),
         actions: [
-          _HomeNotificationsAction(
-            onOpenProfile: () => showProfileSheet(context, ref),
-          ),
           if (isAdmin || isCompras)
             IconButton(
               icon: const Icon(Icons.monitor_heart_outlined),
@@ -415,41 +412,6 @@ class _HomeDrawer extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _HomeNotificationsAction extends ConsumerWidget {
-  const _HomeNotificationsAction({required this.onOpenProfile});
-
-  final VoidCallback onOpenProfile;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final total = ref.watch(homeNotificationsCountProvider);
-    return IconButton(
-      tooltip: 'Notificaciones',
-      onPressed: () => _showHomeNotificationsSheet(
-        context,
-        ref,
-        onOpenProfile: onOpenProfile,
-      ),
-      icon: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          const Icon(Icons.notifications_none_outlined),
-          if (total > 0)
-            Positioned(
-              right: -4,
-              top: -4,
-              child: _CountBadge(
-                count: total,
-                color: Theme.of(context).colorScheme.error,
-                textColor: Theme.of(context).colorScheme.onError,
-              ),
-            ),
-        ],
       ),
     );
   }
@@ -897,23 +859,6 @@ Future<void> _showCompanySwitcher(
   );
 }
 
-Future<void> _showHomeNotificationsSheet(
-  BuildContext parentContext,
-  WidgetRef ref, {
-  required VoidCallback onOpenProfile,
-}) async {
-  await showModalBottomSheet<void>(
-    context: parentContext,
-    showDragHandle: true,
-    isScrollControlled: true,
-    builder: (context) {
-      return _HomeNotificationsSheet(
-        parentContext: parentContext,
-        onOpenProfile: onOpenProfile,
-      );
-    },
-  );
-}
 
 class _HomeNotificationsSheet extends ConsumerWidget {
   const _HomeNotificationsSheet({

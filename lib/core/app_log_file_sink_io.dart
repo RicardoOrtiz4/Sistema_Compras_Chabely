@@ -1,0 +1,1 @@
+void appendAppLogLine(String line) {}

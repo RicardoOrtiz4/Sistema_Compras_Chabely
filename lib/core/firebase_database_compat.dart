@@ -49,9 +49,10 @@ abstract class AppDatabaseRef implements AppDatabaseQuery {
 }
 
 class AppDatabaseSnapshot {
-  const AppDatabaseSnapshot(this.value);
+  const AppDatabaseSnapshot(this.value, {this.fingerprint});
 
   final Object? value;
+  final String? fingerprint;
 
   bool get exists => value != null;
 }
@@ -85,6 +86,12 @@ AppDatabase createAppDatabase(AppAuthClient auth) {
   }
   return PluginAppDatabase(FirebaseDatabase.instance);
 }
+
+bool get _useSingleShotWatchOnWindows =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+
+bool get _useRestWriteCompatibilityOnWindowsRelease =>
+    kReleaseMode && !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
 
 class PluginAppDatabase implements AppDatabase {
   PluginAppDatabase(this._database);
@@ -185,6 +192,7 @@ class RestAppDatabase implements AppDatabase {
   final String _databaseUrl;
   final http.Client _client;
   final Duration _pollInterval;
+  Future<void> _requestQueue = Future<void>.value();
 
   @override
   AppDatabaseRef ref([String path = '']) {
@@ -210,7 +218,10 @@ class RestAppDatabase implements AppDatabase {
           limitToLast: limitToLast,
         ),
       );
-      return AppDatabaseSnapshot(_decodeResponseBody(response));
+      return AppDatabaseSnapshot(
+        _decodeResponseBody(response),
+        fingerprint: response.body,
+      );
     } on StateError catch (error) {
       if (!_shouldFallbackToClientSideQuery(
         error,
@@ -226,7 +237,10 @@ class RestAppDatabase implements AppDatabase {
         equalTo: equalTo,
         limitToLast: limitToLast,
       );
-      return AppDatabaseSnapshot(value);
+      return AppDatabaseSnapshot(
+        value,
+        fingerprint: jsonEncode(_canonicalize(value)),
+      );
     }
   }
 
@@ -237,6 +251,35 @@ class RestAppDatabase implements AppDatabase {
     int? limitToLast,
   }) {
     return Stream.multi((controller) {
+      if (_useSingleShotWatchOnWindows) {
+        var cancelled = false;
+        controller.onCancel = () {
+          cancelled = true;
+        };
+        unawaited(() async {
+          try {
+            final snapshot = await get(
+              path: path,
+              orderByChild: orderByChild,
+              equalTo: equalTo,
+              limitToLast: limitToLast,
+            );
+            if (!cancelled) {
+              controller.add(AppDatabaseEvent(snapshot));
+            }
+          } catch (error, stackTrace) {
+            if (!cancelled) {
+              controller.addError(error, stackTrace);
+            }
+          } finally {
+            if (!cancelled) {
+              await controller.close();
+            }
+          }
+        }());
+        return;
+      }
+
       Timer? timer;
       var fetching = false;
       var disposed = false;
@@ -253,7 +296,8 @@ class RestAppDatabase implements AppDatabase {
             equalTo: equalTo,
             limitToLast: limitToLast,
           );
-          final fingerprint = _fingerprint(snapshot.value);
+          final fingerprint =
+              snapshot.fingerprint ?? _fingerprint(snapshot.value);
           if (!hasEmitted || fingerprint != lastFingerprint) {
             hasEmitted = true;
             lastFingerprint = fingerprint;
@@ -279,11 +323,34 @@ class RestAppDatabase implements AppDatabase {
   }
 
   Future<void> set(String path, Object? value) async {
-    await _request('PUT', path, body: value);
+    _logWindowsReleaseDatabaseStep(
+      'set:start path=$path bodyType=${value.runtimeType}',
+    );
+    await _request(
+      'PUT',
+      path,
+      body: _normalizeRestWriteValue(value),
+    );
+    _logWindowsReleaseDatabaseStep('set:done path=$path');
   }
 
   Future<void> update(String path, Map<String, Object?> value) async {
-    await _request('PATCH', path, body: _normalizeUpdateKeys(value));
+    final normalized = _normalizeUpdateKeys(value);
+    if (_useRestWriteCompatibilityOnWindowsRelease) {
+      final current = await get(path: path);
+      final merged = _mergePatchedValue(current.value, normalized);
+      await _request(
+        'PUT',
+        path,
+        body: _normalizeRestWriteValue(merged),
+      );
+      return;
+    }
+    await _request(
+      'PATCH',
+      path,
+      body: _normalizeRestWriteValue(normalized),
+    );
   }
 
   Future<void> remove(String path) async {
@@ -311,7 +378,7 @@ class RestAppDatabase implements AppDatabase {
       final response = await _request(
         'PUT',
         path,
-        body: nextValue,
+        body: _normalizeRestWriteValue(nextValue),
         headers: <String, String>{'if-match': etag},
         allowConflict: true,
       );
@@ -321,7 +388,10 @@ class RestAppDatabase implements AppDatabase {
 
       return AppDatabaseTransactionResult(
         committed: true,
-        snapshot: AppDatabaseSnapshot(_decodeResponseBody(response)),
+        snapshot: AppDatabaseSnapshot(
+          _decodeResponseBody(response),
+          fingerprint: response.body,
+        ),
       );
     }
 
@@ -339,42 +409,124 @@ class RestAppDatabase implements AppDatabase {
     Object? body,
     bool allowConflict = false,
   }) async {
+    if (_useRestWriteCompatibilityOnWindowsRelease) {
+      return _enqueueSerializedRequest(
+        method,
+        path,
+        queryParameters: queryParameters,
+        headers: headers,
+        body: body,
+        allowConflict: allowConflict,
+      );
+    }
+    return _requestImpl(
+      method,
+      path,
+      queryParameters: queryParameters,
+      headers: headers,
+      body: body,
+      allowConflict: allowConflict,
+    );
+  }
+
+  Future<http.Response> _enqueueSerializedRequest(
+    String method,
+    String path, {
+    Map<String, String>? queryParameters,
+    Map<String, String>? headers,
+    Object? body,
+    bool allowConflict = false,
+  }) {
+    _logWindowsReleaseDatabaseStep(
+      '_request:queued method=$method path=$path',
+    );
+    final completer = Completer<http.Response>();
+    _requestQueue = _requestQueue
+        .catchError((_) {})
+        .then((_) async {
+          try {
+            final response = await _requestImpl(
+              method,
+              path,
+              queryParameters: queryParameters,
+              headers: headers,
+              body: body,
+              allowConflict: allowConflict,
+            );
+            completer.complete(response);
+          } catch (error, stack) {
+            completer.completeError(error, stack);
+          }
+        });
+    return completer.future;
+  }
+
+  Future<http.Response> _requestImpl(
+    String method,
+    String path, {
+    Map<String, String>? queryParameters,
+    Map<String, String>? headers,
+    Object? body,
+    bool allowConflict = false,
+  }) async {
+    _logWindowsReleaseDatabaseStep(
+      '_request:start method=$method path=$path bodyType=${body.runtimeType}',
+    );
+    _logWindowsReleaseDatabaseStep('_request:token:start method=$method path=$path');
     final token = await _auth.currentUser?.getIdToken();
+    _logWindowsReleaseDatabaseStep(
+      '_request:token:done method=$method path=$path hasToken=${token != null && token.isNotEmpty}',
+    );
     final mergedQuery = <String, String>{
       ...?queryParameters,
       if (token != null && token.isNotEmpty) 'auth': token,
     };
 
     final uri = _buildUri(path, mergedQuery);
+    _logWindowsReleaseDatabaseStep('_request:uri:done method=$method path=$path');
     final requestHeaders = <String, String>{
       if (body != null) 'Content-Type': 'application/json',
+      'Connection': 'close',
       ...?headers,
     };
+    _logWindowsReleaseDatabaseStep(
+      '_request:headers:done method=$method path=$path count=${requestHeaders.length}',
+    );
 
     late http.Response response;
-    switch (method) {
-      case 'GET':
-        response = await _client.get(uri, headers: requestHeaders);
-        break;
-      case 'PUT':
-        response = await _client.put(
-          uri,
-          headers: requestHeaders,
-          body: jsonEncode(body),
+    if (_useRestWriteCompatibilityOnWindowsRelease) {
+      final client = http.Client();
+      try {
+        _logWindowsReleaseDatabaseStep(
+          '_request:http:start method=$method path=$path compatibilityClient=true',
         );
-        break;
-      case 'PATCH':
-        response = await _client.patch(
+        response = await _performHttpRequest(
+          client,
+          method,
           uri,
-          headers: requestHeaders,
-          body: jsonEncode(body),
+          requestHeaders,
+          body,
         );
-        break;
-      case 'DELETE':
-        response = await _client.delete(uri, headers: requestHeaders);
-        break;
-      default:
-        throw UnsupportedError('Metodo HTTP no soportado: $method');
+        _logWindowsReleaseDatabaseStep(
+          '_request:http:done method=$method path=$path status=${response.statusCode}',
+        );
+      } finally {
+        client.close();
+      }
+    } else {
+      _logWindowsReleaseDatabaseStep(
+        '_request:http:start method=$method path=$path compatibilityClient=false',
+      );
+      response = await _performHttpRequest(
+        _client,
+        method,
+        uri,
+        requestHeaders,
+        body,
+      );
+      _logWindowsReleaseDatabaseStep(
+        '_request:http:done method=$method path=$path status=${response.statusCode}',
+      );
     }
 
     final ok = response.statusCode >= 200 && response.statusCode < 300;
@@ -385,6 +537,49 @@ class RestAppDatabase implements AppDatabase {
     throw StateError(
       'Realtime Database REST error ${response.statusCode} en "$path": ${response.body}',
     );
+  }
+
+  Future<http.Response> _performHttpRequest(
+    http.Client client,
+    String method,
+    Uri uri,
+    Map<String, String> headers,
+    Object? body,
+  ) {
+    switch (method) {
+      case 'GET':
+        return client.get(uri, headers: headers);
+      case 'PUT':
+        _logWindowsReleaseDatabaseStep(
+          '_performHttpRequest:encode:start method=$method uri=${uri.path}',
+        );
+        final encodedBody = jsonEncode(body);
+        _logWindowsReleaseDatabaseStep(
+          '_performHttpRequest:encode:done method=$method uri=${uri.path} bytes=${encodedBody.length}',
+        );
+        return client.put(
+          uri,
+          headers: headers,
+          body: encodedBody,
+        );
+      case 'PATCH':
+        _logWindowsReleaseDatabaseStep(
+          '_performHttpRequest:encode:start method=$method uri=${uri.path}',
+        );
+        final encodedBody = jsonEncode(body);
+        _logWindowsReleaseDatabaseStep(
+          '_performHttpRequest:encode:done method=$method uri=${uri.path} bytes=${encodedBody.length}',
+        );
+        return client.patch(
+          uri,
+          headers: headers,
+          body: encodedBody,
+        );
+      case 'DELETE':
+        return client.delete(uri, headers: headers);
+      default:
+        throw UnsupportedError('Metodo HTTP no soportado: $method');
+    }
   }
 
   Uri _buildUri(String path, Map<String, String> queryParameters) {
@@ -659,6 +854,105 @@ Map<String, Object?> _normalizeUpdateKeys(Map<String, Object?> updates) {
     normalized[normalizedKey] = entry.value;
   }
   return normalized;
+}
+
+Object? _normalizeRestWriteValue(Object? value) {
+  if (!_useRestWriteCompatibilityOnWindowsRelease) {
+    return value;
+  }
+  return _materializeServerValues(value);
+}
+
+Object? _materializeServerValues(Object? value) {
+  if (_isServerTimestampPlaceholder(value)) {
+    return DateTime.now().millisecondsSinceEpoch;
+  }
+  if (value is Map) {
+    return <String, Object?>{
+      for (final entry in value.entries)
+        entry.key.toString(): _materializeServerValues(entry.value),
+    };
+  }
+  if (value is List) {
+    return value.map(_materializeServerValues).toList(growable: false);
+  }
+  return value;
+}
+
+bool _isServerTimestampPlaceholder(Object? value) {
+  if (value is! Map) return false;
+  if (value.length != 1) return false;
+  return value['.sv'] == 'timestamp';
+}
+
+void _logWindowsReleaseDatabaseStep(String message) {
+  // Crash investigation instrumentation removed.
+}
+
+Object? _mergePatchedValue(
+  Object? current,
+  Map<String, Object?> updates,
+) {
+  final root = current is Map
+      ? Map<String, Object?>.from(
+          current.map(
+            (key, value) => MapEntry(
+              key.toString(),
+              _cloneJsonLike(value),
+            ),
+          ),
+        )
+      : <String, Object?>{};
+
+  for (final entry in updates.entries) {
+    _applyPatchedEntry(root, entry.key, _cloneJsonLike(entry.value));
+  }
+  return root;
+}
+
+void _applyPatchedEntry(
+  Map<String, Object?> root,
+  String path,
+  Object? value,
+) {
+  final segments = path
+      .split('/')
+      .map((segment) => segment.trim())
+      .where((segment) => segment.isNotEmpty)
+      .toList(growable: false);
+  if (segments.isEmpty) return;
+
+  Map<String, Object?> current = root;
+  for (var index = 0; index < segments.length - 1; index++) {
+    final segment = segments[index];
+    final next = current[segment];
+    if (next is Map) {
+      final copied = Map<String, Object?>.from(
+        next.map((key, value) => MapEntry(key.toString(), _cloneJsonLike(value))),
+      );
+      current[segment] = copied;
+      current = copied;
+      continue;
+    }
+    final created = <String, Object?>{};
+    current[segment] = created;
+    current = created;
+  }
+
+  current[segments.last] = value;
+}
+
+Object? _cloneJsonLike(Object? value) {
+  if (value is Map) {
+    return <String, Object?>{
+      for (final entry in value.entries)
+        entry.key.toString(): _cloneJsonLike(entry.value),
+    };
+  }
+  if (value is List) {
+    return value.map(_cloneJsonLike).toList(growable: false);
+  }
+  return value;
 }
 
 class _PushIdGenerator {

@@ -6,6 +6,8 @@ import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
+import 'package:sistema_compras/core/navigation_guard.dart';
+import 'package:sistema_compras/core/session_drafts.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/features/auth/domain/app_user.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
@@ -13,7 +15,6 @@ import 'package:sistema_compras/features/orders/data/purchase_order_repository.d
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/domain/supplier_quote.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_urgency_controls.dart';
-import 'package:sistema_compras/features/orders/presentation/shared/order_status_duration.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/supplier_quote_pdf_builder.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/supplier_quote_pdf_view_screen.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
@@ -39,26 +40,73 @@ class CotizacionesDashboardScreen extends ConsumerStatefulWidget {
 }
 
 class _CotizacionesDashboardScreenState
-    extends ConsumerState<CotizacionesDashboardScreen> {
+    extends ConsumerState<CotizacionesDashboardScreen>
+    with RouteAware, WidgetsBindingObserver {
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _linksController = TextEditingController();
   final TextEditingController _comprasCommentController =
       TextEditingController();
   bool _isBusy = false;
+  bool _isLoading = true;
   String? _selectedSupplier;
-  String? _scheduledPdfCacheKey;
   String _searchQuery = '';
   OrderUrgencyFilter _urgencyFilter = OrderUrgencyFilter.all;
   DateTimeRange? _createdDateRangeFilter;
+  String? _loadError;
+  _DashboardSnapshot? _snapshot;
+  int _loadToken = 0;
+  bool _isRouteSubscribed = false;
 
   bool get _isDireccion => widget.mode == CotizacionesDashboardMode.direccion;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await SessionDraftStore.ensureInitialized();
+      if (mounted) {
+        _reloadDashboard(clearSelection: false);
+      }
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) {
+      if (_isRouteSubscribed) {
+        routeObserver.unsubscribe(this);
+      }
+      routeObserver.subscribe(this, route);
+      _isRouteSubscribed = true;
+    }
+  }
+
+  @override
   void dispose() {
+    if (_isRouteSubscribed) {
+      routeObserver.unsubscribe(this);
+    }
+    WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
     _linksController.dispose();
     _comprasCommentController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didPopNext() {
+    if (!mounted) return;
+    _reloadDashboard(clearSelection: false);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      _reloadDashboard(clearSelection: false);
+    }
   }
 
   void _updateSearch(String value) {
@@ -100,230 +148,17 @@ class _CotizacionesDashboardScreenState
 
   @override
   Widget build(BuildContext context) {
-    final completedOrdersAsync = ref.watch(dataCompleteOrdersProvider);
-    final operationalOrdersAsync = ref.watch(operationalOrdersProvider);
-    final quotesAsync = ref.watch(supplierQuotesProvider);
-    final actor = ref.watch(currentUserProfileProvider).value;
-    final branding = ref.watch(currentBrandingProvider);
-    final titleOrders =
-        operationalOrdersAsync.valueOrNull ?? const <PurchaseOrder>[];
-    final titleQuotes = _isDireccion
-        ? (quotesAsync.valueOrNull ?? const <SupplierQuote>[])
+    final compactAppBar = useCompactOrderModuleAppBar(context);
+    final snapshot = _snapshot;
+    final titleOrders = snapshot?.allOrders ?? const <PurchaseOrder>[];
+    final titleQuotes = _isDireccion && snapshot != null
+        ? _withoutDraftQuotes(snapshot.quotes)
             .where(
               (quote) => quote.status == SupplierQuoteStatus.pendingDireccion,
             )
             .toList(growable: false)
         : const <SupplierQuote>[];
-    final compactAppBar = useCompactOrderModuleAppBar(context);
-    final body = completedOrdersAsync.when(
-      data: (completedOrders) => operationalOrdersAsync.when(
-        data: (allOrders) => quotesAsync.when(
-          data: (quotes) {
-            final editableQuotes = _isDireccion
-                ? quotes
-                    .where(
-                      (quote) =>
-                          quote.status == SupplierQuoteStatus.pendingDireccion,
-                    )
-                    .toList(growable: false)
-                : quotes
-                    .where(
-                      (quote) =>
-                          quote.status == SupplierQuoteStatus.draft ||
-                          quote.status == SupplierQuoteStatus.rejected,
-                      )
-                    .toList(growable: false);
-            final editableQuotesBySupplier = _quotesBySupplier(editableQuotes);
-            final supplierOptions = _isDireccion
-                ? const <String>[]
-                : _supplierOptions(
-                    completedOrders,
-                    editableQuotesBySupplier,
-                  );
-            final supplierOptionsSet = supplierOptions.toSet();
-            final activeEditableQuotes = _isDireccion
-                ? editableQuotes
-                : editableQuotes
-                    .where(
-                      (quote) => supplierOptionsSet.contains(quote.supplier.trim()),
-                    )
-                    .toList(growable: false);
-            final activeEditableQuotesBySupplier = _isDireccion
-                ? const <String, SupplierQuote>{}
-                : _quotesBySupplier(activeEditableQuotes);
-
-            if (!_isDireccion &&
-                _selectedSupplier != null &&
-                !supplierOptions.contains(_selectedSupplier)) {
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (!mounted) return;
-                _setSelectedSupplier(null, null);
-              });
-            }
-            if (!_isDireccion &&
-                _selectedSupplier == null &&
-                supplierOptions.length == 1) {
-              final singleSupplier = supplierOptions.first;
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (!mounted || _selectedSupplier != null) return;
-                _setSelectedSupplier(
-                  singleSupplier,
-                  activeEditableQuotesBySupplier[singleSupplier],
-                );
-              });
-            }
-
-            final selectedQuote = !_isDireccion && _selectedSupplier != null
-                ? activeEditableQuotesBySupplier[_selectedSupplier!]
-                : null;
-            final visibleQuotes = _isDireccion
-                ? editableQuotes
-                    .where(
-                      (quote) => _matchesDireccionQuoteFilters(
-                        quote: quote,
-                        allOrders: allOrders,
-                        query: _searchQuery,
-                        filter: _urgencyFilter,
-                        range: _createdDateRangeFilter,
-                      ),
-                    )
-                    .toList(growable: false)
-                : activeEditableQuotes;
-            final supplierItems = !_isDireccion && _selectedSupplier != null
-                ? _collectSupplierItems(
-                    orders: completedOrders,
-                    supplier: _selectedSupplier!,
-                    editableQuoteId: selectedQuote?.id,
-                  )
-                : const <_SupplierGroupedItem>[];
-            final pendingDashboardOrders = _isDireccion
-                ? const <_PendingDashboardOrder>[]
-                : _buildPendingDashboardOrders(
-                    allOrders: allOrders,
-                    selectedSupplier: _selectedSupplier,
-                    selectedQuoteId: selectedQuote?.id,
-                  );
-            final quoteSendStates = _buildQuoteSendStates(
-              quotes: visibleQuotes,
-              orders: allOrders,
-            );
-            final selectedLinks = _parseLinks(_linksController.text);
-            _schedulePdfCache(
-              _buildCacheCandidates(
-                allOrders: allOrders,
-                branding: branding,
-                actor: actor,
-                visibleQuotes: visibleQuotes,
-                selectedSupplier: _selectedSupplier,
-                selectedItems: supplierItems,
-                selectedLinks: selectedLinks,
-                selectedQuote: selectedQuote,
-                selectedComprasComment: _comprasCommentController.text.trim(),
-              ),
-            );
-
-            return ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                if (_isDireccion) ...[
-                  _DireccionQuotesFilters(
-                    searchController: _searchController,
-                    searchQuery: _searchQuery,
-                    selectedRange: _createdDateRangeFilter,
-                    onSearchChanged: _updateSearch,
-                    onClearSearch: _clearSearch,
-                    onPickDate: _pickCreatedDateFilter,
-                    onClearDate: _clearCreatedDateFilter,
-                  ),
-                  const SizedBox(height: 16),
-                ],
-                if (!_isDireccion && supplierOptions.isNotEmpty) ...[
-                  _SupplierWorkPanel(
-                    supplierOptions: supplierOptions,
-                    selectedSupplier: _selectedSupplier,
-                    workingQuote: selectedQuote,
-                    items: supplierItems,
-                    quoteLinkCount: selectedLinks.length,
-                    comprasCommentController: _comprasCommentController,
-                    isBusy: _isBusy,
-                    onSupplierChanged: (supplier) => _setSelectedSupplier(
-                      supplier,
-                      supplier == null
-                          ? null
-                          : activeEditableQuotesBySupplier[supplier],
-                    ),
-                    onViewOrderPdf: _openOrderPdf,
-                    onManageLinks: _selectedSupplier == null
-                        ? null
-                        : _manageQuoteLinks,
-                    onViewPdf: supplierItems.isEmpty
-                        ? null
-                        : () => _openSelectionPdf(
-                              supplier: _selectedSupplier!,
-                              items: supplierItems,
-                              allOrders: allOrders,
-                              branding: branding,
-                              actor: actor,
-                              quote: selectedQuote,
-                            ),
-                  ),
-                  const SizedBox(height: 16),
-                ],
-                if (!_isDireccion &&
-                    supplierOptions.isEmpty &&
-                    visibleQuotes.isEmpty &&
-                    pendingDashboardOrders.isEmpty) ...[
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Text(
-                        'No hay ordenes disponibles en este momento.',
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                ],
-                _QuotesPanel(
-                  quotes: visibleQuotes,
-                  allOrders: allOrders,
-                  pendingOrders: pendingDashboardOrders,
-                  quoteSendStates: quoteSendStates,
-                  isDireccion: _isDireccion,
-                  onOpenOrder: widget.onOpenOrder,
-                  onViewOrderPdf: _openOrderPdf,
-                  onViewPdf: (quote) => _openStoredQuotePdf(
-                    quote: quote,
-                    allOrders: allOrders,
-                    branding: branding,
-                    actor: actor,
-                  ),
-                  onCancel: _isDireccion ? null : _cancelQuote,
-                  onApprove: _isDireccion ? _approveQuoteFromCard : null,
-                  onReject: _isDireccion ? _rejectQuoteFromCard : null,
-                ),
-              ],
-            );
-          },
-          loading: () => const AppSplash(),
-          error: (error, stack) => _ErrorText(
-            message: reportError(error, stack, context: 'SupplierQuotes.quotes'),
-          ),
-        ),
-        loading: () => const AppSplash(),
-        error: (error, stack) => _ErrorText(
-          message: reportError(error, stack, context: 'SupplierQuotes.orders'),
-        ),
-      ),
-      loading: () => const AppSplash(),
-      error: (error, stack) => _ErrorText(
-        message: reportError(
-          error,
-          stack,
-          context: 'SupplierQuotes.completedOrders',
-        ),
-      ),
-    );
+    final body = _buildDashboardBody(snapshot);
 
     if (widget.embedded) return body;
 
@@ -342,6 +177,13 @@ class _CotizacionesDashboardScreenState
                     onSelected: _setUrgencyFilter,
                   ))
             : const Text('Mesa de compras'),
+        actions: [
+          IconButton(
+            onPressed: _isLoading ? null : () => _reloadDashboard(clearSelection: false),
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Recargar',
+          ),
+        ],
         bottom: !_isDireccion || !compactAppBar
             ? null
             : OrderModuleAppBarBottom(
@@ -357,11 +199,203 @@ class _CotizacionesDashboardScreenState
     );
   }
 
+  Widget _buildDashboardBody(_DashboardSnapshot? snapshot) {
+    if (_isLoading && snapshot == null) {
+      return const AppSplash();
+    }
+    if (_loadError != null && snapshot == null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(_loadError!),
+              const SizedBox(height: 12),
+              FilledButton(
+                onPressed: () => _reloadDashboard(clearSelection: false),
+                child: const Text('Reintentar'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (snapshot == null) {
+      return const AppSplash();
+    }
+
+    final completedOrders = snapshot.completedOrders;
+    final allOrders = snapshot.allOrders;
+    final quotes = snapshot.quotes;
+    final blockedQuoteItemKeys = _buildBlockedQuoteItemKeys(quotes);
+    final actor = snapshot.actor;
+    final branding = snapshot.branding;
+    final filteredQuotes = _withoutDraftQuotes(quotes);
+    final editableQuotes = _isDireccion
+        ? filteredQuotes
+            .where(
+              (quote) => quote.status == SupplierQuoteStatus.pendingDireccion,
+            )
+            .toList(growable: false)
+        : filteredQuotes
+            .where(
+              (quote) => quote.status == SupplierQuoteStatus.rejected,
+            )
+            .toList(growable: false);
+    final supplierOptions = _isDireccion
+        ? const <String>[]
+        : _supplierOptions(
+            completedOrders,
+            blockedQuoteItemKeys: blockedQuoteItemKeys,
+          );
+    const SupplierQuote? selectedQuote = null;
+    const Set<String> selectedQuoteItemKeys = <String>{};
+    final visibleQuotes = _isDireccion
+        ? editableQuotes
+            .where(
+              (quote) => _matchesDireccionQuoteFilters(
+                quote: quote,
+                allOrders: allOrders,
+                query: _searchQuery,
+                filter: _urgencyFilter,
+                range: _createdDateRangeFilter,
+              ),
+            )
+            .toList(growable: false)
+        : editableQuotes;
+    final supplierItems = !_isDireccion && _selectedSupplier != null
+        ? _collectSupplierItems(
+            orders: completedOrders,
+            supplier: _selectedSupplier!,
+            editableQuoteItemKeys: selectedQuoteItemKeys,
+            blockedQuoteItemKeys: blockedQuoteItemKeys,
+          )
+        : const <_SupplierGroupedItem>[];
+    final pendingDashboardOrders = _isDireccion
+        ? const <_PendingDashboardOrder>[]
+        : _buildPendingDashboardOrders(
+            allOrders: allOrders,
+            selectedSupplier: _selectedSupplier,
+            selectedQuoteItemKeys: selectedQuoteItemKeys,
+            blockedQuoteItemKeys: blockedQuoteItemKeys,
+          );
+    final quoteSendStates = _buildQuoteSendStates(
+      quotes: visibleQuotes,
+      orders: allOrders,
+    );
+    final selectedLinks = _parseLinks(_linksController.text);
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        if (_loadError != null) ...[
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(_loadError!),
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+        if (_isLoading) ...[
+          const LinearProgressIndicator(),
+          const SizedBox(height: 16),
+        ],
+        if (_isDireccion) ...[
+          _DireccionQuotesFilters(
+            searchController: _searchController,
+            searchQuery: _searchQuery,
+            selectedRange: _createdDateRangeFilter,
+            onSearchChanged: _updateSearch,
+            onClearSearch: _clearSearch,
+            onPickDate: _pickCreatedDateFilter,
+            onClearDate: _clearCreatedDateFilter,
+          ),
+          const SizedBox(height: 16),
+        ],
+        if (!_isDireccion && supplierOptions.isNotEmpty) ...[
+          _SupplierWorkPanel(
+            supplierOptions: supplierOptions,
+            selectedSupplier: _selectedSupplier,
+            workingQuote: selectedQuote,
+            items: supplierItems,
+            quoteLinkCount: selectedLinks.length,
+            comprasCommentController: _comprasCommentController,
+            isBusy: _isBusy,
+            onSupplierChanged: (supplier) => _setSelectedSupplier(
+              supplier,
+              null,
+            ),
+            onViewOrderPdf: _openOrderPdf,
+            onManageLinks: _selectedSupplier == null ? null : _manageQuoteLinks,
+            onViewPdf: supplierItems.isEmpty
+                ? null
+                : () => _openSelectionPdf(
+                      supplier: _selectedSupplier!,
+                      items: supplierItems,
+                      allOrders: allOrders,
+                      branding: branding,
+                      actor: actor,
+                      quote: selectedQuote,
+                    ),
+          ),
+          const SizedBox(height: 16),
+        ],
+        if (!_isDireccion &&
+            supplierOptions.isEmpty &&
+            visibleQuotes.isEmpty &&
+            pendingDashboardOrders.isEmpty) ...[
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                'No hay ordenes disponibles en este momento.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+        _QuotesPanel(
+          quotes: visibleQuotes,
+          allOrders: allOrders,
+          pendingOrders: pendingDashboardOrders,
+          quoteSendStates: quoteSendStates,
+          isDireccion: _isDireccion,
+          onOpenOrder: widget.onOpenOrder,
+          onViewOrderPdf: _openOrderPdf,
+          onViewPdf: (quote) => _openStoredQuotePdf(
+            quote: quote,
+            allOrders: allOrders,
+            branding: branding,
+            actor: actor,
+          ),
+          onCancel: _isDireccion ? null : _cancelQuote,
+          onEdit: _isDireccion ? null : _editQuote,
+          onApprove: _isDireccion ? _approveQuoteFromCard : null,
+          onReject: _isDireccion ? _rejectQuoteFromCard : null,
+        ),
+      ],
+    );
+  }
+
   void _setSelectedSupplier(String? supplier, SupplierQuote? quote) {
+    final cachedDraft = supplier == null
+        ? null
+        : SessionDraftStore.supplierDashboard(supplier);
+    final draftHasLocalState = cachedDraft != null &&
+        (cachedDraft.links.isNotEmpty || cachedDraft.comprasComment.trim().isNotEmpty);
     setState(() {
       _selectedSupplier = supplier;
-      _linksController.text = quote == null ? '' : quote.links.join('\n');
-      _comprasCommentController.text = (quote?.comprasComment ?? '').trim();
+      _linksController.text = draftHasLocalState
+          ? cachedDraft.links.join('\n')
+          : (quote?.links.join('\n') ?? '');
+      _comprasCommentController.text =
+          (draftHasLocalState
+                  ? cachedDraft.comprasComment
+                  : (quote?.comprasComment ?? ''))
+              .trim();
     });
   }
 
@@ -390,21 +424,33 @@ class _CotizacionesDashboardScreenState
       processedByArea: actor?.areaDisplay,
     );
     if (!mounted) return;
-    await Navigator.of(context).push<void>(
+    const runActionInsidePdf = false;
+    final shouldSend = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
         builder: (_) => SupplierQuotePdfViewScreen(
           data: data,
           primaryActionLabel: 'Enviar a autorizacion de pago',
           primaryActionEnabled: _parseLinks(_linksController.text).isNotEmpty,
-          closeOnPrimaryAction: true,
-          onPrimaryAction: () => _sendSelectionToDireccionFromPdf(
-            supplier: supplier,
-            items: items,
-            quote: quote,
-          ),
+          closeOnPrimaryAction: runActionInsidePdf,
+          returnPrimaryActionResult: !runActionInsidePdf,
+          onPrimaryAction: runActionInsidePdf
+              ? () => _sendSelectionToDireccionFromPdf(
+                    supplier: supplier,
+                    items: items,
+                    quote: quote,
+                  )
+              : null,
         ),
       ),
     );
+    if (shouldSend == true && !runActionInsidePdf) {
+      await _waitForPdfRouteToSettle();
+      await _sendSelectionToDireccionFromPdf(
+        supplier: supplier,
+        items: items,
+        quote: quote,
+      );
+    }
   }
 
   Future<void> _openStoredQuotePdf({
@@ -428,7 +474,8 @@ class _CotizacionesDashboardScreenState
       authorizedByArea: quote.approvedByArea,
     );
     if (!mounted) return;
-    await Navigator.of(context).push<void>(
+    const runActionInsidePdf = false;
+    final shouldSend = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
         builder: (_) => SupplierQuotePdfViewScreen(
           data: data,
@@ -436,13 +483,22 @@ class _CotizacionesDashboardScreenState
               ? null
               : 'Enviar a autorizacion de pago',
           primaryActionEnabled: _isDireccion ? true : quote.links.isNotEmpty,
-          closeOnPrimaryAction: !_isDireccion,
-          onPrimaryAction: _isDireccion
-              ? null
-              : () => _sendStoredQuoteToDireccionFromPdf(quote),
+          closeOnPrimaryAction: runActionInsidePdf,
+          returnPrimaryActionResult: !_isDireccion && !runActionInsidePdf,
+          onPrimaryAction: runActionInsidePdf
+              ? () => _sendStoredQuoteToDireccionFromPdf(quote)
+              : null,
         ),
       ),
     );
+    if (shouldSend == true && !_isDireccion && !runActionInsidePdf) {
+      await _waitForPdfRouteToSettle();
+      await _sendStoredQuoteToDireccionFromPdf(quote);
+    }
+  }
+
+  void _logDashboard(String message) {
+    // Crash investigation instrumentation removed.
   }
 
   Future<bool> _sendSelectionToDireccionFromPdf({
@@ -473,31 +529,90 @@ class _CotizacionesDashboardScreenState
       );
       return false;
     }
-    final actor = ref.read(currentUserProfileProvider).value;
+    _logDashboard(
+      'enviar seleccion supplier=$supplier quoteId=${quote?.id ?? 'N/A'} '
+      'items=${items.length} links=${links.length}',
+    );
+    final actor = _snapshot?.actor;
     if (actor == null) {
       _showMessage('Perfil no disponible.');
       return false;
     }
-    setState(() => _isBusy = true);
-    try {
-      final storedQuote = await _upsertSelectedQuote(
+    if (useManualOrderRefreshOnWindowsRelease) {
+      return _sendSelectionToDireccionDetached(
         supplier: supplier,
         items: items,
         quote: quote,
+        actor: actor,
+        links: links,
       );
-      await ref.read(purchaseOrderRepositoryProvider).sendSupplierQuoteToDireccion(
-            quote: storedQuote,
+    }
+    setState(() => _isBusy = true);
+    try {
+      final repository = ref.read(purchaseOrderRepositoryProvider);
+      final itemRefs = _refsFromGroupedItems(items);
+      SupplierQuote storedQuote;
+      List<PurchaseOrder> resolvedOrders = const <PurchaseOrder>[];
+      if (useManualOrderRefreshOnWindowsRelease) {
+        final relatedOrders = _resolveOrdersForQuoteMutation(
+          <String>{
+            for (final ref in itemRefs) ref.orderId,
+            ...?quote?.orderIds,
+          },
+        );
+        final result = await _runDashboardStage<SupplierQuoteSubmissionResult>(
+          label: 'enviar la compra a autorizacion de pago',
+          action: () => repository.submitSupplierQuoteForDireccionWithResolvedOrders(
+            existingQuote: quote,
+            supplier: supplier,
+            items: itemRefs,
+            links: links,
+            comprasComment: _comprasCommentController.text.trim(),
             actor: actor,
-          );
-      if (!mounted) return false;
-      setState(() {
-        _selectedSupplier = null;
-        _linksController.clear();
-        _comprasCommentController.clear();
-      });
+            relatedOrders: relatedOrders,
+          ),
+        );
+        storedQuote = result.quote;
+        resolvedOrders = result.updatedOrders;
+      } else {
+        storedQuote = await _runDashboardStage<SupplierQuote>(
+          label: 'enviar la compra a autorizacion de pago',
+          action: () => repository.submitSupplierQuoteForDireccion(
+            existingQuote: quote,
+            supplier: supplier,
+            items: itemRefs,
+            links: links,
+            comprasComment: _comprasCommentController.text.trim(),
+            actor: actor,
+          ),
+        );
+      }
+      if (!useManualOrderRefreshOnWindowsRelease) {
+        refreshOrderModuleTransitionData(
+          ref,
+          quoteId: storedQuote.id,
+          orderIds: storedQuote.orderIds,
+        );
+        await _refreshDashboardSnapshotForOrders(
+          clearSelection: true,
+          upsertQuote: storedQuote,
+          touchedOrderIds: storedQuote.orderIds,
+          resolvedOrders: resolvedOrders,
+        );
+      } else {
+        _commitResolvedDashboardMutation(
+          clearSelection: true,
+          upsertQuote: storedQuote,
+          resolvedOrders: resolvedOrders,
+        );
+      }
+      SessionDraftStore.clearSupplierDashboard(supplier);
+      _logDashboard('seleccion enviada a DG supplier=$supplier quote=${storedQuote.id}');
+      if (!mounted) return true;
       _showMessage('Compra enviada para autorizacion de pago.');
       return true;
     } catch (error, stack) {
+      _logDashboard('error enviando seleccion supplier=$supplier error=$error');
       _showMessage(reportError(error, stack, context: 'SupplierQuotes.sendSelection'));
       return false;
     } finally {
@@ -505,48 +620,55 @@ class _CotizacionesDashboardScreenState
     }
   }
 
-  Future<SupplierQuote> _upsertSelectedQuote({
+  Future<bool> _sendSelectionToDireccionDetached({
     required String supplier,
     required List<_SupplierGroupedItem> items,
     required SupplierQuote? quote,
+    required AppUser actor,
+    required List<String> links,
   }) async {
-    final repo = ref.read(purchaseOrderRepositoryProvider);
-    final links = _parseLinks(_linksController.text);
-    final comprasComment = _comprasCommentController.text.trim();
-    final refs = _refsFromGroupedItems(items);
-    final actor = ref.read(currentUserProfileProvider).value;
-
-    if (quote == null) {
-      return repo.createSupplierQuote(
-        supplier: supplier,
-        items: refs,
-        links: links,
-        comprasComment: comprasComment,
-        actor: actor,
-      );
-    }
-
-    await repo.updateSupplierQuoteDraft(
-      quote: quote,
-      items: refs,
-      links: links,
-      comprasComment: comprasComment,
-      actor: actor,
+    final repository = ref.read(purchaseOrderRepositoryProvider);
+    final itemRefs = _refsFromGroupedItems(items);
+    final relatedOrders = _resolveOrdersForQuoteMutation(
+      <String>{
+        for (final ref in itemRefs) ref.orderId,
+        ...?quote?.orderIds,
+      },
     );
-    return SupplierQuote(
-      id: quote.id,
-      folio: quote.folio,
-      supplier: quote.supplier,
-      items: refs,
-      links: links,
-      facturaLinks: quote.facturaLinks,
-      paymentLinks: quote.paymentLinks,
-      comprasComment: comprasComment,
-      status: SupplierQuoteStatus.draft,
-      createdAt: quote.createdAt,
-      updatedAt: quote.updatedAt,
-      version: quote.version + 1,
+    final result = await Navigator.of(context).push<SupplierQuoteSubmissionResult>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => _DetachedDashboardActionScreen<SupplierQuoteSubmissionResult>(
+          title: 'Enviando a Direccion General',
+          progressLabel: 'Enviando compra a autorizacion de pago...',
+          action: () => _runDashboardStage<SupplierQuoteSubmissionResult>(
+            label: 'enviar la compra a autorizacion de pago',
+            action: () => repository.submitSupplierQuoteForDireccionWithResolvedOrders(
+              existingQuote: quote,
+              supplier: supplier,
+              items: itemRefs,
+              links: links,
+              comprasComment: _comprasCommentController.text.trim(),
+              actor: actor,
+              relatedOrders: relatedOrders,
+            ),
+          ),
+        ),
+      ),
     );
+    if (result == null || !mounted) return false;
+    _commitResolvedDashboardMutation(
+      clearSelection: true,
+      upsertQuote: result.quote,
+      resolvedOrders: result.updatedOrders,
+    );
+    refreshQuoteWorkflowCounts(
+      ref,
+      quoteId: result.quote.id,
+    );
+    SessionDraftStore.clearSupplierDashboard(supplier);
+    _showMessage('Compra enviada para autorizacion de pago.');
+    return true;
   }
 
   Future<bool> _sendQuoteToDireccion(SupplierQuote quote) async {
@@ -556,26 +678,151 @@ class _CotizacionesDashboardScreenState
       );
       return false;
     }
-    final actor = ref.read(currentUserProfileProvider).value;
+    _logDashboard(
+      'enviar quote ${quote.id} links=${quote.links.length} status=${quote.status.name}',
+    );
+    final actor = _snapshot?.actor;
     if (actor == null) {
       _showMessage('Perfil no disponible.');
       return false;
     }
+    if (useManualOrderRefreshOnWindowsRelease) {
+      return _sendQuoteToDireccionDetached(
+        quote: quote,
+        actor: actor,
+      );
+    }
+    setState(() => _isBusy = true);
     try {
-      await ref.read(purchaseOrderRepositoryProvider).sendSupplierQuoteToDireccion(
-            quote: quote,
+      final repository = ref.read(purchaseOrderRepositoryProvider);
+      SupplierQuote submittedQuote;
+      List<PurchaseOrder> resolvedOrders = const <PurchaseOrder>[];
+      if (useManualOrderRefreshOnWindowsRelease) {
+        final result = await _runDashboardStage<SupplierQuoteSubmissionResult>(
+          label: 'enviar la compra a autorizacion de pago',
+          action: () => repository.submitSupplierQuoteForDireccionWithResolvedOrders(
+            existingQuote: quote,
+            supplier: quote.supplier,
+            items: quote.items,
+            links: quote.links,
+            comprasComment: quote.comprasComment,
             actor: actor,
-          );
+            relatedOrders: _resolveOrdersForQuoteMutation(quote.orderIds),
+          ),
+        );
+        submittedQuote = result.quote;
+        resolvedOrders = result.updatedOrders;
+      } else {
+        submittedQuote = await _runDashboardStage<SupplierQuote>(
+          label: 'enviar la compra a autorizacion de pago',
+          action: () => repository.submitSupplierQuoteForDireccion(
+            existingQuote: quote,
+            supplier: quote.supplier,
+            items: quote.items,
+            links: quote.links,
+            comprasComment: quote.comprasComment,
+            actor: actor,
+          ),
+        );
+      }
+      if (!useManualOrderRefreshOnWindowsRelease) {
+        refreshOrderModuleTransitionData(
+          ref,
+          quoteId: submittedQuote.id,
+          orderIds: submittedQuote.orderIds,
+        );
+        await _refreshDashboardSnapshotForOrders(
+          clearSelection: false,
+          upsertQuote: submittedQuote,
+          touchedOrderIds: submittedQuote.orderIds,
+          resolvedOrders: resolvedOrders,
+        );
+      } else {
+        _commitResolvedDashboardMutation(
+          clearSelection: false,
+          upsertQuote: submittedQuote,
+          resolvedOrders: resolvedOrders,
+        );
+      }
+      SessionDraftStore.clearSupplierDashboard(submittedQuote.supplier);
+      _logDashboard('quote ${submittedQuote.id} enviada a DG');
+      if (!mounted) return true;
       _showMessage('Compra enviada para autorizacion de pago.');
       return true;
     } catch (error, stack) {
+      _logDashboard('error enviando quote ${quote.id} error=$error');
       _showMessage(reportError(error, stack, context: 'SupplierQuotes.send'));
       return false;
+    } finally {
+      if (mounted) setState(() => _isBusy = false);
     }
   }
 
+  Future<bool> _sendQuoteToDireccionDetached({
+    required SupplierQuote quote,
+    required AppUser actor,
+  }) async {
+    final repository = ref.read(purchaseOrderRepositoryProvider);
+    final result = await Navigator.of(context).push<SupplierQuoteSubmissionResult>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => _DetachedDashboardActionScreen<SupplierQuoteSubmissionResult>(
+          title: 'Enviando a Direccion General',
+          progressLabel: 'Enviando compra a autorizacion de pago...',
+          action: () => _runDashboardStage<SupplierQuoteSubmissionResult>(
+            label: 'enviar la compra a autorizacion de pago',
+            action: () => repository.submitSupplierQuoteForDireccionWithResolvedOrders(
+              existingQuote: quote,
+              supplier: quote.supplier,
+              items: quote.items,
+              links: quote.links,
+              comprasComment: quote.comprasComment,
+              actor: actor,
+              relatedOrders: _resolveOrdersForQuoteMutation(quote.orderIds),
+            ),
+          ),
+        ),
+      ),
+    );
+    if (result == null || !mounted) return false;
+    _commitResolvedDashboardMutation(
+      clearSelection: false,
+      upsertQuote: result.quote,
+      resolvedOrders: result.updatedOrders,
+    );
+    refreshQuoteWorkflowCounts(
+      ref,
+      quoteId: result.quote.id,
+    );
+    SessionDraftStore.clearSupplierDashboard(result.quote.supplier);
+    _showMessage('Compra enviada para autorizacion de pago.');
+    return true;
+  }
+
+  Future<T> _runDashboardStage<T>({
+    required String label,
+    required Future<T> Function() action,
+  }) async {
+    try {
+      return await action();
+    } catch (error, stack) {
+      throw AppError(
+        'No se pudo $label.',
+        cause: error,
+        stack: stack,
+      );
+    }
+  }
+
+  Future<void> _waitForPdfRouteToSettle() async {
+    _logDashboard('esperando cierre completo de la vista PDF');
+    await Future<void>.delayed(const Duration(milliseconds: 350));
+    await WidgetsBinding.instance.endOfFrame;
+    _logDashboard('vista PDF cerrada, continuando con envio');
+  }
+
   Future<void> _cancelQuote(SupplierQuote quote) async {
-    final actor = ref.read(currentUserProfileProvider).value;
+    final actor = _snapshot?.actor;
     if (actor == null) {
       _showMessage('Perfil no disponible.');
       return;
@@ -583,9 +830,9 @@ class _CotizacionesDashboardScreenState
     final accepted = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Cancelar compra ${quote.supplier}'),
+        title: Text('Desarmar compra ${quote.supplier}'),
         content: const Text(
-          'La compra se eliminara y las ordenes relacionadas volveran a pendientes para editarse.',
+          'La cotizacion desaparecera y los items volveran a estar disponibles para reutilizarse. Mientras no se desarme, esos items seguiran bloqueados para evitar duplicados.',
         ),
         actions: [
           TextButton(
@@ -594,7 +841,7 @@ class _CotizacionesDashboardScreenState
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Aceptar'),
+            child: const Text('Desarmar'),
           ),
         ],
       ),
@@ -605,22 +852,97 @@ class _CotizacionesDashboardScreenState
             quote: quote,
             actor: actor,
           );
+      refreshOrderModuleTransitionData(
+        ref,
+        quoteId: quote.id,
+        orderIds: quote.orderIds,
+      );
+      await _refreshDashboardSnapshotForOrders(
+        clearSelection: _selectedSupplier == quote.supplier,
+        removeQuoteId: quote.id,
+        touchedOrderIds: quote.orderIds,
+      );
+      refreshQuoteWorkflowCounts(
+        ref,
+        quoteId: quote.id,
+      );
+      SessionDraftStore.clearSupplierDashboard(quote.supplier);
       if (!mounted) return;
-      if (_selectedSupplier == quote.supplier) {
-        setState(() {
-          _selectedSupplier = null;
-          _linksController.clear();
-          _comprasCommentController.clear();
-        });
-      }
-      _showMessage('Compra cancelada. Las ordenes volvieron a pendientes.');
+      _showMessage('Compra desarmada. Los items quedaron disponibles otra vez.');
     } catch (error, stack) {
       _showMessage(reportError(error, stack, context: 'SupplierQuotes.cancel'));
     }
   }
 
+  Future<void> _editQuote(SupplierQuote quote) async {
+    _setSelectedSupplier(quote.supplier, quote);
+    final relatedOrders = _relatedOrdersForQuote(
+      quote,
+      _snapshot?.allOrders ?? const <PurchaseOrder>[],
+    );
+    final result = await showModalBottomSheet<_QuoteEditAction>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (context) => _RejectedQuoteActionsSheet(
+        quote: quote,
+        relatedOrders: relatedOrders,
+      ),
+    );
+    if (!mounted || result == null) return;
+
+    if (result.kind == _QuoteEditActionKind.links) {
+      await _manageQuoteLinks();
+      if (!mounted) return;
+      await _persistEditedQuote(
+        quote,
+      );
+      return;
+    }
+
+    final order = result.order;
+    if (order == null) return;
+    final saveResult = await guardedPush<Object?>(
+      context,
+      '/orders/cotizaciones/${order.id}',
+    );
+    if (!mounted || saveResult == null) return;
+    await _persistEditedQuote(
+      quote,
+    );
+  }
+
+  Future<void> _persistEditedQuote(SupplierQuote quote) async {
+    final repository = ref.read(purchaseOrderRepositoryProvider);
+    final refreshedOrders = await repository.fetchOrdersByIds(quote.orderIds);
+    final updatedQuote = _rebuildEditableQuote(
+      quote: quote,
+      orders: refreshedOrders,
+      links: _parseLinks(_linksController.text),
+      comprasComment: _comprasCommentController.text.trim(),
+    );
+    final storedQuote = await repository.updateRejectedSupplierQuote(
+      quote: updatedQuote,
+      supplier: updatedQuote.supplier,
+      items: updatedQuote.items,
+      links: updatedQuote.links,
+      comprasComment: updatedQuote.comprasComment,
+    );
+    _commitResolvedDashboardMutation(
+      clearSelection: false,
+      upsertQuote: storedQuote,
+      resolvedOrders: refreshedOrders,
+    );
+    refreshQuoteWorkflowCounts(
+      ref,
+      quoteId: quote.id,
+    );
+    if (!mounted) return;
+    _showMessage('Compra actualizada.');
+  }
+
   Future<void> _approveQuoteFromCard(SupplierQuote quote) async {
-    final actor = ref.read(currentUserProfileProvider).value;
+    final actor = _snapshot?.actor;
     if (actor == null) {
       _showMessage('Perfil no disponible.');
       return;
@@ -651,10 +973,52 @@ class _CotizacionesDashboardScreenState
     if (accepted != true) return;
     setState(() => _isBusy = true);
     try {
-      await ref.read(purchaseOrderRepositoryProvider).approveSupplierQuote(
+      final repository = ref.read(purchaseOrderRepositoryProvider);
+      final resolvedOrders = _resolveOrdersForQuoteMutation(quote.orderIds);
+      late final SupplierQuoteMutationResult mutation;
+      if (useManualOrderRefreshOnWindowsRelease) {
+        mutation = await repository.approveSupplierQuoteWithResolvedOrders(
+          quote: quote,
+          actor: actor,
+          relatedOrders: resolvedOrders,
+        );
+      } else {
+        await repository.approveSupplierQuote(
+          quote: quote,
+          actor: actor,
+        );
+        mutation = SupplierQuoteMutationResult(
+          quote: _buildApprovedQuoteForSnapshot(
             quote: quote,
             actor: actor,
-          );
+          ),
+          updatedOrders: const <PurchaseOrder>[],
+        );
+      }
+      if (!useManualOrderRefreshOnWindowsRelease) {
+        refreshOrderModuleTransitionData(
+          ref,
+          quoteId: quote.id,
+          orderIds: quote.orderIds,
+        );
+        await _refreshDashboardSnapshotForOrders(
+          clearSelection: false,
+          upsertQuote: mutation.quote,
+          touchedOrderIds: quote.orderIds,
+          resolvedOrders: mutation.updatedOrders,
+        );
+      } else {
+        _commitResolvedDashboardMutation(
+          clearSelection: false,
+          upsertQuote: mutation.quote,
+          resolvedOrders: mutation.updatedOrders,
+        );
+      }
+      refreshQuoteWorkflowCounts(
+        ref,
+        quoteId: quote.id,
+      );
+      if (!mounted) return;
       _showMessage('Compra autorizada.');
     } catch (error, stack) {
       _showMessage(
@@ -666,7 +1030,7 @@ class _CotizacionesDashboardScreenState
   }
 
   Future<void> _rejectQuoteFromCard(SupplierQuote quote) async {
-    final actor = ref.read(currentUserProfileProvider).value;
+    final actor = _snapshot?.actor;
     if (actor == null) {
       _showMessage('Perfil no disponible.');
       return;
@@ -706,11 +1070,55 @@ class _CotizacionesDashboardScreenState
 
     setState(() => _isBusy = true);
     try {
-      await ref.read(purchaseOrderRepositoryProvider).rejectSupplierQuote(
+      final repository = ref.read(purchaseOrderRepositoryProvider);
+      final resolvedOrders = _resolveOrdersForQuoteMutation(quote.orderIds);
+      late final SupplierQuoteMutationResult mutation;
+      if (useManualOrderRefreshOnWindowsRelease) {
+        mutation = await repository.rejectSupplierQuoteWithResolvedOrders(
+          quote: quote,
+          comment: controller.text,
+          actor: actor,
+          relatedOrders: resolvedOrders,
+        );
+      } else {
+        await repository.rejectSupplierQuote(
+          quote: quote,
+          comment: controller.text,
+          actor: actor,
+        );
+        mutation = SupplierQuoteMutationResult(
+          quote: _buildRejectedQuoteForSnapshot(
             quote: quote,
-            comment: controller.text,
             actor: actor,
-          );
+            comment: controller.text,
+          ),
+          updatedOrders: const <PurchaseOrder>[],
+        );
+      }
+      if (!useManualOrderRefreshOnWindowsRelease) {
+        refreshOrderModuleTransitionData(
+          ref,
+          quoteId: quote.id,
+          orderIds: quote.orderIds,
+        );
+        await _refreshDashboardSnapshotForOrders(
+          clearSelection: false,
+          upsertQuote: mutation.quote,
+          touchedOrderIds: quote.orderIds,
+          resolvedOrders: mutation.updatedOrders,
+        );
+      } else {
+        _commitResolvedDashboardMutation(
+          clearSelection: false,
+          upsertQuote: mutation.quote,
+          resolvedOrders: mutation.updatedOrders,
+        );
+      }
+      refreshQuoteWorkflowCounts(
+        ref,
+        quoteId: quote.id,
+      );
+      if (!mounted) return;
       _showMessage('Compra rechazada.');
     } catch (error, stack) {
       _showMessage(
@@ -720,6 +1128,257 @@ class _CotizacionesDashboardScreenState
       controller.dispose();
       if (mounted) setState(() => _isBusy = false);
     }
+  }
+
+  Future<void> _reloadDashboard({required bool clearSelection}) async {
+    final loadToken = ++_loadToken;
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+        if (clearSelection) {
+          _selectedSupplier = null;
+          _linksController.clear();
+          _comprasCommentController.clear();
+        }
+      });
+    }
+
+    try {
+      final repository = ref.read(purchaseOrderRepositoryProvider);
+      final results = await Future.wait<Object?>([
+        _resolveActor(),
+        repository.fetchAllOrders(),
+        repository.fetchSupplierQuotes(),
+      ]);
+
+      if (!mounted || loadToken != _loadToken) return;
+
+      final actor = results[0] as AppUser?;
+      final allOrders = results[1]! as List<PurchaseOrder>;
+      final quotes = results[2]! as List<SupplierQuote>;
+      final completedOrders = _isDireccion
+          ? const <PurchaseOrder>[]
+          : _completedOrdersFromDashboardSnapshot(
+              allOrders,
+              quotes: quotes,
+            );
+
+      final snapshot = _DashboardSnapshot(
+        actor: actor,
+        branding: ref.read(currentBrandingProvider),
+        completedOrders: List<PurchaseOrder>.unmodifiable(completedOrders),
+        allOrders: List<PurchaseOrder>.unmodifiable(allOrders),
+        quotes: List<SupplierQuote>.unmodifiable(quotes),
+      );
+
+      _commitDashboardSnapshot(
+        snapshot,
+        clearSelection: clearSelection,
+      );
+    } catch (error, stack) {
+      if (!mounted || loadToken != _loadToken) return;
+      setState(() {
+        _loadError = reportError(
+          error,
+          stack,
+          context: 'SupplierQuotes.reload',
+        );
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _refreshDashboardSnapshotForOrders({
+    required bool clearSelection,
+    SupplierQuote? upsertQuote,
+    String? removeQuoteId,
+    Iterable<String> touchedOrderIds = const <String>[],
+    Iterable<PurchaseOrder> resolvedOrders = const <PurchaseOrder>[],
+  }) async {
+    final currentSnapshot = _snapshot;
+    if (currentSnapshot == null) {
+      await _reloadDashboard(clearSelection: clearSelection);
+      return;
+    }
+
+    final orderIds = touchedOrderIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final repository = ref.read(purchaseOrderRepositoryProvider);
+    final resolvedOrdersById = <String, PurchaseOrder>{
+      for (final order in resolvedOrders) order.id: order,
+    };
+    final missingOrderIds = orderIds
+        .where((orderId) => !resolvedOrdersById.containsKey(orderId))
+        .toList(growable: false);
+    final fetchedOrders = missingOrderIds.isEmpty
+        ? const <PurchaseOrder?>[]
+        : await Future.wait<PurchaseOrder?>(
+            missingOrderIds.map(repository.fetchOrderById),
+          );
+
+    final nextOrdersById = <String, PurchaseOrder>{
+      for (final order in currentSnapshot.allOrders) order.id: order,
+    };
+    for (final order in resolvedOrdersById.values) {
+      nextOrdersById[order.id] = order;
+    }
+    for (final order in fetchedOrders) {
+      if (order == null) continue;
+      nextOrdersById[order.id] = order;
+    }
+
+    final nextQuotesById = <String, SupplierQuote>{
+      for (final quote in currentSnapshot.quotes) quote.id: quote,
+    };
+    final trimmedRemoveQuoteId = removeQuoteId?.trim() ?? '';
+    if (trimmedRemoveQuoteId.isNotEmpty) {
+      nextQuotesById.remove(trimmedRemoveQuoteId);
+    }
+    if (upsertQuote != null) {
+      nextQuotesById[upsertQuote.id] = upsertQuote;
+    }
+
+    final nextAllOrders = nextOrdersById.values.toList(growable: false)
+      ..sort(_sortOrdersByRecency);
+    final nextQuotes = nextQuotesById.values.toList(growable: false)
+      ..sort(_sortQuotesByRecency);
+    final nextSnapshot = _DashboardSnapshot(
+      actor: currentSnapshot.actor,
+      branding: currentSnapshot.branding,
+      completedOrders: List<PurchaseOrder>.unmodifiable(
+        _isDireccion
+            ? const <PurchaseOrder>[]
+            : _completedOrdersFromDashboardSnapshot(
+                nextAllOrders,
+                quotes: nextQuotes,
+              ),
+      ),
+      allOrders: List<PurchaseOrder>.unmodifiable(nextAllOrders),
+      quotes: List<SupplierQuote>.unmodifiable(nextQuotes),
+    );
+
+    if (!mounted) return;
+    _commitDashboardSnapshot(nextSnapshot, clearSelection: clearSelection);
+  }
+
+  void _commitResolvedDashboardMutation({
+    required bool clearSelection,
+    SupplierQuote? upsertQuote,
+    String? removeQuoteId,
+    Iterable<PurchaseOrder> resolvedOrders = const <PurchaseOrder>[],
+  }) {
+    final currentSnapshot = _snapshot;
+    if (currentSnapshot == null) return;
+
+    final nextOrdersById = <String, PurchaseOrder>{
+      for (final order in currentSnapshot.allOrders) order.id: order,
+    };
+    for (final order in resolvedOrders) {
+      nextOrdersById[order.id] = order;
+    }
+
+    final nextQuotesById = <String, SupplierQuote>{
+      for (final quote in currentSnapshot.quotes) quote.id: quote,
+    };
+    final trimmedRemoveQuoteId = removeQuoteId?.trim() ?? '';
+    if (trimmedRemoveQuoteId.isNotEmpty) {
+      nextQuotesById.remove(trimmedRemoveQuoteId);
+    }
+    if (upsertQuote != null) {
+      nextQuotesById[upsertQuote.id] = upsertQuote;
+    }
+
+    final nextAllOrders = nextOrdersById.values.toList(growable: false)
+      ..sort(_sortOrdersByRecency);
+    final nextQuotes = nextQuotesById.values.toList(growable: false)
+      ..sort(_sortQuotesByRecency);
+    final nextSnapshot = _DashboardSnapshot(
+      actor: currentSnapshot.actor,
+      branding: currentSnapshot.branding,
+      completedOrders: List<PurchaseOrder>.unmodifiable(
+        _isDireccion
+            ? const <PurchaseOrder>[]
+            : _completedOrdersFromDashboardSnapshot(
+                nextAllOrders,
+                quotes: nextQuotes,
+              ),
+      ),
+      allOrders: List<PurchaseOrder>.unmodifiable(nextAllOrders),
+      quotes: List<SupplierQuote>.unmodifiable(nextQuotes),
+    );
+
+    if (!mounted) return;
+    _commitDashboardSnapshot(nextSnapshot, clearSelection: clearSelection);
+  }
+
+  List<PurchaseOrder> _resolveOrdersForQuoteMutation(Iterable<String> orderIds) {
+    final snapshot = _snapshot;
+    if (snapshot == null) return const <PurchaseOrder>[];
+    final ids = orderIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    if (ids.isEmpty) return const <PurchaseOrder>[];
+    return [
+      for (final order in snapshot.allOrders)
+        if (ids.contains(order.id)) order,
+    ];
+  }
+
+  void _commitDashboardSnapshot(
+    _DashboardSnapshot snapshot, {
+    required bool clearSelection,
+  }) {
+    _applySelectionAfterReload(snapshot, clearSelection: clearSelection);
+    setState(() {
+      _snapshot = snapshot;
+      _loadError = null;
+      _isLoading = false;
+    });
+  }
+
+  Future<AppUser?> _resolveActor() async {
+    final current = ref.read(currentUserProfileProvider).valueOrNull;
+    if (current != null) return current;
+    return ref.read(currentUserProfileProvider.future);
+  }
+
+  void _applySelectionAfterReload(
+    _DashboardSnapshot snapshot, {
+    required bool clearSelection,
+  }) {
+    if (_isDireccion) return;
+
+    final filteredQuotes = _withoutDraftQuotes(snapshot.quotes);
+    final blockedQuoteItemKeys = _buildBlockedQuoteItemKeys(snapshot.quotes);
+    final editableQuotes = filteredQuotes
+        .where((quote) => quote.status == SupplierQuoteStatus.rejected)
+        .toList(growable: false);
+    final supplierOptions = _supplierOptions(
+      snapshot.completedOrders,
+      blockedQuoteItemKeys: blockedQuoteItemKeys,
+    );
+
+    if (clearSelection) {
+      _selectedSupplier = null;
+      _linksController.clear();
+      _comprasCommentController.clear();
+      return;
+    }
+
+    final nextSupplier = supplierOptions.contains(_selectedSupplier)
+        ? _selectedSupplier
+        : (supplierOptions.length == 1 ? supplierOptions.first : null);
+    _selectedSupplier = nextSupplier;
+
+    final cachedDraft = nextSupplier == null
+        ? null
+        : SessionDraftStore.supplierDashboard(nextSupplier);
+    _linksController.text = cachedDraft?.links.join('\n') ?? '';
+    _comprasCommentController.text = (cachedDraft?.comprasComment ?? '').trim();
   }
 
   List<String> _parseLinks(String raw) {
@@ -749,6 +1408,25 @@ class _CotizacionesDashboardScreenState
     setState(() {
       _linksController.text = result.links.join('\n');
     });
+    _persistSupplierDashboardDraft();
+  }
+
+  void _persistSupplierDashboardDraft() {
+    final supplier = _selectedSupplier?.trim() ?? '';
+    if (supplier.isEmpty) return;
+    final links = _parseLinks(_linksController.text);
+    final comprasComment = _comprasCommentController.text.trim();
+    if (links.isEmpty && comprasComment.isEmpty) {
+      SessionDraftStore.clearSupplierDashboard(supplier);
+      return;
+    }
+    SessionDraftStore.saveSupplierDashboard(
+      supplier,
+      SupplierDashboardDraft(
+        links: links,
+        comprasComment: comprasComment,
+      ),
+    );
   }
 
   void _showMessage(String message) {
@@ -762,21 +1440,373 @@ class _CotizacionesDashboardScreenState
     return 'COTIZACION-$normalized';
   }
 
-  void _schedulePdfCache(List<SupplierQuotePdfData> dataList) {
-    if (dataList.isEmpty) {
-      _scheduledPdfCacheKey = null;
-      return;
-    }
-    final cacheKey = dataList
-        .map(supplierQuotePdfCacheKey)
-        .join('||');
-    if (_scheduledPdfCacheKey == cacheKey) return;
-    _scheduledPdfCacheKey = cacheKey;
+}
+
+class _DashboardSnapshot {
+  const _DashboardSnapshot({
+    required this.actor,
+    required this.branding,
+    required this.completedOrders,
+    required this.allOrders,
+    required this.quotes,
+  });
+
+  final AppUser? actor;
+  final CompanyBranding branding;
+  final List<PurchaseOrder> completedOrders;
+  final List<PurchaseOrder> allOrders;
+  final List<SupplierQuote> quotes;
+}
+
+class _QuoteEditAction {
+  const _QuoteEditAction._({
+    required this.kind,
+    this.order,
+  });
+
+  const _QuoteEditAction.links() : this._(kind: _QuoteEditActionKind.links);
+
+  const _QuoteEditAction.order(PurchaseOrder order)
+      : this._(kind: _QuoteEditActionKind.order, order: order);
+
+  final _QuoteEditActionKind kind;
+  final PurchaseOrder? order;
+}
+
+enum _QuoteEditActionKind { links, order }
+
+class _RejectedQuoteActionsSheet extends StatelessWidget {
+  const _RejectedQuoteActionsSheet({
+    required this.quote,
+    required this.relatedOrders,
+  });
+
+  final SupplierQuote quote;
+  final List<PurchaseOrder> relatedOrders;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Editar compra rechazada',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Mientras esta agrupacion exista, sus items quedan bloqueados para evitar duplicados. Puedes editar links o ajustar datos por orden sin desarmarla.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: () => Navigator.pop(context, const _QuoteEditAction.links()),
+              icon: const Icon(Icons.link),
+              label: const Text('Editar links y comentario'),
+            ),
+            if (relatedOrders.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Text(
+                'Editar datos por orden',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 8),
+              for (final order in relatedOrders) ...[
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(order.id),
+                  subtitle: Text('${order.requesterName} | ${order.areaName}'),
+                  trailing: FilledButton.tonal(
+                    onPressed: () =>
+                        Navigator.pop(context, _QuoteEditAction.order(order)),
+                    child: const Text('Editar datos'),
+                  ),
+                ),
+              ],
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DetachedDashboardActionScreen<T> extends StatefulWidget {
+  const _DetachedDashboardActionScreen({
+    required this.title,
+    required this.progressLabel,
+    required this.action,
+  });
+
+  final String title;
+  final String progressLabel;
+  final Future<T> Function() action;
+
+  @override
+  State<_DetachedDashboardActionScreen<T>> createState() =>
+      _DetachedDashboardActionScreenState<T>();
+}
+
+class _DetachedDashboardActionScreenState<T>
+    extends State<_DetachedDashboardActionScreen<T>> {
+  bool _running = true;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _scheduledPdfCacheKey != cacheKey) return;
-      cacheSupplierQuotePdfs(dataList, limit: dataList.length);
+      if (!mounted) return;
+      _run();
     });
   }
+
+  Future<void> _run() async {
+    if (!_running) {
+      setState(() {
+        _running = true;
+        _errorMessage = null;
+      });
+    }
+    try {
+      final result = await widget.action();
+      if (!mounted) return;
+      Navigator.of(context).pop(result);
+    } catch (error, stack) {
+      if (!mounted) return;
+      setState(() {
+        _running = false;
+        _errorMessage = reportError(
+          error,
+          stack,
+          context: 'SupplierQuotes.detachedAction',
+        );
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.title),
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: _running
+              ? Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(),
+                    const SizedBox(height: 16),
+                    Text(
+                      widget.progressLabel,
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                )
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _errorMessage ?? 'No se pudo completar la accion.',
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton(
+                      onPressed: _run,
+                      child: const Text('Reintentar'),
+                    ),
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('Cerrar'),
+                    ),
+                  ],
+                ),
+        ),
+      ),
+    );
+  }
+}
+
+SupplierQuote _buildApprovedQuoteForSnapshot({
+  required SupplierQuote quote,
+  required AppUser actor,
+}) {
+  final now = DateTime.now();
+  return SupplierQuote(
+    id: quote.id,
+    folio: quote.folio,
+    supplier: quote.supplier,
+    items: quote.items,
+    status: SupplierQuoteStatus.approved,
+    links: quote.links,
+    facturaLinks: quote.facturaLinks,
+    paymentLinks: quote.paymentLinks,
+    createdAt: quote.createdAt,
+    updatedAt: now,
+    comprasComment: quote.comprasComment,
+    processedByName: quote.processedByName,
+    processedByArea: quote.processedByArea,
+    sentToDireccionAt: quote.sentToDireccionAt,
+    approvedAt: now,
+    approvedByName: actor.name,
+    approvedByArea: actor.areaDisplay,
+    rejectionComment: null,
+    rejectedAt: null,
+    rejectedByName: null,
+    rejectedByArea: null,
+    version: quote.version + 1,
+  );
+}
+
+SupplierQuote _buildRejectedQuoteForSnapshot({
+  required SupplierQuote quote,
+  required AppUser actor,
+  required String comment,
+}) {
+  final now = DateTime.now();
+  final trimmedComment = comment.trim();
+  return SupplierQuote(
+    id: quote.id,
+    folio: quote.folio,
+    supplier: quote.supplier,
+    items: quote.items,
+    status: SupplierQuoteStatus.rejected,
+    links: quote.links,
+    facturaLinks: quote.facturaLinks,
+    paymentLinks: quote.paymentLinks,
+    createdAt: quote.createdAt,
+    updatedAt: now,
+    comprasComment: quote.comprasComment,
+    processedByName: quote.processedByName,
+    processedByArea: quote.processedByArea,
+    sentToDireccionAt: quote.sentToDireccionAt,
+    approvedAt: null,
+    approvedByName: null,
+    approvedByArea: null,
+    rejectionComment: trimmedComment.isEmpty ? null : trimmedComment,
+    rejectedAt: now,
+    rejectedByName: actor.name,
+    rejectedByArea: actor.areaDisplay,
+    version: quote.version + 1,
+  );
+}
+
+SupplierQuote _rebuildEditableQuote({
+  required SupplierQuote quote,
+  required List<PurchaseOrder> orders,
+  required List<String> links,
+  String? comprasComment,
+}) {
+  final ordersById = {
+    for (final order in orders) order.id: order,
+  };
+  final supplierCandidates = <String>{};
+  final refs = <SupplierQuoteItemRef>[];
+
+  for (final ref in quote.items) {
+    final order = ordersById[ref.orderId];
+    if (order == null) {
+      refs.add(ref);
+      continue;
+    }
+    PurchaseOrderItem? matchingItem;
+    for (final candidate in order.items) {
+      if (candidate.line == ref.line) {
+        matchingItem = candidate;
+        break;
+      }
+    }
+    if (matchingItem == null) {
+      refs.add(ref);
+      continue;
+    }
+    final supplier = (matchingItem.supplier ?? '').trim();
+    if (supplier.isNotEmpty) {
+      supplierCandidates.add(supplier);
+    }
+    refs.add(
+      SupplierQuoteItemRef(
+        orderId: ref.orderId,
+        orderFolio: ref.orderFolio ?? ref.orderId,
+        line: matchingItem.line,
+        description: matchingItem.description,
+        quantity: matchingItem.quantity,
+        unit: matchingItem.unit,
+        partNumber: matchingItem.partNumber,
+        amount: matchingItem.budget ?? ref.amount,
+      ),
+    );
+  }
+
+  final normalizedSupplier = supplierCandidates.length == 1
+      ? supplierCandidates.first
+      : quote.supplier;
+
+  return SupplierQuote(
+    id: quote.id,
+    folio: quote.folio,
+    supplier: normalizedSupplier,
+    items: refs,
+    status: quote.status,
+    links: links,
+    facturaLinks: quote.facturaLinks,
+    paymentLinks: quote.paymentLinks,
+    createdAt: quote.createdAt,
+    updatedAt: DateTime.now(),
+    comprasComment: comprasComment,
+    processedByName: quote.processedByName,
+    processedByArea: quote.processedByArea,
+    sentToDireccionAt: quote.sentToDireccionAt,
+    approvedAt: quote.approvedAt,
+    approvedByName: quote.approvedByName,
+    approvedByArea: quote.approvedByArea,
+    rejectionComment: quote.rejectionComment,
+    rejectedAt: quote.rejectedAt,
+    rejectedByName: quote.rejectedByName,
+    rejectedByArea: quote.rejectedByArea,
+    version: quote.version,
+  );
+}
+
+int _sortOrdersByRecency(PurchaseOrder left, PurchaseOrder right) {
+  final leftTime =
+      (left.updatedAt ?? left.createdAt)?.millisecondsSinceEpoch ?? 0;
+  final rightTime =
+      (right.updatedAt ?? right.createdAt)?.millisecondsSinceEpoch ?? 0;
+  return rightTime.compareTo(leftTime);
+}
+
+int _sortQuotesByRecency(SupplierQuote left, SupplierQuote right) {
+  final leftTime =
+      (left.updatedAt ?? left.createdAt)?.millisecondsSinceEpoch ?? 0;
+  final rightTime =
+      (right.updatedAt ?? right.createdAt)?.millisecondsSinceEpoch ?? 0;
+  return rightTime.compareTo(leftTime);
+}
+
+List<PurchaseOrder> _completedOrdersFromDashboardSnapshot(
+  List<PurchaseOrder> allOrders, {
+  required List<SupplierQuote> quotes,
+}) {
+  final rejectedOrderIds = <String>{
+    for (final quote in quotes)
+      if (quote.status == SupplierQuoteStatus.rejected) ...quote.orderIds,
+  };
+  return allOrders
+      .where(
+        (order) =>
+            order.status == PurchaseOrderStatus.dataComplete ||
+            rejectedOrderIds.contains(order.id),
+      )
+      .toList(growable: false);
 }
 
 class _SupplierWorkPanel extends StatelessWidget {
@@ -1170,6 +2200,7 @@ class _QuotesPanel extends StatelessWidget {
     required this.onViewOrderPdf,
     this.onViewPdf,
     this.onCancel,
+    this.onEdit,
     this.onApprove,
     this.onReject,
   });
@@ -1183,6 +2214,7 @@ class _QuotesPanel extends StatelessWidget {
   final ValueChanged<String>? onViewOrderPdf;
   final ValueChanged<SupplierQuote>? onViewPdf;
   final ValueChanged<SupplierQuote>? onCancel;
+  final ValueChanged<SupplierQuote>? onEdit;
   final ValueChanged<SupplierQuote>? onApprove;
   final ValueChanged<SupplierQuote>? onReject;
 
@@ -1214,6 +2246,7 @@ class _QuotesPanel extends StatelessWidget {
               onOpenOrder: onOpenOrder,
               onViewPdf: onViewPdf == null ? null : () => onViewPdf!(quote),
               onCancel: onCancel == null ? null : () => onCancel!(quote),
+              onEdit: onEdit == null ? null : () => onEdit!(quote),
               onApprove: onApprove == null ? null : () => onApprove!(quote),
               onReject: onReject == null ? null : () => onReject!(quote),
             ),
@@ -1248,6 +2281,7 @@ class _QuoteCard extends StatelessWidget {
     this.onOpenOrder,
     this.onViewPdf,
     this.onCancel,
+    this.onEdit,
     this.onApprove,
     this.onReject,
   });
@@ -1259,6 +2293,7 @@ class _QuoteCard extends StatelessWidget {
   final ValueChanged<String>? onOpenOrder;
   final VoidCallback? onViewPdf;
   final VoidCallback? onCancel;
+  final VoidCallback? onEdit;
   final VoidCallback? onApprove;
   final VoidCallback? onReject;
 
@@ -1297,22 +2332,6 @@ class _QuoteCard extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text('${quote.items.length} item(s) - $orderCount orden(es)'),
-          if (relatedOrders.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            PreviousStatusDurationPill(
-              orderIds: [for (final order in relatedOrders) order.id],
-              fromStatus: isDireccion
-                  ? PurchaseOrderStatus.dataComplete
-                  : PurchaseOrderStatus.cotizaciones,
-              toStatus: isDireccion
-                  ? PurchaseOrderStatus.authorizedGerencia
-                  : PurchaseOrderStatus.dataComplete,
-              label: isDireccion
-                  ? 'Tiempo en dashboard de compras'
-                  : 'Tiempo en pendientes de compras',
-              alignRight: false,
-            ),
-          ],
           const SizedBox(height: 10),
           Container(
             width: double.infinity,
@@ -1429,8 +2448,12 @@ class _QuoteCard extends StatelessWidget {
                   child: const Text('Ver PDF general'),
                 ),
                 OutlinedButton(
+                  onPressed: onEdit,
+                  child: const Text('Editar'),
+                ),
+                OutlinedButton(
                   onPressed: onCancel,
-                  child: const Text('Cancelar'),
+                  child: const Text('Desarmar'),
                 ),
               ],
             ],
@@ -1525,14 +2548,6 @@ class _PendingDashboardOrderCard extends StatelessWidget {
                   'Ya aparece en: $suppliersLabel',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
-                const SizedBox(height: 8),
-                PreviousStatusDurationPill(
-                  orderIds: [order.order.id],
-                  fromStatus: PurchaseOrderStatus.cotizaciones,
-                  toStatus: PurchaseOrderStatus.dataComplete,
-                  label: 'Tiempo en pendientes de compras',
-                  alignRight: false,
-                ),
               ],
             ),
           ),
@@ -1554,17 +2569,6 @@ class _PendingDashboardOrderCard extends StatelessWidget {
   }
 }
 
-class _ErrorText extends StatelessWidget {
-  const _ErrorText({required this.message});
-
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(child: Text(message));
-  }
-}
-
 class _QuoteSendState {
   const _QuoteSendState({
     this.canSend = false,
@@ -1574,6 +2578,12 @@ class _QuoteSendState {
 
   final bool canSend;
   final String message;
+}
+
+List<SupplierQuote> _withoutDraftQuotes(List<SupplierQuote> quotes) {
+  return quotes
+      .where((quote) => quote.status != SupplierQuoteStatus.draft)
+      .toList(growable: false);
 }
 
 class _SupplierGroupedItem {
@@ -1816,17 +2826,22 @@ List<PurchaseOrder> _relatedOrdersForQuote(
 List<_PendingDashboardOrder> _buildPendingDashboardOrders({
   required List<PurchaseOrder> allOrders,
   required String? selectedSupplier,
-  required String? selectedQuoteId,
+  required Set<String> selectedQuoteItemKeys,
+  required Set<String> blockedQuoteItemKeys,
 }) {
   final pendingOrders = <_PendingDashboardOrder>[];
   for (final order in allOrders) {
     if (order.status != PurchaseOrderStatus.dataComplete) continue;
-    final pendingItems = _pendingQuoteItemsCount(order);
+    final pendingItems = _pendingQuoteItemsCount(
+      order,
+      blockedQuoteItemKeys: blockedQuoteItemKeys,
+    );
     if (pendingItems <= 0) continue;
     if (_shouldHidePendingDashboardOrderForSelectedSupplier(
       order: order,
       selectedSupplier: selectedSupplier,
-      selectedQuoteId: selectedQuoteId,
+      selectedQuoteItemKeys: selectedQuoteItemKeys,
+      blockedQuoteItemKeys: blockedQuoteItemKeys,
     )) {
       continue;
     }
@@ -1850,7 +2865,8 @@ List<_PendingDashboardOrder> _buildPendingDashboardOrders({
 bool _shouldHidePendingDashboardOrderForSelectedSupplier({
   required PurchaseOrder order,
   required String? selectedSupplier,
-  required String? selectedQuoteId,
+  required Set<String> selectedQuoteItemKeys,
+  required Set<String> blockedQuoteItemKeys,
 }) {
   final supplier = selectedSupplier?.trim() ?? '';
   if (supplier.isEmpty) return false;
@@ -1859,13 +2875,17 @@ bool _shouldHidePendingDashboardOrderForSelectedSupplier({
   var hasPendingItemsForOtherSuppliers = false;
 
   for (final item in order.items) {
+    if (blockedQuoteItemKeys.contains(_quoteItemKey(order.id, item.line))) {
+      continue;
+    }
     final itemSupplier = (item.supplier ?? '').trim();
     final amount = item.budget ?? 0;
     final missingAssignment = itemSupplier.isEmpty || amount <= 0;
+    final itemKey = _quoteItemKey(order.id, item.line);
     final quoteId = item.quoteId?.trim() ?? '';
     final missingQuote =
         quoteId.isEmpty ||
-        quoteId == selectedQuoteId ||
+        selectedQuoteItemKeys.contains(itemKey) ||
         item.quoteStatus == PurchaseOrderItemQuoteStatus.rejected;
 
     if (!missingAssignment && !missingQuote) {
@@ -1884,18 +2904,23 @@ bool _shouldHidePendingDashboardOrderForSelectedSupplier({
 
 List<String> _supplierOptions(
   List<PurchaseOrder> orders,
-  Map<String, SupplierQuote> editableQuotesBySupplier,
+  {required Set<String> blockedQuoteItemKeys,}
 ) {
   final suppliers = <String>{};
   for (final order in orders) {
     for (final item in order.items) {
+      final itemKey = _quoteItemKey(order.id, item.line);
+      if (blockedQuoteItemKeys.contains(itemKey)) {
+        continue;
+      }
       final supplier = (item.supplier ?? '').trim();
       final amount = item.budget ?? 0;
       if (supplier.isEmpty || amount <= 0) continue;
       if (!_supplierHasDashboardItems(
         orders: orders,
         supplier: supplier,
-        editableQuoteId: editableQuotesBySupplier[supplier]?.id,
+        editableQuoteItemKeys: const <String>{},
+        blockedQuoteItemKeys: blockedQuoteItemKeys,
       )) {
         continue;
       }
@@ -1908,32 +2933,41 @@ List<String> _supplierOptions(
 bool _supplierHasDashboardItems({
   required List<PurchaseOrder> orders,
   required String supplier,
-  required String? editableQuoteId,
+  required Set<String> editableQuoteItemKeys,
+  required Set<String> blockedQuoteItemKeys,
 }) {
   return _collectSupplierItems(
     orders: orders,
     supplier: supplier,
-    editableQuoteId: editableQuoteId,
+    editableQuoteItemKeys: editableQuoteItemKeys,
+    blockedQuoteItemKeys: blockedQuoteItemKeys,
   ).isNotEmpty;
 }
 
 List<_SupplierGroupedItem> _collectSupplierItems({
   required List<PurchaseOrder> orders,
   required String supplier,
-  required String? editableQuoteId,
+  required Set<String> editableQuoteItemKeys,
+  required Set<String> blockedQuoteItemKeys,
 }) {
   final items = <_SupplierGroupedItem>[];
   for (final order in orders) {
     for (final item in order.items) {
+      final itemKey = _quoteItemKey(order.id, item.line);
+      if (blockedQuoteItemKeys.contains(itemKey) &&
+          !editableQuoteItemKeys.contains(itemKey)) {
+        continue;
+      }
       final itemSupplier = (item.supplier ?? '').trim();
       final amount = item.budget ?? 0;
       final quoteId = item.quoteId?.trim();
       final include =
           itemSupplier == supplier &&
           amount > 0 &&
-          (quoteId == null ||
+          (editableQuoteItemKeys.contains(itemKey) ||
+              quoteId == null ||
               quoteId.isEmpty ||
-              quoteId == editableQuoteId ||
+              editableQuoteItemKeys.contains(itemKey) ||
               item.quoteStatus == PurchaseOrderItemQuoteStatus.rejected);
       if (!include) continue;
       items.add(
@@ -2104,6 +3138,9 @@ String? _validateQuoteItemForDireccion({
     if (!_itemHasCompleteQuoteData(item)) {
       return 'faltan proveedor o presupuesto.';
     }
+    if (useManualOrderRefreshOnWindowsRelease) {
+      return null;
+    }
     final quoteId = item.quoteId?.trim() ?? '';
     if (quoteId != quote.id ||
         item.quoteStatus == PurchaseOrderItemQuoteStatus.rejected) {
@@ -2120,6 +3157,24 @@ bool _itemHasCompleteQuoteData(PurchaseOrderItem item) {
   return supplier.isNotEmpty && amount > 0;
 }
 
+Set<String> _buildBlockedQuoteItemKeys(List<SupplierQuote> quotes) {
+  final keys = <String>{};
+  for (final quote in quotes) {
+    for (final ref in quote.items) {
+      keys.add(_quoteItemKey(ref.orderId, ref.line));
+    }
+  }
+  return keys;
+}
+
+String _quoteItemKey(String orderId, int line) => '${orderId.trim()}#$line';
+
+Set<String> _quoteItemKeysFromRefs(List<SupplierQuoteItemRef> refs) {
+  return {
+    for (final ref in refs) _quoteItemKey(ref.orderId, ref.line),
+  };
+}
+
 bool _orderNeedsMoreQuotes(PurchaseOrder order) {
   return _pendingQuoteItemsCount(order) > 0;
 }
@@ -2128,9 +3183,15 @@ String _money(num value) {
   return '\$${value.toDouble().toStringAsFixed(2)}';
 }
 
-int _pendingQuoteItemsCount(PurchaseOrder order) {
+int _pendingQuoteItemsCount(
+  PurchaseOrder order, {
+  Set<String> blockedQuoteItemKeys = const <String>{},
+}) {
   var pending = 0;
   for (final item in order.items) {
+    if (blockedQuoteItemKeys.contains(_quoteItemKey(order.id, item.line))) {
+      continue;
+    }
     final supplier = (item.supplier ?? '').trim();
     final amount = item.budget ?? 0;
     final missingAssignment = supplier.isEmpty || amount <= 0;
@@ -2144,57 +3205,6 @@ int _pendingQuoteItemsCount(PurchaseOrder order) {
   return pending;
 }
 
-List<SupplierQuotePdfData> _buildCacheCandidates({
-  required List<PurchaseOrder> allOrders,
-  required CompanyBranding branding,
-  required AppUser? actor,
-  required List<SupplierQuote> visibleQuotes,
-  required String? selectedSupplier,
-  required List<_SupplierGroupedItem> selectedItems,
-  required List<String> selectedLinks,
-  required SupplierQuote? selectedQuote,
-  required String selectedComprasComment,
-}) {
-  final dataList = <SupplierQuotePdfData>[];
-
-  if (selectedSupplier != null && selectedItems.isNotEmpty) {
-    dataList.add(
-      _buildPdfData(
-        branding: branding,
-        allOrders: allOrders,
-        supplier: selectedSupplier,
-        quoteId: selectedQuote?.id ?? 'COTIZACION-${selectedSupplier.replaceAll(RegExp(r'\s+'), '-')}',
-        links: selectedLinks,
-        refs: _refsFromGroupedItems(selectedItems),
-        comprasComment: selectedComprasComment,
-        createdAt: selectedQuote?.createdAt,
-        processedByName: actor?.name,
-        processedByArea: actor?.areaDisplay,
-      ),
-    );
-  }
-
-  for (final quote in visibleQuotes.take(2)) {
-    dataList.add(
-      _buildPdfData(
-        branding: branding,
-        allOrders: allOrders,
-        supplier: quote.supplier,
-        quoteId: quote.id,
-        links: quote.links,
-        refs: quote.items,
-        comprasComment: quote.comprasComment,
-        createdAt: quote.createdAt,
-        processedByName: quote.processedByName ?? actor?.name,
-        processedByArea: quote.processedByArea ?? actor?.areaDisplay,
-        authorizedByName: quote.approvedByName,
-        authorizedByArea: quote.approvedByArea,
-      ),
-    );
-  }
-
-  return dataList;
-}
 
 bool _canAuthorizeQuote(AppUser actor) {
   return isAdminRole(actor.role) || isDireccionGeneralLabel(actor.areaDisplay);

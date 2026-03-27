@@ -774,6 +774,10 @@ pw.Widget _buildMetaSection(
       : data.suppressCreatedTime
       ? dateFormat.format(data.createdAt)
       : '${dateFormat.format(data.createdAt)} ${timeFormat.format(data.createdAt)}';
+  final requestedDeliveryLabel =
+      data.blankTemplate || data.requestedDeliveryDate == null
+      ? ''
+      : dateFormat.format(data.requestedDeliveryDate!);
 
   final String? resubmissionLabel = null;
 
@@ -909,6 +913,28 @@ pw.Widget _buildMetaSection(
                       ),
                     ],
                   ],
+                ),
+              ),
+              pw.SizedBox(height: 6),
+              pw.Container(
+                decoration: pw.BoxDecoration(border: border),
+                padding: const pw.EdgeInsets.symmetric(
+                  horizontal: 6,
+                  vertical: 4,
+                ),
+                child: pw.RichText(
+                  text: pw.TextSpan(
+                    children: [
+                      pw.TextSpan(
+                        text: 'FECHA MAXIMA SOLICITADA: ',
+                        style: labelStyle,
+                      ),
+                      pw.TextSpan(
+                        text: requestedDeliveryLabel,
+                        style: valueStyle,
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],

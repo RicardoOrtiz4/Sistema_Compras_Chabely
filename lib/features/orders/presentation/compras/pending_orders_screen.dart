@@ -33,6 +33,7 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
   List<PurchaseOrder>? _cachedSourceOrders;
   String? _cachedVisibleKey;
   List<PurchaseOrder>? _cachedVisibleOrders;
+  final Set<String> _locallyMovedOrderIds = <String>{};
 
   late final TextEditingController _searchController;
   final OrderSearchCache _searchCache = OrderSearchCache();
@@ -113,6 +114,7 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
   Future<void> _handleAcceptAll(List<PurchaseOrder> orders) async {
     if (_isAcceptingAll || orders.isEmpty) return;
 
+    final container = ProviderScope.containerOf(context, listen: false);
     final actor = ref.read(currentUserProfileProvider).value;
     if (actor == null) {
       if (!mounted) return;
@@ -131,28 +133,52 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
     final reviewerArea = actor.areaDisplay.trim().isEmpty
         ? actor.areaId
         : actor.areaDisplay.trim();
-    final repo = ref.read(purchaseOrderRepositoryProvider);
+    final repo = container.read(purchaseOrderRepositoryProvider);
     final count = orders.length;
+    final movedOrderIds = orders.map((order) => order.id).toSet();
 
-    await runOptimisticAction(
-      context: context,
-      pendingLabel: 'Enviando $count orden(es) a Compras...',
-      successMessage: count == 1
-          ? '1 orden enviada a Compras.'
-          : '$count Ã³rdenes enviadas a Compras.',
-      errorContext: 'PendingOrdersScreen.acceptAll',
-      action: () async {
-        for (final order in orders) {
-          await repo.transitionStatus(
-            order: order,
-            targetStatus: PurchaseOrderStatus.cotizaciones,
-            actor: actor,
-            comprasReviewerName: reviewerName,
-            comprasReviewerArea: reviewerArea,
+    setState(() {
+      _locallyMovedOrderIds.addAll(movedOrderIds);
+      _cachedSourceOrders = null;
+      _cachedVisibleOrders = null;
+    });
+    markPendingComprasOrdersAsMoved(movedOrderIds);
+
+    try {
+      await runOptimisticAction(
+        context: context,
+        pendingLabel: 'Enviando $count orden(es) a Compras...',
+        successMessage: count == 1
+            ? '1 orden enviada a Compras.'
+            : '$count Ã³rdenes enviadas a Compras.',
+        errorContext: 'PendingOrdersScreen.acceptAll',
+        action: () async {
+          for (final order in orders) {
+            await repo.transitionStatus(
+              order: order,
+              targetStatus: PurchaseOrderStatus.cotizaciones,
+              actor: actor,
+              comprasReviewerName: reviewerName,
+              comprasReviewerArea: reviewerArea,
+            );
+          }
+          refreshOrderModuleTransitionDataFromContainer(
+            container,
+            orderIds: orders.map((order) => order.id),
           );
-        }
-      },
-    );
+        },
+      );
+    } catch (_) {
+      unmarkPendingComprasOrdersAsMoved(movedOrderIds);
+      if (mounted) {
+        setState(() {
+          _locallyMovedOrderIds.removeAll(movedOrderIds);
+          _cachedSourceOrders = null;
+          _cachedVisibleOrders = null;
+        });
+      }
+      rethrow;
+    }
 
     if (mounted) {
       setState(() => _isAcceptingAll = false);
@@ -344,16 +370,21 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
   List<PurchaseOrder> _resolveVisibleOrders(List<PurchaseOrder> orders) {
     final key = _visibleOrdersKey();
     final cached = _cachedVisibleOrders;
+    final activeOrders = _locallyMovedOrderIds.isEmpty
+        ? orders
+        : orders
+            .where((order) => !_locallyMovedOrderIds.contains(order.id))
+            .toList(growable: false);
     if (cached != null &&
-        identical(_cachedSourceOrders, orders) &&
+        identical(_cachedSourceOrders, activeOrders) &&
         _cachedVisibleKey == key) {
       return cached;
     }
 
     final trimmedQuery = _searchQuery.trim();
     final resolved = trimmedQuery.isEmpty
-        ? orders
-        : orders
+        ? activeOrders
+        : activeOrders
               .where(
                 (order) => orderMatchesSearch(
                   order,
@@ -369,7 +400,7 @@ class _PendingOrdersScreenState extends ConsumerState<PendingOrdersScreen> {
     final urgencyFiltered = dateFiltered
         .where((order) => matchesOrderUrgencyFilter(order, _urgencyFilter))
         .toList(growable: false);
-    _cachedSourceOrders = orders;
+    _cachedSourceOrders = activeOrders;
     _cachedVisibleKey = key;
     _cachedVisibleOrders = urgencyFiltered;
     return urgencyFiltered;

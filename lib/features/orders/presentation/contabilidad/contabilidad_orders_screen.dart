@@ -617,6 +617,10 @@ class _ContabilidadOrderReviewScreenState
         actor: actor,
         items: _itemDrafts.map((item) => item.toModel()).toList(),
       );
+      refreshOrderModuleTransitionData(
+        ref,
+        orderIds: <String>[order.id],
+      );
 
       if (!mounted) return;
 

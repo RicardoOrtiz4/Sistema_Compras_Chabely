@@ -16,11 +16,11 @@ import 'package:sistema_compras/core/session_drafts.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/core/widgets/searchable_select.dart';
 
+import 'package:sistema_compras/features/auth/domain/app_user.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart'; // <- OrderItemDraft
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
-import 'package:sistema_compras/features/orders/domain/supplier_quote.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_inline_view.dart';
 import 'package:sistema_compras/features/orders/presentation/compras/supplier_quotes_dashboard_screen.dart';
@@ -77,6 +77,14 @@ class _CotizacionesOrdersScreenState
       vsync: this,
       initialIndex: _initialTabIndex,
     )..addListener(_handleTabChange);
+    if (!_dashboardActivated) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _dashboardActivated) return;
+        setState(() {
+          _dashboardActivated = true;
+        });
+      });
+    }
   }
 
   @override
@@ -156,25 +164,30 @@ class _CotizacionesOrdersScreenState
     setState(() => _limit += orderPageSizeStep);
   }
 
-  void _openOrderPreview(String orderId) {
-    runGuardedPdfNavigation<void>(
+  Future<void> _openOrderPreview(String orderId) async {
+    final movedToDashboard = await runGuardedPdfNavigation<bool?>(
       'cotizacion-order-preview:$orderId',
-      () => Navigator.of(context).push<void>(
+      () => Navigator.of(context).push<bool>(
         MaterialPageRoute(
           builder: (_) => _CotizacionOrderPreviewScreen(orderId: orderId),
         ),
       ),
     );
+    if (!mounted || movedToDashboard != true) return;
+    refreshOrderModuleTransitionData(ref, orderIds: <String>[orderId]);
+    refreshQuoteWorkflowCounts(ref);
   }
 
   @override
   Widget build(BuildContext context) {
-    final pendingOrdersAsync = ref.watch(cotizacionesOrdersProvider);
+    final pendingOrdersAsync = _activeTabIndex == 0
+        ? ref.watch(cotizacionesOrdersProvider)
+        : null;
     final compactAppBar = useCompactOrderModuleAppBar(context);
     return Scaffold(
       appBar: AppBar(
         title: _activeTabIndex == 0
-            ? pendingOrdersAsync.when(
+            ? pendingOrdersAsync!.when(
                 data: (orders) {
                   return compactAppBar
                       ? const Text('Compras')
@@ -204,13 +217,13 @@ class _CotizacionesOrdersScreenState
             (compactAppBar && _activeTabIndex == 0 ? 60 : 0) + kTextTabBarHeight,
           ),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (compactAppBar && _activeTabIndex == 0)
-                pendingOrdersAsync.maybeWhen(
-                  data: (orders) {
-                    return OrderModuleAppBarBottom(
-                      counts: OrderUrgencyCounts.fromOrders(orders),
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (compactAppBar && _activeTabIndex == 0)
+                  pendingOrdersAsync!.maybeWhen(
+                    data: (orders) {
+                      return OrderModuleAppBarBottom(
+                        counts: OrderUrgencyCounts.fromOrders(orders),
                       filter: _urgencyFilter,
                       onSelected: _setUrgencyFilter,
                     );
@@ -225,13 +238,15 @@ class _CotizacionesOrdersScreenState
       body: TabBarView(
         controller: _tabController,
         children: [
-          _buildPendientesTab(),
+          _activeTabIndex == 0
+              ? _buildPendientesTab()
+              : const SizedBox.shrink(),
           _dashboardActivated
               ? const CotizacionesDashboardScreen(
                   mode: CotizacionesDashboardMode.compras,
                   embedded: true,
                 )
-              : const AppSplash(),
+              : const SizedBox.shrink(),
         ],
       ),
     );
@@ -396,8 +411,7 @@ class _CotizacionesOrdersScreenState
   }
 }
 
-class _CotizacionesTabBar extends ConsumerWidget
-    implements PreferredSizeWidget {
+class _CotizacionesTabBar extends StatelessWidget implements PreferredSizeWidget {
   const _CotizacionesTabBar({required this.controller});
 
   final TabController controller;
@@ -406,44 +420,12 @@ class _CotizacionesTabBar extends ConsumerWidget
   Size get preferredSize => const Size.fromHeight(kTextTabBarHeight);
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final ordersAsync = ref.watch(cotizacionesOrdersProvider);
-    final dashboardOrdersAsync = ref.watch(dataCompleteOrdersProvider);
-    final quotesAsync = ref.watch(supplierQuotesProvider);
-    final scheme = Theme.of(context).colorScheme;
-    final orders = ordersAsync.valueOrNull ?? const <PurchaseOrder>[];
-    final dashboardOrders =
-        dashboardOrdersAsync.valueOrNull ?? const <PurchaseOrder>[];
-    final quotes = quotesAsync.valueOrNull ?? const [];
-    final pendingCount = orders.length;
-    final dashboardPendingCount =
-        dashboardOrders.where(_orderNeedsQuoteBatch).length;
-    final activeQuotesCount = quotes
-        .where(
-          (quote) =>
-              quote.status == SupplierQuoteStatus.draft ||
-              quote.status == SupplierQuoteStatus.rejected,
-        )
-        .length;
-    final dashboardCount = dashboardPendingCount + activeQuotesCount;
-
+  Widget build(BuildContext context) {
     return TabBar(
       controller: controller,
       tabs: [
-        Tab(
-          child: _TabWithBadge(
-            label: 'Pendientes',
-            count: pendingCount,
-            color: scheme.error,
-          ),
-        ),
-        Tab(
-          child: _TabWithBadge(
-            label: 'Dashboard',
-            count: dashboardCount,
-            color: scheme.primary,
-          ),
-        ),
+        const Tab(text: 'Pendientes'),
+        const Tab(text: 'Dashboard'),
       ],
     );
   }
@@ -789,7 +771,12 @@ class _CotizacionOrderPreviewScreenState
                         if (!mounted) return;
                         if (result == null) return;
                         if (result.ready) {
-                          navigator.pop();
+                          refreshOrderModuleTransitionData(
+                            ref,
+                            orderIds: <String>[resolvedOrder.id],
+                          );
+                          refreshQuoteWorkflowCounts(ref);
+                          navigator.pop(true);
                           return;
                         }
                         setState(() {
@@ -1161,10 +1148,13 @@ class _CotizacionOrderReviewScreenState
       return;
     }
     try {
+      final requesterProfile = await _resolveRequesterProfile(order);
       final draftPayload = _buildDraftData(order, actor.name);
       final pdfData = _buildPdfData(
         order,
         draftPayload,
+        requesterName: _resolvedRequesterName(order, requesterProfile),
+        requesterArea: _resolvedRequesterArea(order, requesterProfile),
         cacheSalt: DateTime.now().millisecondsSinceEpoch.toString(),
       );
 
@@ -1174,26 +1164,37 @@ class _CotizacionOrderReviewScreenState
           MaterialPageRoute(
             builder: (_) => _CotizacionDraftPreviewScreen(
               pdfData: pdfData,
-              submitLabel: 'Guardar',
+              submitLabel: 'Guardar y pasar a mesa de compras',
             ),
           ),
         ),
       );
       if (confirmed != true) return;
 
+      markCotizacionesOrdersAsMoved(<String>[order.id]);
       final payload = await _persistApprovalData(
         order,
         actor.name,
         markReady: true,
       );
-      final savedPdfData = _buildPdfData(order, payload);
+      final savedPdfData = _buildPdfData(
+        order,
+        payload,
+        requesterName: _resolvedRequesterName(order, requesterProfile),
+        requesterArea: _resolvedRequesterArea(order, requesterProfile),
+      );
       if (!mounted) return;
       SessionDraftStore.clearCotizacion(order.id);
-      _showMessage('Proceso de liberacion guardado.');
+      refreshOrderModuleTransitionData(ref, orderIds: <String>[order.id]);
+      refreshQuoteWorkflowCounts(ref);
+      _showMessage(
+        'Datos guardados. La orden ya quedo lista en Mesa de compras para agruparla y enviarla a Direccion General.',
+      );
       Navigator.of(
         context,
       ).pop(_CotizacionSaveResult(pdfData: savedPdfData, ready: true));
     } catch (error, stack) {
+      unmarkCotizacionesOrdersAsMoved(<String>[order.id]);
       if (!mounted) return;
       final message = reportError(
         error,
@@ -1239,12 +1240,16 @@ class _CotizacionOrderReviewScreenState
   OrderPdfData _buildPdfData(
     PurchaseOrder order,
     _CotizacionSaveData payload, {
+    String? requesterName,
+    String? requesterArea,
     String? cacheSalt,
   }) {
     final branding = ref.read(currentBrandingProvider);
     return buildPdfDataFromOrder(
       order,
       branding: branding,
+      requesterName: requesterName,
+      requesterArea: requesterArea,
       supplierBudgets: payload.supplierBudgets,
       budget: payload.budget,
       comprasReviewerName: payload.reviewerName,
@@ -1254,6 +1259,29 @@ class _CotizacionOrderReviewScreenState
       items: payload.items,
       cacheSalt: cacheSalt,
     );
+  }
+
+  Future<AppUser?> _resolveRequesterProfile(PurchaseOrder order) async {
+    if (order.requesterName.trim().isNotEmpty) return null;
+    final requesterId = order.requesterId.trim();
+    if (requesterId.isEmpty) return null;
+    return ref.read(profileRepositoryProvider).fetchProfile(requesterId);
+  }
+
+  String _resolvedRequesterName(PurchaseOrder order, AppUser? profile) {
+    final orderName = order.requesterName.trim();
+    if (orderName.isNotEmpty) return orderName;
+    final profileName = profile?.name.trim() ?? '';
+    if (profileName.isNotEmpty) return profileName;
+    return order.requesterId.trim();
+  }
+
+  String _resolvedRequesterArea(PurchaseOrder order, AppUser? profile) {
+    final orderArea = order.areaName.trim();
+    if (orderArea.isNotEmpty) return orderArea;
+    final profileArea = profile?.areaDisplay.trim() ?? '';
+    if (profileArea.isNotEmpty) return profileArea;
+    return order.areaId.trim();
   }
 
   Future<_CotizacionSaveData> _persistApprovalData(
