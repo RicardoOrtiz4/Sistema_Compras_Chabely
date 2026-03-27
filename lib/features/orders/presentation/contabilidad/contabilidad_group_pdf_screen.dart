@@ -20,6 +20,16 @@ import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_m
 import 'package:sistema_compras/features/orders/presentation/preview/supplier_quote_pdf_inline_view.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 
+final _contabilidadQuoteRelatedOrdersProvider = FutureProvider.autoDispose
+    .family<List<PurchaseOrder>, String>((ref, quoteId) async {
+      final quote = await ref.watch(supplierQuoteByIdProvider(quoteId).future);
+      if (quote == null || quote.orderIds.isEmpty) {
+        return const <PurchaseOrder>[];
+      }
+      final repository = ref.watch(purchaseOrderRepositoryProvider);
+      return repository.fetchOrdersByIds(quote.orderIds);
+    });
+
 class ContabilidadGroupPdfScreen extends ConsumerStatefulWidget {
   const ContabilidadGroupPdfScreen({
     required this.quoteId,
@@ -40,8 +50,7 @@ class _ContabilidadGroupPdfScreenState
   @override
   Widget build(BuildContext context) {
     final quoteAsync = ref.watch(supplierQuoteByIdProvider(widget.quoteId));
-    final ordersAsync = ref.watch(operationalOrdersProvider);
-    final allQuotesAsync = ref.watch(supplierQuotesProvider);
+    final ordersAsync = ref.watch(_contabilidadQuoteRelatedOrdersProvider(widget.quoteId));
     final actor = ref.watch(currentUserProfileProvider).value;
     final branding = ref.watch(currentBrandingProvider);
 
@@ -51,8 +60,7 @@ class _ContabilidadGroupPdfScreenState
       ),
       body: quoteAsync.when(
         data: (quote) => ordersAsync.when(
-          data: (orders) => allQuotesAsync.when(
-            data: (_) {
+          data: (orders) {
               if (quote == null) {
                 return const Center(child: Text('Agrupacion no encontrada.'));
               }
@@ -147,17 +155,6 @@ class _ContabilidadGroupPdfScreenState
                 ],
               );
             },
-            loading: () => const AppSplash(),
-            error: (error, stack) => Center(
-              child: Text(
-                reportError(
-                  error,
-                  stack,
-                  context: 'ContabilidadGroupPdfScreen.allQuotes',
-                ),
-              ),
-            ),
-          ),
           loading: () => const AppSplash(),
           error: (error, stack) => Center(
             child: Text(
@@ -243,14 +240,14 @@ class _ContabilidadGroupPdfScreenState
     final missingInternalOrders = refreshedOrders
         .where((order) => !hasAllInternalOrders(order))
         .toList(growable: false);
+    var finalizedOrders = refreshedOrders;
     if (missingInternalOrders.isNotEmpty) {
       final savedAll = await _editInternalOrders(refreshedOrders);
       if (!savedAll) return;
+      finalizedOrders = await repo.fetchOrdersByIds(
+        refreshedOrders.map((order) => order.id),
+      );
     }
-
-    final finalizedOrders = await repo.fetchOrdersByIds(
-      refreshedOrders.map((order) => order.id),
-    );
     for (final latest in finalizedOrders) {
       if (!hasAllInternalOrders(latest)) {
         _showMessage(

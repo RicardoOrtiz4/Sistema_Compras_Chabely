@@ -231,6 +231,25 @@ void refreshQuoteWorkflowCounts(
   }
 }
 
+void refreshRequesterReceiptWorkflowData(
+  WidgetRef ref, {
+  Iterable<String> orderIds = const <String>[],
+}) {
+  clearOrderSessionSnapshotCache();
+
+  ref.invalidate(userOrdersProvider);
+  ref.invalidate(historyAllOrdersProvider);
+  ref.invalidate(homeDashboardCountsProvider);
+
+  for (final orderId in orderIds
+      .map((id) => id.trim())
+      .where((id) => id.isNotEmpty)
+      .toSet()) {
+    ref.invalidate(orderByIdStreamProvider(orderId));
+    ref.invalidate(orderEventsProvider(orderId));
+  }
+}
+
 void _cacheProviderForSession(
   Ref ref, {
   Duration duration = _sessionCacheDuration,

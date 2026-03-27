@@ -177,7 +177,9 @@ class _OrderPdfPreviewScreenState extends ConsumerState<OrderPdfPreviewScreen> {
                                 ref,
                                 orderIds: <String>[orderId],
                               );
-                              unawaited(_warmPendingCache(orderId));
+                              if (!useManualOrderRefreshOnWindowsRelease) {
+                                unawaited(_warmPendingCache(orderId));
+                              }
                               if (!mounted) return;
                               guardedGo(context, '/home');
                             }

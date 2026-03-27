@@ -18,6 +18,16 @@ import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
 
+final _direccionQuoteRelatedOrdersProvider = FutureProvider.autoDispose
+    .family<List<PurchaseOrder>, String>((ref, quoteId) async {
+      final quote = await ref.watch(supplierQuoteByIdProvider(quoteId).future);
+      if (quote == null || quote.orderIds.isEmpty) {
+        return const <PurchaseOrder>[];
+      }
+      final repository = ref.watch(purchaseOrderRepositoryProvider);
+      return repository.fetchOrdersByIds(quote.orderIds);
+    });
+
 class DireccionQuoteReviewScreen extends ConsumerStatefulWidget {
   const DireccionQuoteReviewScreen({required this.quoteId, super.key});
 
@@ -36,7 +46,7 @@ class _DireccionQuoteReviewScreenState
   Widget build(BuildContext context) {
     final quoteAsync = ref.watch(supplierQuoteByIdProvider(widget.quoteId));
     final historyAsync = ref.watch(supplierQuoteHistoryProvider(widget.quoteId));
-    final ordersAsync = ref.watch(operationalOrdersProvider);
+    final ordersAsync = ref.watch(_direccionQuoteRelatedOrdersProvider(widget.quoteId));
     final actor = ref.watch(currentUserProfileProvider).value;
     final branding = ref.watch(currentBrandingProvider);
     final canAuthorize = actor != null && _canAuthorizeQuote(actor);
@@ -380,7 +390,9 @@ class _DireccionQuoteReviewScreenState
   }
 
   List<PurchaseOrder> _resolveRelatedOrdersForQuote(SupplierQuote quote) {
-    final orders = ref.read(operationalOrdersProvider).valueOrNull ?? const <PurchaseOrder>[];
+    final orders =
+        ref.read(_direccionQuoteRelatedOrdersProvider(widget.quoteId)).valueOrNull ??
+        const <PurchaseOrder>[];
     final orderIds = quote.orderIds.toSet();
     return [
       for (final order in orders)

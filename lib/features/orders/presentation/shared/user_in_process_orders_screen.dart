@@ -316,7 +316,7 @@ class _UserInProcessOrdersScreenState
       await ref.read(purchaseOrderRepositoryProvider).autoConfirmRequesterReceived(
             order: order,
           );
-      refreshOrderModuleTransitionData(
+      refreshRequesterReceiptWorkflowData(
         ref,
         orderIds: <String>[order.id],
       );
@@ -550,8 +550,6 @@ class _UserOrderTrackingScreenState
     final orderAsync = ref.watch(orderByIdStreamProvider(widget.orderId));
     final eventsAsync = ref.watch(orderEventsProvider(widget.orderId));
     final currentUser = ref.watch(currentUserProfileProvider).value;
-    final usersAsync = ref.watch(allUsersProvider);
-    final actorNamesById = _actorNamesById(usersAsync.valueOrNull);
 
     return Scaffold(
       appBar: AppBar(
@@ -648,7 +646,6 @@ class _UserOrderTrackingScreenState
                   order: order,
                   events: events,
                   selection: selection,
-                  actorNamesById: actorNamesById,
                 ),
                 loading: () => const AppSplash(compact: true),
                 error: (error, stack) => Text(
@@ -700,7 +697,7 @@ class _UserOrderTrackingScreenState
             order: order,
             actor: actor,
           );
-      refreshOrderModuleTransitionData(
+      refreshRequesterReceiptWorkflowData(
         ref,
         orderIds: <String>[order.id],
       );
@@ -797,13 +794,11 @@ class _TrackingTimelineCard extends StatelessWidget {
     required this.order,
     required this.events,
     required this.selection,
-    required this.actorNamesById,
   });
 
   final PurchaseOrder order;
   final List<PurchaseOrderEvent> events;
   final _TrackingSelection selection;
-  final Map<String, String> actorNamesById;
 
   @override
   Widget build(BuildContext context) {
@@ -841,7 +836,6 @@ class _TrackingTimelineCard extends StatelessWidget {
                   statuses[index],
                   selection.lines.toSet(),
                 ),
-                actorNamesById: actorNamesById,
                 itemCount: _shouldShowItemBreakdown(order, statuses[index])
                     ? _itemsForTrackingStatus(order, statuses[index]).length
                     : 0,
@@ -966,7 +960,6 @@ class _TrackingTimelineTile extends StatelessWidget {
     required this.rejectionEvent,
     required this.allEvents,
     required this.note,
-    required this.actorNamesById,
     this.itemCount = 0,
     this.onShowItems,
   });
@@ -981,7 +974,6 @@ class _TrackingTimelineTile extends StatelessWidget {
   final PurchaseOrderEvent? rejectionEvent;
   final List<PurchaseOrderEvent> allEvents;
   final String? note;
-  final Map<String, String> actorNamesById;
   final int itemCount;
   final VoidCallback? onShowItems;
 
@@ -1000,7 +992,7 @@ class _TrackingTimelineTile extends StatelessWidget {
                 ? 'Completado'
                 : 'Pendiente';
     final color = isCompleted ? status.statusColor(scheme) : scheme.outlineVariant;
-    final rejectionActor = _eventActorLabel(rejectionEvent, actorNamesById);
+    final rejectionActor = _eventActorLabel(rejectionEvent);
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1703,20 +1695,9 @@ String _orderTrackingStatusLabel(PurchaseOrder order) {
   return order.status.label;
 }
 
-Map<String, String> _actorNamesById(List<AppUser>? users) {
-  if (users == null || users.isEmpty) return const <String, String>{};
-  return <String, String>{
-    for (final user in users)
-      user.id: user.name.trim().isEmpty ? user.id : user.name.trim(),
-  };
-}
-
-String _eventActorLabel(
-  PurchaseOrderEvent? event,
-  Map<String, String> actorNamesById,
-) {
+String _eventActorLabel(PurchaseOrderEvent? event) {
   if (event == null) return '';
-  final resolvedName = actorNamesById[event.byUser] ?? event.byUser;
+  final resolvedName = event.byUser.trim().isEmpty ? 'Sistema' : event.byUser.trim();
   final role = event.byRole.trim();
   if (role.isEmpty) return resolvedName;
   return '$resolvedName ($role)';

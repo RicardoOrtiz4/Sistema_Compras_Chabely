@@ -102,6 +102,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       await ref.read(purchaseOrderRepositoryProvider).autoConfirmRequesterReceived(
             order: order,
           );
+      refreshRequesterReceiptWorkflowData(
+        ref,
+        orderIds: <String>[order.id],
+      );
     } catch (error, stack) {
       logError(error, stack, context: 'HomeScreen.autoConfirmRequesterReceived');
     } finally {

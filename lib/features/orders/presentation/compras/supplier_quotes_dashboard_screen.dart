@@ -99,13 +99,13 @@ class _CotizacionesDashboardScreenState
   @override
   void didPopNext() {
     if (!mounted) return;
-    _reloadDashboard(clearSelection: false);
+    _reloadDashboard(clearSelection: false, preferIncremental: true);
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && mounted) {
-      _reloadDashboard(clearSelection: false);
+      _reloadDashboard(clearSelection: false, preferIncremental: true);
     }
   }
 
@@ -1130,7 +1130,10 @@ class _CotizacionesDashboardScreenState
     }
   }
 
-  Future<void> _reloadDashboard({required bool clearSelection}) async {
+  Future<void> _reloadDashboard({
+    required bool clearSelection,
+    bool preferIncremental = false,
+  }) async {
     final loadToken = ++_loadToken;
     if (mounted) {
       setState(() {
@@ -1145,17 +1148,60 @@ class _CotizacionesDashboardScreenState
 
     try {
       final repository = ref.read(purchaseOrderRepositoryProvider);
-      final results = await Future.wait<Object?>([
-        _resolveActor(),
-        repository.fetchAllOrders(),
-        repository.fetchSupplierQuotes(),
-      ]);
+      final currentSnapshot = preferIncremental ? _snapshot : null;
+      late final AppUser? actor;
+      late final List<PurchaseOrder> allOrders;
+      late final List<SupplierQuote> quotes;
+
+      if (currentSnapshot != null) {
+        final existingOrderIds = currentSnapshot.allOrders
+            .map((order) => order.id.trim())
+            .where((id) => id.isNotEmpty)
+            .toSet()
+            .toList(growable: false);
+        final results = await Future.wait<Object?>([
+          _resolveActor(),
+          repository.fetchSupplierQuotes(),
+          existingOrderIds.isEmpty
+              ? Future<List<PurchaseOrder>>.value(const <PurchaseOrder>[])
+              : repository.fetchOrdersByIds(existingOrderIds),
+        ]);
+
+        actor = results[0] as AppUser?;
+        quotes = results[1]! as List<SupplierQuote>;
+        final fetchedOrders = results[2]! as List<PurchaseOrder>;
+        final fetchedOrderIds = fetchedOrders
+            .map((order) => order.id.trim())
+            .where((id) => id.isNotEmpty)
+            .toSet();
+        final missingQuoteOrderIds = <String>{
+          for (final quote in quotes)
+            for (final orderId in quote.orderIds)
+              if (orderId.trim().isNotEmpty && !fetchedOrderIds.contains(orderId.trim()))
+                orderId.trim(),
+        };
+        if (missingQuoteOrderIds.isEmpty) {
+          allOrders = fetchedOrders;
+        } else {
+          final missingOrders = await repository.fetchOrdersByIds(missingQuoteOrderIds);
+          final mergedOrders = <String, PurchaseOrder>{
+            for (final order in fetchedOrders) order.id: order,
+            for (final order in missingOrders) order.id: order,
+          };
+          allOrders = mergedOrders.values.toList(growable: false);
+        }
+      } else {
+        final results = await Future.wait<Object?>([
+          _resolveActor(),
+          repository.fetchAllOrders(),
+          repository.fetchSupplierQuotes(),
+        ]);
+        actor = results[0] as AppUser?;
+        allOrders = results[1]! as List<PurchaseOrder>;
+        quotes = results[2]! as List<SupplierQuote>;
+      }
 
       if (!mounted || loadToken != _loadToken) return;
-
-      final actor = results[0] as AppUser?;
-      final allOrders = results[1]! as List<PurchaseOrder>;
-      final quotes = results[2]! as List<SupplierQuote>;
       final completedOrders = _isDireccion
           ? const <PurchaseOrder>[]
           : _completedOrdersFromDashboardSnapshot(
@@ -1214,10 +1260,8 @@ class _CotizacionesDashboardScreenState
         .where((orderId) => !resolvedOrdersById.containsKey(orderId))
         .toList(growable: false);
     final fetchedOrders = missingOrderIds.isEmpty
-        ? const <PurchaseOrder?>[]
-        : await Future.wait<PurchaseOrder?>(
-            missingOrderIds.map(repository.fetchOrderById),
-          );
+        ? const <PurchaseOrder>[]
+        : await repository.fetchOrdersByIds(missingOrderIds);
 
     final nextOrdersById = <String, PurchaseOrder>{
       for (final order in currentSnapshot.allOrders) order.id: order,
@@ -1226,7 +1270,6 @@ class _CotizacionesDashboardScreenState
       nextOrdersById[order.id] = order;
     }
     for (final order in fetchedOrders) {
-      if (order == null) continue;
       nextOrdersById[order.id] = order;
     }
 

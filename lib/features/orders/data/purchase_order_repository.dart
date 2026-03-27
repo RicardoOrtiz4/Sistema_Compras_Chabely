@@ -352,12 +352,15 @@ class PurchaseOrderRepository {
     String? internalOrder,
     List<PurchaseOrderItem>? items,
     bool markReady = false,
+    PurchaseOrder? currentOrder,
   }) async {
     final trimmedSupplier = supplier?.trim();
     final trimmedComment = comprasComment?.trim();
     final trimmedReviewer = comprasReviewerName?.trim();
     final trimmedInternal = internalOrder?.trim();
-    final currentOrder = markReady ? await fetchOrderById(orderId) : null;
+    final effectiveCurrentOrder = markReady
+        ? (currentOrder ?? await fetchOrderById(orderId))
+        : null;
 
     final normalizedBudgets = _normalizeSupplierBudgets(supplierBudgets);
     final effectiveBudget = normalizedBudgets.isNotEmpty ? _sumBudgets(normalizedBudgets) : budget;
@@ -380,8 +383,9 @@ class PurchaseOrderRepository {
     }
     if (markReady) {
       payload['status'] = PurchaseOrderStatus.dataComplete.name;
-      if (currentOrder != null && currentOrder.status != PurchaseOrderStatus.dataComplete) {
-        payload.addAll(_statusTimingUpdate(currentOrder));
+      if (effectiveCurrentOrder != null &&
+          effectiveCurrentOrder.status != PurchaseOrderStatus.dataComplete) {
+        payload.addAll(_statusTimingUpdate(effectiveCurrentOrder));
       }
     }
 
@@ -1388,8 +1392,12 @@ class PurchaseOrderRepository {
       refsByOrder.putIfAbsent(orderId, () => <int>{}).add(ref.line);
     }
 
+    final ordersById = refsByOrder.isEmpty
+        ? const <String, PurchaseOrder>{}
+        : await _fetchOrdersByIds(_database, refsByOrder.keys);
+
     for (final entry in refsByOrder.entries) {
-      final order = await fetchOrderById(entry.key);
+      final order = ordersById[entry.key];
       if (order == null) continue;
 
       final targetLines = entry.value;
@@ -1453,9 +1461,12 @@ class PurchaseOrderRepository {
     final normalizedEta = DateTime(etaDate.year, etaDate.month, etaDate.day);
     final sentAt = DateTime.now();
     var sentItemsCount = 0;
+    final ordersById = selectedLinesByOrder.isEmpty
+        ? const <String, PurchaseOrder>{}
+        : await _fetchOrdersByIds(_database, selectedLinesByOrder.keys);
 
     for (final entry in selectedLinesByOrder.entries) {
-      final order = await fetchOrderById(entry.key);
+      final order = ordersById[entry.key];
       if (order == null) continue;
 
       final targetLines = entry.value;
@@ -1867,7 +1878,10 @@ class PurchaseOrderRepository {
       quote: quote,
       eventType: 'deleted',
     );
-    await _clearQuoteItemsOnOrders(quote.id);
+    await _clearQuoteItemsOnOrders(
+      quote.id,
+      candidateOrderIds: quote.orderIds,
+    );
     await _supplierQuotesRef.child(quote.id).remove();
   }
 
@@ -1925,8 +1939,15 @@ class PurchaseOrderRepository {
       return 0;
     }
 
+    final quoteOrderIdsById = <String, List<String>>{
+      for (final quote in quotes) quote.id: quote.orderIds,
+    };
+
     for (final quoteId in idsToRemove) {
-      await _clearQuoteItemsOnOrders(quoteId);
+      await _clearQuoteItemsOnOrders(
+        quoteId,
+        candidateOrderIds: quoteOrderIdsById[quoteId] ?? const <String>[],
+      );
       await _supplierQuotesRef.child(quoteId).remove();
     }
 
@@ -2374,11 +2395,15 @@ class PurchaseOrderRepository {
       refsByOrder.putIfAbsent(orderId, () => <int, SupplierQuoteItemRef>{})[ref.line] = ref;
     }
 
+    final ordersById = refsByOrder.isEmpty
+        ? const <String, PurchaseOrder>{}
+        : await _fetchOrdersByIds(_database, refsByOrder.keys);
+
     for (final entry in refsByOrder.entries) {
       _logWindowsReleaseRepoStep(
         '_syncQuoteItemsOnOrders:loadOrder quoteId=${quote.id} orderId=${entry.key} refs=${entry.value.length}',
       );
-      final order = await fetchOrderById(entry.key);
+      final order = ordersById[entry.key];
       if (order == null) continue;
 
       final refsByLine = entry.value;
@@ -2469,8 +2494,18 @@ class PurchaseOrderRepository {
     _logWindowsReleaseRepoStep('_syncQuoteItemsOnOrders:done quoteId=${quote.id}');
   }
 
-  Future<void> _clearQuoteItemsOnOrders(String quoteId) async {
-    final orders = await watchAllOrders().first;
+  Future<void> _clearQuoteItemsOnOrders(
+    String quoteId, {
+    Iterable<String> candidateOrderIds = const <String>[],
+  }) async {
+    final orderIds = candidateOrderIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    final orders = orderIds.isEmpty
+        ? await watchAllOrders().first
+        : (await _fetchOrdersByIds(_database, orderIds)).values.toList(growable: false);
     for (final order in orders) {
       var changed = false;
       final updatedItems = <PurchaseOrderItem>[];

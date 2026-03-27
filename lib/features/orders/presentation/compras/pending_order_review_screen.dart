@@ -192,6 +192,9 @@ class _PendingOrderReviewScreenState
           container,
           orderIds: <String>[order.id],
         );
+        if (useManualOrderRefreshOnWindowsRelease) {
+          return;
+        }
         try {
           PurchaseOrder? refreshed;
           for (var attempt = 0; attempt < 2; attempt++) {

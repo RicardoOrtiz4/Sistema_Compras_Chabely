@@ -1301,7 +1301,9 @@ class _CotizacionOrderReviewScreenState
       comprasReviewerName: payload.reviewerName,
       comprasReviewerArea: payload.reviewerArea,
       items: payload.items.map((item) => item.toModel()).toList(),
-      markReady: markReady, comprasComment: '',
+      markReady: markReady,
+      currentOrder: markReady ? order : null,
+      comprasComment: '',
     );
 
     return payload;

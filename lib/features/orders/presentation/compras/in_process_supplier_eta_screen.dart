@@ -6,6 +6,7 @@ import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
+import 'package:sistema_compras/core/navigation_guard.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/features/auth/domain/app_user.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
@@ -28,15 +29,61 @@ class InProcessSupplierEtaScreen extends ConsumerStatefulWidget {
 }
 
 class _InProcessSupplierEtaScreenState
-    extends ConsumerState<InProcessSupplierEtaScreen> {
+    extends ConsumerState<InProcessSupplierEtaScreen>
+    with RouteAware, WidgetsBindingObserver {
   final TextEditingController _searchController = TextEditingController();
   bool _isBusy = false;
+  bool _isLoading = true;
+  bool _isRouteSubscribed = false;
   String _searchQuery = '';
   OrderUrgencyFilter _urgencyFilter = OrderUrgencyFilter.all;
   DateTimeRange? _createdDateRangeFilter;
+  String? _loadError;
+  _EtaWorkflowSnapshot? _snapshot;
+  int _loadToken = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _reloadEtaWorkflow(preferIncremental: false);
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) {
+      if (_isRouteSubscribed) {
+        routeObserver.unsubscribe(this);
+      }
+      routeObserver.subscribe(this, route);
+      _isRouteSubscribed = true;
+    }
+  }
+
+  @override
+  void didPopNext() {
+    if (!mounted) return;
+    _reloadEtaWorkflow(preferIncremental: true);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      _reloadEtaWorkflow(preferIncremental: true);
+    }
+  }
 
   @override
   void dispose() {
+    if (_isRouteSubscribed) {
+      routeObserver.unsubscribe(this);
+    }
+    WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
     super.dispose();
   }
@@ -80,15 +127,15 @@ class _InProcessSupplierEtaScreenState
 
   @override
   Widget build(BuildContext context) {
-    final quotesAsync = ref.watch(supplierQuotesProvider);
-    final ordersAsync = ref.watch(operationalOrdersProvider);
-    final actor = ref.watch(currentUserProfileProvider).value;
-    final branding = ref.watch(currentBrandingProvider);
+    final snapshot = _snapshot;
+    final actor = snapshot?.actor ?? ref.watch(currentUserProfileProvider).valueOrNull;
+    final CompanyBranding branding =
+        snapshot?.branding ?? ref.watch(currentBrandingProvider);
     final compactAppBar = useCompactOrderModuleAppBar(context);
 
     final titleGroups = _visibleApprovedEtaGroups(
-      quotes: quotesAsync.valueOrNull ?? const <SupplierQuote>[],
-      allOrders: ordersAsync.valueOrNull ?? const <PurchaseOrder>[],
+      quotes: snapshot?.quotes ?? const <SupplierQuote>[],
+      allOrders: snapshot?.orders ?? const <PurchaseOrder>[],
       query: _searchQuery,
       filter: _urgencyFilter,
       range: _createdDateRangeFilter,
@@ -112,104 +159,190 @@ class _InProcessSupplierEtaScreenState
                 filter: _urgencyFilter,
                 onSelected: _setUrgencyFilter,
               ),
+        actions: [
+          IconButton(
+            onPressed: _isLoading ? null : () => _reloadEtaWorkflow(preferIncremental: true),
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Recargar',
+          ),
+        ],
       ),
-      body: quotesAsync.when(
-        data: (quotes) => ordersAsync.when(
-          data: (orders) {
-            final groups = _visibleApprovedEtaGroups(
-              quotes: quotes,
-              allOrders: orders,
-              query: _searchQuery,
-              filter: _urgencyFilter,
-              range: _createdDateRangeFilter,
-            );
-            final arrivalOrders = _visibleArrivalOrders(
-              allOrders: orders,
-              query: _searchQuery,
-              filter: _urgencyFilter,
-              range: _createdDateRangeFilter,
-            );
-
-            return ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                _EtaFiltersBar(
-                  searchController: _searchController,
-                  searchQuery: _searchQuery,
-                  selectedRange: _createdDateRangeFilter,
-                  onSearchChanged: _updateSearch,
-                  onClearSearch: _clearSearch,
-                  onPickDate: _pickCreatedDateFilter,
-                  onClearDate: _clearCreatedDateFilter,
-                ),
-                const SizedBox(height: 16),
-                _ArrivalSectionCard(
-                  orders: arrivalOrders,
-                  isBusy: _isBusy,
-                  onRegisterArrivals: (order, lines) => _registerArrivedItems(
-                    order: order,
-                    actor: actor,
-                    itemLines: lines,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  'Pendientes de fecha estimada',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                if (groups.isEmpty)
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Text(
-                        'No hay proveedores pendientes de envio a Contabilidad.',
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                    ),
-                  )
-                else
-                  for (final group in groups) ...[
-                    _ApprovedEtaGroupCard(
-                      group: group,
-                      allOrders: orders,
-                      branding: branding,
-                      actor: actor,
-                      isBusy: _isBusy,
-                      onSendToContabilidad: (selectedLinesByOrder, etaDate) =>
-                          _sendToContabilidad(
-                        quote: group.quote,
-                        actor: actor,
-                        selectedLinesByOrder: selectedLinesByOrder,
-                        etaDate: etaDate,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                  ],
-              ],
-            );
-          },
-          loading: () => const AppSplash(),
-          error: (error, stack) => _ErrorText(
-            message: reportError(
-              error,
-              stack,
-              context: 'InProcessSupplierEtaScreen.orders',
-            ),
-          ),
-        ),
-        loading: () => const AppSplash(),
-        error: (error, stack) => _ErrorText(
-          message: reportError(
-            error,
-            stack,
-            context: 'InProcessSupplierEtaScreen.quotes',
-          ),
-        ),
+      body: _buildBody(
+        snapshot: snapshot,
+        actor: actor,
+        branding: branding,
       ),
     );
+  }
+
+  Widget _buildBody({
+    required _EtaWorkflowSnapshot? snapshot,
+    required AppUser? actor,
+    required CompanyBranding branding,
+  }) {
+    if (_isLoading && snapshot == null) {
+      return const AppSplash();
+    }
+    if (_loadError != null && snapshot == null) {
+      return _ErrorText(message: _loadError!);
+    }
+    if (snapshot == null) {
+      return const AppSplash();
+    }
+
+    final groups = _visibleApprovedEtaGroups(
+      quotes: snapshot.quotes,
+      allOrders: snapshot.orders,
+      query: _searchQuery,
+      filter: _urgencyFilter,
+      range: _createdDateRangeFilter,
+    );
+    final arrivalOrders = _visibleArrivalOrders(
+      allOrders: snapshot.orders,
+      query: _searchQuery,
+      filter: _urgencyFilter,
+      range: _createdDateRangeFilter,
+    );
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        if (_loadError != null) ...[
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(_loadError!),
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+        if (_isLoading) ...[
+          const LinearProgressIndicator(),
+          const SizedBox(height: 16),
+        ],
+        _EtaFiltersBar(
+          searchController: _searchController,
+          searchQuery: _searchQuery,
+          selectedRange: _createdDateRangeFilter,
+          onSearchChanged: _updateSearch,
+          onClearSearch: _clearSearch,
+          onPickDate: _pickCreatedDateFilter,
+          onClearDate: _clearCreatedDateFilter,
+        ),
+        const SizedBox(height: 16),
+        _ArrivalSectionCard(
+          orders: arrivalOrders,
+          isBusy: _isBusy,
+          onRegisterArrivals: (order, lines) => _registerArrivedItems(
+            order: order,
+            actor: actor,
+            itemLines: lines,
+          ),
+        ),
+        const SizedBox(height: 16),
+        Text(
+          'Pendientes de fecha estimada',
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 8),
+        if (groups.isEmpty)
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                'No hay proveedores pendientes de envio a Contabilidad.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ),
+          )
+        else
+          for (final group in groups) ...[
+            _ApprovedEtaGroupCard(
+              group: group,
+              allOrders: snapshot.orders,
+              branding: branding,
+              actor: actor,
+              isBusy: _isBusy,
+              onSendToContabilidad: (selectedLinesByOrder, etaDate) =>
+                  _sendToContabilidad(
+                quote: group.quote,
+                actor: actor,
+                selectedLinesByOrder: selectedLinesByOrder,
+                etaDate: etaDate,
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+      ],
+    );
+  }
+
+  Future<AppUser?> _resolveActor() async {
+    final current = ref.read(currentUserProfileProvider).valueOrNull;
+    if (current != null) return current;
+    return ref.read(currentUserProfileProvider.future);
+  }
+
+  Future<void> _reloadEtaWorkflow({
+    required bool preferIncremental,
+  }) async {
+    final loadToken = ++_loadToken;
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+      });
+    }
+
+    try {
+      final repository = ref.read(purchaseOrderRepositoryProvider);
+      final currentSnapshot = preferIncremental ? _snapshot : null;
+      final actor = await _resolveActor();
+      final quotes = await repository.fetchSupplierQuotes();
+      final approvedQuotes = quotes
+          .where((quote) => quote.status == SupplierQuoteStatus.approved)
+          .toList(growable: false);
+
+      final orderIds = <String>{
+        for (final quote in approvedQuotes)
+          for (final orderId in quote.orderIds)
+            if (orderId.trim().isNotEmpty) orderId.trim(),
+      };
+      if (currentSnapshot != null) {
+        orderIds.addAll(
+          currentSnapshot.orders
+              .map((order) => order.id.trim())
+              .where((id) => id.isNotEmpty),
+        );
+      }
+
+      final orders = orderIds.isEmpty
+          ? const <PurchaseOrder>[]
+          : await repository.fetchOrdersByIds(orderIds);
+
+      if (!mounted || loadToken != _loadToken) return;
+      setState(() {
+        _snapshot = _EtaWorkflowSnapshot(
+          actor: actor,
+          branding: ref.read(currentBrandingProvider),
+          quotes: List<SupplierQuote>.unmodifiable(approvedQuotes),
+          orders: List<PurchaseOrder>.unmodifiable(orders),
+        );
+        _loadError = null;
+        _isLoading = false;
+      });
+    } catch (error, stack) {
+      if (!mounted || loadToken != _loadToken) return;
+      setState(() {
+        _loadError = reportError(
+          error,
+          stack,
+          context: 'InProcessSupplierEtaScreen.reload',
+        );
+        _isLoading = false;
+      });
+    }
   }
 
   Future<void> _sendToContabilidad({
@@ -264,6 +397,7 @@ class _InProcessSupplierEtaScreenState
         quoteId: quote.id,
         orderIds: quote.orderIds,
       );
+      await _reloadEtaWorkflow(preferIncremental: true);
       _showMessage('Items enviados a Contabilidad.');
     } catch (error, stack) {
       _showMessage(
@@ -330,16 +464,11 @@ class _InProcessSupplierEtaScreenState
         ref,
         orderIds: <String>[order.id],
       );
+      await _reloadEtaWorkflow(preferIncremental: true);
 
-      final users = await ref.read(allUsersProvider.future);
-      AppUser? requester;
-      for (final user in users) {
-        if (user.id == order.requesterId) {
-          requester = user;
-          break;
-        }
-      }
-
+      final requester = await ref
+          .read(profileRepositoryProvider)
+          .fetchProfile(order.requesterId);
       final receiverEmail = (requester?.contactEmail ?? '').trim();
       final updatedItems = [
         for (final item in order.items)
@@ -1012,6 +1141,20 @@ class _ErrorText extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(child: Text(message));
   }
+}
+
+class _EtaWorkflowSnapshot {
+  const _EtaWorkflowSnapshot({
+    required this.actor,
+    required this.branding,
+    required this.quotes,
+    required this.orders,
+  });
+
+  final AppUser? actor;
+  final CompanyBranding branding;
+  final List<SupplierQuote> quotes;
+  final List<PurchaseOrder> orders;
 }
 
 class _ApprovedEtaGroup {
