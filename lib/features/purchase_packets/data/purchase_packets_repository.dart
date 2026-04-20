@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sistema_compras/core/app_logger.dart';
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
+import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/firebase_database_compat.dart';
 import 'package:sistema_compras/core/providers.dart';
 import 'package:sistema_compras/features/auth/domain/app_user.dart';
@@ -112,6 +113,27 @@ class PurchasePacketsRepository {
     return _parseCounterValue(snapshot.value);
   }
 
+  Future<void> _assignGeneralQuoteFolioIfMissing(String packetId) async {
+    try {
+      final bundle = await fetchPacketById(packetId);
+      final packet = bundle?.packet;
+      if (packet == null) return;
+      if (packet.status != PurchasePacketStatus.approvalQueue) return;
+      if (packet.folio?.trim().isNotEmpty == true) return;
+      final reservedFolio = await _reserveNextGeneralQuoteFolio();
+      await _packetsRef.child(packetId).update(<String, Object?>{
+        'folio': reservedFolio,
+        'updatedAt': DateTime.now().millisecondsSinceEpoch,
+      });
+    } catch (error, stack) {
+      logError(
+        error,
+        stack,
+        context: 'PurchasePacketsRepository.assignGeneralQuoteFolioIfMissing',
+      );
+    }
+  }
+
   Future<PacketBundle?> fetchPacketById(String packetId) async {
     final packetSnapshot = await _packetsRef.child(packetId).get();
     if (!packetSnapshot.exists || packetSnapshot.value is! Map) {
@@ -142,52 +164,9 @@ class PurchasePacketsRepository {
     if (itemRefIds.isEmpty) {
       throw const PacketDomainError('EmptyPacket', 'Selecciona al menos un item.');
     }
-
-    final hydratedRefs = <PacketItemRef>[];
-    final affectedOrderIds = <String>{};
-    final orderCache = <String, RequestOrder>{};
-    for (final refId in itemRefIds.toSet()) {
-      final separator = refId.indexOf('::');
-      if (separator <= 0 || separator >= refId.length - 2) {
-        throw PacketDomainError('InvalidItemReference', 'Referencia invalida $refId.');
-      }
-      final orderId = refId.substring(0, separator);
-      final itemId = refId.substring(separator + 2);
-      final order = orderCache[orderId] ?? await fetchOrderById(orderId);
-      if (order == null) throw MissingOrderReference(orderId);
-      orderCache[orderId] = order;
-      if (order.status != RequestOrderStatus.readyForApproval) {
-        throw PacketDomainError(
-          'InvalidOrderState',
-          'La orden $orderId no esta lista para agrupacion.',
-        );
-      }
-      final item = order.itemById(itemId);
-      if (item == null) throw MissingItemReference(orderId, itemId);
-      if (item.isClosed) {
-        throw PacketDomainError(
-          'ItemAlreadyClosed',
-          'El item $itemId de la orden $orderId ya esta cerrado.',
-        );
-      }
-      hydratedRefs.add(
-        PacketItemRef(
-          id: buildPacketItemRefId(orderId, itemId),
-          orderId: orderId,
-          itemId: itemId,
-          lineNumber: item.lineNumber,
-          description: item.description,
-          quantity: item.quantity,
-          unit: item.unit,
-          amount: item.estimatedAmount,
-        ),
-      );
-      affectedOrderIds.add(orderId);
-    }
-
-    await Future.wait(
-      affectedOrderIds.map((orderId) => _ensureNewOrderMirror(orderCache[orderId]!)),
-    );
+    final hydration = await _hydrateReadyOrderPacketItems(itemRefIds);
+    final hydratedRefs = hydration.itemRefs;
+    final affectedOrderIds = hydration.orderIds;
 
     final packetRef = _packetsRef.push();
     final packetId = packetRef.key ?? buildOperationId();
@@ -214,7 +193,57 @@ class PurchasePacketsRepository {
         (itemRef) => _packetItemsRef.child(packetId).child(itemRef.id).set(itemRef.toMap()),
       ),
     );
-    await Future.wait(affectedOrderIds.map(rebuildOrderProjectionFromPackets));
+    unawaited(Future.wait(affectedOrderIds.map(rebuildOrderProjectionFromPackets)));
+    return packet;
+  }
+
+  Future<PurchasePacket> createAndSubmitPacketFromReadyOrders({
+    required AppUser actor,
+    required String supplierName,
+    required num totalAmount,
+    required List<String> evidenceUrls,
+    required List<String> itemRefIds,
+  }) async {
+    final trimmedSupplier = supplierName.trim();
+    if (trimmedSupplier.isEmpty) {
+      throw const PacketDomainError('InvalidSupplier', 'Proveedor requerido.');
+    }
+    if (itemRefIds.isEmpty) {
+      throw const PacketDomainError('EmptyPacket', 'Selecciona al menos un item.');
+    }
+
+    final hydration = await _hydrateReadyOrderPacketItems(itemRefIds);
+    final hydratedRefs = hydration.itemRefs;
+    final affectedOrderIds = hydration.orderIds;
+    final packetRef = _packetsRef.push();
+    final packetId = packetRef.key ?? buildOperationId();
+    final now = DateTime.now();
+    final packet = PurchasePacket(
+      id: packetId,
+      supplierName: trimmedSupplier,
+      status: PurchasePacketStatus.approvalQueue,
+      version: 1,
+      totalAmount: totalAmount,
+      evidenceUrls: evidenceUrls
+          .map((url) => url.trim())
+          .where((url) => url.isNotEmpty)
+          .toList(growable: false),
+      itemRefs: hydratedRefs,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: actor.id,
+      submittedAt: now,
+      submittedBy: actor.id,
+    );
+
+    await packetRef.set(packet.toMap());
+    await Future.wait(
+      hydratedRefs.map(
+        (itemRef) => _packetItemsRef.child(packetId).child(itemRef.id).set(itemRef.toMap()),
+      ),
+    );
+    unawaited(Future.wait(affectedOrderIds.map(rebuildOrderProjectionFromPackets)));
+    unawaited(_assignGeneralQuoteFolioIfMissing(packetId));
     return packet;
   }
 
@@ -240,8 +269,6 @@ class PurchasePacketsRepository {
         );
       }
       ensureValidPacketTransition(packet.status, PurchasePacketStatus.approvalQueue);
-      await _validatePacketReferences(packet);
-      final reservedFolio = await _reserveNextGeneralQuoteFolio();
 
       final packetRef = _packetsRef.child(packetId);
       final nowMs = DateTime.now().millisecondsSinceEpoch;
@@ -260,17 +287,14 @@ class PurchasePacketsRepository {
         submittedBy: actor.id,
         folio: (packet.folio?.trim().isNotEmpty ?? false)
             ? packet.folio!.trim()
-            : reservedFolio,
+            : null,
       );
       await packetRef.set(nextPacket.toMap());
-      final refreshed = await _requirePacket(packetId);
-      updatedPacket = refreshed.packet;
-      if (updatedPacket.status != PurchasePacketStatus.approvalQueue) {
-        throw StateError(
-          'El paquete $packetId no quedo en aprobacion. Estado leido: ${updatedPacket.status.storageKey}.',
-        );
+      updatedPacket = nextPacket;
+      unawaited(_rebuildAffectedOrders(nextPacket.itemRefs));
+      if ((nextPacket.folio?.trim().isNotEmpty ?? false) == false) {
+        unawaited(_assignGeneralQuoteFolioIfMissing(packetId));
       }
-      unawaited(_rebuildAffectedOrders(refreshed.packet.itemRefs));
       _logTelemetry(
         PacketTelemetryRecord(
           operationId: operationId,
@@ -508,25 +532,6 @@ class PurchasePacketsRepository {
     );
   }
 
-  Future<void> _validatePacketReferences(PurchasePacket packet) async {
-    final orderCache = <String, RequestOrder>{};
-    for (final itemRef in packet.itemRefs) {
-      final order =
-          orderCache[itemRef.orderId] ?? await fetchOrderById(itemRef.orderId);
-      if (order == null) throw MissingOrderReference(itemRef.orderId);
-      orderCache[itemRef.orderId] = order;
-      final item = order.itemById(itemRef.itemId);
-      if (item == null) {
-        throw MissingItemReference(itemRef.orderId, itemRef.itemId);
-      }
-      if (item.isClosed) {
-        throw PacketDomainError(
-          'ClosedItemReference',
-          'El item ${itemRef.itemId} de la orden ${itemRef.orderId} ya esta cerrado.',
-        );
-      }
-    }
-  }
 
   Future<PurchasePacket> _mutatePacketWithDecision({
     required AppUser actor,
@@ -631,6 +636,59 @@ class PurchasePacketsRepository {
     final orderIds = itemRefs.map((item) => item.orderId).toSet();
     await Future.wait(
       orderIds.map(rebuildOrderProjectionFromPackets),
+    );
+  }
+
+  Future<_HydratedPacketItems> _hydrateReadyOrderPacketItems(
+    List<String> itemRefIds,
+  ) async {
+    final hydratedRefs = <PacketItemRef>[];
+    final affectedOrderIds = <String>{};
+    final orderCache = <String, RequestOrder>{};
+    for (final refId in itemRefIds.toSet()) {
+      final separator = refId.indexOf('::');
+      if (separator <= 0 || separator >= refId.length - 2) {
+        throw PacketDomainError('InvalidItemReference', 'Referencia invalida $refId.');
+      }
+      final orderId = refId.substring(0, separator);
+      final itemId = refId.substring(separator + 2);
+      final order = orderCache[orderId] ?? await fetchOrderById(orderId);
+      if (order == null) throw MissingOrderReference(orderId);
+      orderCache[orderId] = order;
+      if (order.status != RequestOrderStatus.readyForApproval) {
+        throw PacketDomainError(
+          'InvalidOrderState',
+          'La orden $orderId no esta lista para agrupacion.',
+        );
+      }
+      final item = order.itemById(itemId);
+      if (item == null) throw MissingItemReference(orderId, itemId);
+      if (item.isClosed) {
+        throw PacketDomainError(
+          'ItemAlreadyClosed',
+          'El item $itemId de la orden $orderId ya esta cerrado.',
+        );
+      }
+      hydratedRefs.add(
+        PacketItemRef(
+          id: buildPacketItemRefId(orderId, itemId),
+          orderId: orderId,
+          itemId: itemId,
+          lineNumber: item.lineNumber,
+          description: item.description,
+          quantity: item.quantity,
+          unit: item.unit,
+          amount: item.estimatedAmount,
+        ),
+      );
+      affectedOrderIds.add(orderId);
+    }
+    await Future.wait(
+      affectedOrderIds.map((orderId) => _ensureNewOrderMirror(orderCache[orderId]!)),
+    );
+    return _HydratedPacketItems(
+      itemRefs: hydratedRefs,
+      orderIds: affectedOrderIds,
     );
   }
 
@@ -1001,6 +1059,16 @@ int _parseCounterValue(Object? raw) {
     return int.tryParse(raw.trim()) ?? 0;
   }
   return 0;
+}
+
+class _HydratedPacketItems {
+  const _HydratedPacketItems({
+    required this.itemRefs,
+    required this.orderIds,
+  });
+
+  final List<PacketItemRef> itemRefs;
+  final Set<String> orderIds;
 }
 
 final purchasePacketsRepositoryProvider = Provider<PurchasePacketsRepository>((ref) {

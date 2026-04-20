@@ -953,23 +953,39 @@ final sourcingModuleCountProvider = Provider.autoDispose<AsyncValue<int>>((
   ref,
 ) {
   final pendingAsync = ref.watch(sourcingOrdersProvider);
-  final dashboardAsync = ref.watch(readyForApprovalOrdersProvider);
-  return pendingAsync.whenData(
-    (pendingOrders) =>
-        pendingOrders.length + (dashboardAsync.valueOrNull?.length ?? 0),
-  );
+  final readyOrdersAsync = ref.watch(readyOrdersProvider);
+  final packetsAsync = ref.watch(packetBundlesProvider);
+  return pendingAsync.whenData((pendingOrders) {
+    final readyOrders = readyOrdersAsync.valueOrNull;
+    final bundles = packetsAsync.valueOrNull;
+    final dashboardCount =
+        readyOrders == null || bundles == null
+            ? 0
+            : _countPendingDashboardOrders(readyOrders, bundles);
+    return pendingOrders.length + dashboardCount;
+  });
 });
 
 final sourcingDashboardTabCountProvider =
     Provider.autoDispose<AsyncValue<int>>((ref) {
-      final ordersAsync = ref.watch(readyForApprovalOrdersProvider);
-      return ordersAsync.whenData((orders) => orders.length);
+      final readyOrdersAsync = ref.watch(readyOrdersProvider);
+      final packetsAsync = ref.watch(packetBundlesProvider);
+      return readyOrdersAsync.whenData((readyOrders) {
+        final bundles = packetsAsync.valueOrNull;
+        if (bundles == null) return 0;
+        return _countPendingDashboardOrders(readyOrders, bundles);
+      });
     });
 
 final sourcingReadyToSendCountProvider =
     Provider.autoDispose<AsyncValue<int>>((ref) {
-      final ordersAsync = ref.watch(readyForApprovalOrdersProvider);
-      return ordersAsync.whenData((orders) => orders.length);
+      final readyOrdersAsync = ref.watch(readyOrdersProvider);
+      final packetsAsync = ref.watch(packetBundlesProvider);
+      return readyOrdersAsync.whenData((readyOrders) {
+        final bundles = packetsAsync.valueOrNull;
+        if (bundles == null) return 0;
+        return _countPendingDashboardOrders(readyOrders, bundles);
+      });
     });
 
 final pendingDireccionCountProvider = Provider.autoDispose<AsyncValue<int>>((ref) {
@@ -1070,6 +1086,56 @@ int? _packetItemLineFromId(String rawItemId) {
     return int.tryParse(trimmed.substring(5));
   }
   return int.tryParse(trimmed);
+}
+
+int _countPendingDashboardOrders(
+  List<RequestOrder> readyOrders,
+  List<PacketBundle> bundles,
+) {
+  final activeItemRefIds = _activeDashboardPacketItemRefIds(bundles);
+  var count = 0;
+  for (final order in readyOrders) {
+    var hasPendingItems = false;
+    for (final item in order.items) {
+      final supplier = (item.supplierName ?? '').trim();
+      final amount = item.estimatedAmount;
+      if (supplier.isEmpty || amount == null || amount <= 0 || item.isClosed) {
+        continue;
+      }
+      final itemRefId = buildPacketItemRefId(order.id, item.id);
+      if (activeItemRefIds.contains(itemRefId)) {
+        continue;
+      }
+      hasPendingItems = true;
+      break;
+    }
+    if (hasPendingItems) count += 1;
+  }
+  return count;
+}
+
+Set<String> _activeDashboardPacketItemRefIds(List<PacketBundle> bundles) {
+  return bundles
+      .where(_bundleCountsAsActiveForDashboardCount)
+      .expand((bundle) => bundle.packet.itemRefs)
+      .map((item) => item.id)
+      .toSet();
+}
+
+bool _bundleCountsAsActiveForDashboardCount(PacketBundle bundle) {
+  final status = bundle.packet.status;
+  if (status == PurchasePacketStatus.approvalQueue ||
+      status == PurchasePacketStatus.executionReady ||
+      status == PurchasePacketStatus.completed) {
+    return true;
+  }
+  if (status != PurchasePacketStatus.draft || !bundle.packet.isSubmitted) {
+    return false;
+  }
+  if (bundle.decisions.isEmpty) return true;
+  final sorted = [...bundle.decisions]
+    ..sort((left, right) => right.timestamp.compareTo(left.timestamp));
+  return sorted.first.action != PacketDecisionAction.returnForRework;
 }
 
 final rejectedCountProvider = Provider.autoDispose<AsyncValue<int>>((ref) {

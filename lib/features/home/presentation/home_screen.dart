@@ -136,6 +136,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final userAsync = ref.watch(currentUserProfileProvider);
     final user = userAsync.value;
     final branding = ref.watch(currentBrandingProvider);
+    final dashboardSubmissionCount = ref.watch(
+      dashboardPacketSubmissionCountProvider,
+    );
     final isAdmin = hasAdminAccess(user);
     final canSwitchCompany = isAdmin;
     final canAccessMonitoring = canViewMonitoring(user);
@@ -218,15 +221,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               onTap: () => guardedPush(context, '/orders/create'),
             ),
             _HomeBlockData(
-              title: 'Ordenes rechazadas',
-              subtitle: 'Avisos de rechazo pendientes de enterado',
-              icon: Icons.report_problem_outlined,
-              color: scheme.error,
-              foreground: scheme.onError,
-              countProvider: rejectedCountProvider,
-              onTap: () => guardedPush(context, '/orders/rejected'),
-            ),
-            _HomeBlockData(
               title: 'Autorizar ordenes',
               subtitle: 'Primera etapa despues de crear la orden',
               icon: Icons.fact_check_outlined,
@@ -285,6 +279,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               countProvider: userInProcessOrdersCountProvider,
               onTap: () => guardedPush(context, '/orders/in-process'),
             ),
+            _HomeBlockData(
+              title: 'Ordenes rechazadas',
+              subtitle: 'Avisos de rechazo pendientes de enterado',
+              icon: Icons.report_problem_outlined,
+              color: scheme.error,
+              foreground: scheme.onError,
+              countProvider: rejectedCountProvider,
+              onTap: () => guardedPush(context, '/orders/rejected'),
+            ),
           ];
 
           return Center(
@@ -312,6 +315,29 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   return ListView(
                     padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
                     children: [
+                      if (dashboardSubmissionCount > 0) ...[
+                        Material(
+                          color: scheme.primaryContainer,
+                          borderRadius: BorderRadius.circular(14),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.sync_outlined),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    dashboardSubmissionCount == 1
+                                        ? 'Hay 1 paquete enviandose a Direccion General. Puedes salir de la pantalla; el envio continua.'
+                                        : 'Hay $dashboardSubmissionCount paquetes enviandose a Direccion General. Puedes salir de la pantalla; el envio continua.',
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       GridView.builder(
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),

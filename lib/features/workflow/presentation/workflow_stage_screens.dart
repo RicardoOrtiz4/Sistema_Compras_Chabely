@@ -34,8 +34,6 @@ import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 import 'package:sistema_compras/features/purchase_packets/application/purchase_packet_use_cases.dart';
 import 'package:sistema_compras/features/purchase_packets/domain/purchase_packet_domain.dart';
 
-final Set<String> _pendingDashboardSubmissionItemRefIds = <String>{};
-
 class ComprasDashboardScreen extends ConsumerStatefulWidget {
   const ComprasDashboardScreen({super.key});
 
@@ -70,22 +68,7 @@ class _ComprasDashboardScreenState extends ConsumerState<ComprasDashboardScreen>
           data: (readyOrders) => bundlesAsync.when(
             data: (bundles) {
               final actualActiveItemRefIds = _activePacketItemRefIds(bundles);
-              final confirmedOptimisticIds = _pendingDashboardSubmissionItemRefIds
-                  .where(actualActiveItemRefIds.contains)
-                  .toSet();
-              if (confirmedOptimisticIds.isNotEmpty) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (!mounted) return;
-                  setState(() {
-                    _pendingDashboardSubmissionItemRefIds
-                        .removeAll(confirmedOptimisticIds);
-                  });
-                });
-              }
-              final activeItemRefIds = <String>{
-                ...actualActiveItemRefIds,
-                ..._pendingDashboardSubmissionItemRefIds,
-              };
+              final activeItemRefIds = actualActiveItemRefIds;
               final pendingOrders = readyOrders
                   .map((order) => _buildPendingDashboardOrder(order, activeItemRefIds))
                   .where((order) => order.pendingItems.isNotEmpty)
@@ -122,20 +105,6 @@ class _ComprasDashboardScreenState extends ConsumerState<ComprasDashboardScreen>
               }
               return ListView(
                 children: [
-                  if (_pendingDashboardSubmissionItemRefIds.isNotEmpty) ...[
-                    Material(
-                      color: Theme.of(context).colorScheme.primaryContainer,
-                      borderRadius: BorderRadius.circular(12),
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Text(
-                          'Hay paquetes enviandose a Direccion General. En Windows puede tardar en sincronizarse; mientras tanto ya no se mostraran aqui.',
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                  ],
                   _DashboardPanel(
                     title: 'Agrupar por proveedor',
                     subtitle:
@@ -471,33 +440,32 @@ class _ComprasDashboardScreenState extends ConsumerState<ComprasDashboardScreen>
     }
     final actor = ref.read(currentUserProfileProvider).value;
     if (actor == null) return;
+    final container = ProviderScope.containerOf(context, listen: false);
+    final messenger = ScaffoldMessenger.maybeOf(context);
     final confirmed = await _confirmSendToDireccion(context, batch);
     if (confirmed != true) return;
     final sentAt = DateTime.now();
-    final optimisticItemRefIds = batch.items
-        .map((item) => item.itemRefId)
-        .toSet();
     setState(() {
       _sending = true;
       _sentAtBySupplier[batch.supplier] = sentAt;
-      _pendingDashboardSubmissionItemRefIds.addAll(optimisticItemRefIds);
     });
+    final submissionCountNotifier = container.read(
+      dashboardPacketSubmissionCountProvider.notifier,
+    );
+    submissionCountNotifier.state = submissionCountNotifier.state + 1;
     try {
-      final packet = await ref.read(createPacketFromReadyOrdersProvider).call(
-            actor: actor,
-            supplierName: batch.supplier,
-            totalAmount: batch.totalAmount,
-            evidenceUrls: _quoteUrls,
-            itemRefIds: batch.items.map((item) => item.itemRefId).toList(growable: false),
-          );
-      final submittedPacket = await ref.read(submitPacketForExecutiveApprovalProvider).call(
-            actor: actor,
-            packetId: packet.id,
-            expectedVersion: packet.version,
-          );
+      final submittedPacket =
+          await ref.read(createAndSubmitPacketFromReadyOrdersProvider).call(
+                actor: actor,
+                supplierName: batch.supplier,
+                totalAmount: batch.totalAmount,
+                evidenceUrls: _quoteUrls,
+                itemRefIds: batch.items
+                    .map((item) => item.itemRefId)
+                    .toList(growable: false),
+              );
       final selectedItemRefIds = batch.items.map((item) => item.itemRefId).toSet();
       final affectedOrderIds = batch.items.map((item) => item.orderId).toSet();
-      if (!mounted) return;
       unawaited(
         _syncSentOrdersToDireccion(
           pendingOrders: pendingOrders,
@@ -505,34 +473,39 @@ class _ComprasDashboardScreenState extends ConsumerState<ComprasDashboardScreen>
           actor: actor,
         ),
       );
-      ref.invalidate(packetBundlesProvider);
-      ref.invalidate(readyOrdersProvider);
-      refreshOrderModuleTransitionData(ref, orderIds: affectedOrderIds);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Proveedor enviado a Direccion General.${submittedPacket.folio?.trim().isNotEmpty == true ? ' Folio ${submittedPacket.folio!.trim()}.' : ''}',
-          ),
-        ),
+      container.invalidate(packetBundlesProvider);
+      container.invalidate(readyOrdersProvider);
+      refreshOrderModuleTransitionDataFromContainer(
+        container,
+        orderIds: affectedOrderIds,
       );
-      setState(() {
-        _quoteUrls.clear();
-        _selectedSupplier = null;
-        _expandedOrderIds.clear();
-      });
+      if (mounted) {
+        messenger?.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Paquete enviado a Direccion General.${submittedPacket.folio?.trim().isNotEmpty == true ? ' Folio ${submittedPacket.folio!.trim()}.' : ''}',
+            ),
+          ),
+        );
+        setState(() {
+          _quoteUrls.clear();
+          _selectedSupplier = null;
+          _expandedOrderIds.clear();
+        });
+      }
     } catch (error, stack) {
-      if (!mounted) return;
-      setState(() {
-        _pendingDashboardSubmissionItemRefIds.removeAll(optimisticItemRefIds);
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            reportError(error, stack, context: 'ComprasDashboardScreen.send'),
+      if (mounted) {
+        messenger?.showSnackBar(
+          SnackBar(
+            content: Text(
+              reportError(error, stack, context: 'ComprasDashboardScreen.send'),
+            ),
           ),
-        ),
-      );
+        );
+      }
     } finally {
+      final current = submissionCountNotifier.state;
+      submissionCountNotifier.state = current > 0 ? current - 1 : 0;
       if (mounted) {
         setState(() {
           _sending = false;
@@ -3762,7 +3735,7 @@ class _FollowUpPacketContext {
       .toSet()
       .length;
 
-  DateTime? stageStartedAt(_PacketFollowUpStage stage) {
+  Duration previousStageDuration(_PacketFollowUpStage stage) {
     switch (stage) {
       case _PacketFollowUpStage.eta:
         final approvedDecision = bundle.decisions
@@ -3770,13 +3743,28 @@ class _FollowUpPacketContext {
             .toList(growable: false);
         if (approvedDecision.isNotEmpty) {
           approvedDecision.sort((left, right) => left.timestamp.compareTo(right.timestamp));
-          return approvedDecision.first.timestamp;
+          final enteredDireccionAt =
+              bundle.packet.submittedAt ??
+              bundle.packet.createdAt ??
+              approvedDecision.first.timestamp;
+          final duration = approvedDecision.first.timestamp.difference(
+            enteredDireccionAt,
+          );
+          return duration.isNegative ? Duration.zero : duration;
         }
-        return bundle.packet.updatedAt ?? bundle.packet.submittedAt ?? bundle.packet.createdAt;
+        return Duration.zero;
       case _PacketFollowUpStage.facturas:
-        return _earliestDateTime(
-          items.map((item) => item.orderItem.sentToContabilidadAt),
-        );
+        final candidateDurations = <Duration>[];
+        for (final item in items) {
+          final eta = item.orderItem.deliveryEtaDate;
+          final sentToFacturas = item.orderItem.sentToContabilidadAt;
+          if (eta == null || sentToFacturas == null) continue;
+          final duration = sentToFacturas.difference(eta);
+          candidateDurations.add(duration.isNegative ? Duration.zero : duration);
+        }
+        if (candidateDurations.isEmpty) return Duration.zero;
+        candidateDurations.sort((left, right) => left.compareTo(right));
+        return candidateDurations.first;
     }
   }
 }
@@ -3786,13 +3774,13 @@ class _FollowUpWaitingOrder {
     required this.order,
     required this.remainingCount,
     required this.totalTrackedCount,
-    required this.stageStartedAt,
+    required this.previousStageDuration,
   });
 
   final PurchaseOrder order;
   final int remainingCount;
   final int totalTrackedCount;
-  final DateTime? stageStartedAt;
+  final Duration previousStageDuration;
 }
 
 class _FollowUpPacketCard extends StatelessWidget {
@@ -3819,7 +3807,7 @@ class _FollowUpPacketCard extends StatelessWidget {
     final packet = contextData.bundle.packet;
     final orderIds = contextData.orders.map((order) => order.id).toList(growable: false);
     final previousStatusLabel = _followUpPreviousStatusLabel(stage);
-    final previousDuration = _elapsedSince(contextData.stageStartedAt(stage));
+    final previousDuration = contextData.previousStageDuration(stage);
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -3930,7 +3918,7 @@ class _FollowUpWaitingOrderCard extends StatelessWidget {
         ? 'items pendientes por mandar a facturas'
         : 'items pendientes por resolver';
     final previousStatusLabel = _followUpPreviousStatusLabel(stage);
-    final previousDuration = _elapsedSince(waitingOrder.stageStartedAt);
+    final previousDuration = waitingOrder.previousStageDuration;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -3996,7 +3984,7 @@ String _followUpPreviousStatusLabel(_PacketFollowUpStage stage) {
     case _PacketFollowUpStage.eta:
       return 'Direccion General';
     case _PacketFollowUpStage.facturas:
-      return 'Envio a Facturas y evidencias';
+      return 'Agregar fecha estimada';
   }
 }
 
@@ -4095,21 +4083,48 @@ List<_FollowUpWaitingOrder> _buildFollowUpWaitingOrders(
         items.where((item) => !item.orderItem.isResolved).length,
     };
     if (remainingCount <= 0) continue;
-    final stageStartedAt = switch (stage) {
-      _PacketFollowUpStage.eta => _earliestDateTime(<DateTime?>[
-          for (final item in items) item.orderItem.deliveryEtaDate,
-          for (final item in items) item.orderItem.sentToContabilidadAt,
-        ]),
-      _PacketFollowUpStage.facturas => _earliestDateTime(
-          <DateTime?>[for (final item in items) item.orderItem.sentToContabilidadAt],
-        ),
+    final previousStageDuration = switch (stage) {
+      _PacketFollowUpStage.eta => () {
+          final durations = <Duration>[];
+          for (final bundle in bundles.where((bundle) => bundle.packet.itemRefs.any((packetItem) => packetItem.orderId == order.id))) {
+            final approvedDecision = bundle.decisions
+                .where((decision) => decision.action == PacketDecisionAction.approve)
+                .toList(growable: false);
+            if (approvedDecision.isEmpty) continue;
+            approvedDecision.sort((left, right) => left.timestamp.compareTo(right.timestamp));
+            final enteredDireccionAt =
+                bundle.packet.submittedAt ??
+                bundle.packet.createdAt ??
+                approvedDecision.first.timestamp;
+            final duration = approvedDecision.first.timestamp.difference(
+              enteredDireccionAt,
+            );
+            durations.add(duration.isNegative ? Duration.zero : duration);
+          }
+          if (durations.isEmpty) return Duration.zero;
+          durations.sort((left, right) => left.compareTo(right));
+          return durations.first;
+        }(),
+      _PacketFollowUpStage.facturas => () {
+          final durations = <Duration>[];
+          for (final item in items) {
+            final eta = item.orderItem.deliveryEtaDate;
+            final sentToFacturas = item.orderItem.sentToContabilidadAt;
+            if (eta == null || sentToFacturas == null) continue;
+            final duration = sentToFacturas.difference(eta);
+            durations.add(duration.isNegative ? Duration.zero : duration);
+          }
+          if (durations.isEmpty) return Duration.zero;
+          durations.sort((left, right) => left.compareTo(right));
+          return durations.first;
+        }(),
     };
     waiting.add(
       _FollowUpWaitingOrder(
         order: order,
         remainingCount: remainingCount,
         totalTrackedCount: items.length,
-        stageStartedAt: stageStartedAt,
+        previousStageDuration: previousStageDuration,
       ),
     );
   }
@@ -4320,13 +4335,29 @@ Future<void> _attachAccountingEvidenceToPacket(
 ) async {
   final actor = ref.read(currentUserProfileProvider).value;
   if (actor == null) return;
-  final result = await _promptAccountingEvidence(context);
+  final selectedItems = packetContext.items
+      .map((context) => context.orderItem)
+      .toList(growable: false);
+  final result = await _promptAccountingEvidence(
+    context,
+    items: selectedItems,
+  );
   if (result == null) return;
   try {
     final repository = ref.read(purchaseOrderRepositoryProvider);
     for (final order in packetContext.orders) {
+      final updatedItemsByLine = <int, PurchaseOrderItem>{
+        for (final item in result.items) item.line: item,
+      };
+      final mergedItems = order.items
+          .map((item) => updatedItemsByLine[item.line] ?? item)
+          .toList(growable: false);
+      await repository.saveOrder(
+        order.copyWith(items: mergedItems),
+        actor: actor,
+      );
       await repository.attachAccountingEvidence(
-        order: order,
+        order: order.copyWith(items: mergedItems),
         facturaUrls: result.facturaUrls,
         paymentReceiptUrls: result.paymentReceiptUrls,
         actor: actor,
@@ -4419,10 +4450,12 @@ class _AccountingEvidenceResult {
   const _AccountingEvidenceResult({
     required this.facturaUrls,
     required this.paymentReceiptUrls,
+    required this.items,
   });
 
   final List<String> facturaUrls;
   final List<String> paymentReceiptUrls;
+  final List<PurchaseOrderItem> items;
 }
 
 Future<_PacketItemSelectionResult?> _selectPacketItemsForStage(
@@ -4645,12 +4678,17 @@ Future<List<_FollowUpPacketItemContext>?> _selectSpecificPacketItems(
 }
 
 Future<_AccountingEvidenceResult?> _promptAccountingEvidence(
-  BuildContext context,
-) async {
+  BuildContext context, {
+  required List<PurchaseOrderItem> items,
+}) async {
   final facturaController = TextEditingController();
   final receiptController = TextEditingController();
   final facturaUrls = <String>[];
   final receiptUrls = <String>[];
+  final internalOrderControllers = <int, TextEditingController>{
+    for (final item in items)
+      item.line: TextEditingController(text: (item.internalOrder ?? '').trim()),
+  };
   try {
     return await showDialog<_AccountingEvidenceResult>(
       context: context,
@@ -4757,6 +4795,31 @@ Future<_AccountingEvidenceResult?> _promptAccountingEvidence(
                             icon: const Icon(Icons.close),
                           ),
                         ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'OC interna por item',
+                        style: Theme.of(dialogContext).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      for (final item in items) ...[
+                        Text(
+                          'Item ${item.line} - ${item.description}',
+                          style: Theme.of(dialogContext).textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 6),
+                        TextField(
+                          controller: internalOrderControllers[item.line],
+                          keyboardType: TextInputType.number,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly,
+                          ],
+                          decoration: const InputDecoration(
+                            labelText: 'OC interna',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                     ],
                   ),
                 ),
@@ -4767,13 +4830,27 @@ Future<_AccountingEvidenceResult?> _promptAccountingEvidence(
                   child: const Text('Cancelar'),
                 ),
                 FilledButton(
-                  onPressed: facturaUrls.isEmpty || receiptUrls.isEmpty
+                  onPressed: facturaUrls.isEmpty ||
+                          receiptUrls.isEmpty ||
+                          items.any(
+                            (item) => (internalOrderControllers[item.line]?.text.trim().isEmpty ?? true),
+                          )
                       ? null
                       : () {
+                          final updatedItems = items
+                              .map(
+                                (item) => item.copyWith(
+                                  internalOrder:
+                                      internalOrderControllers[item.line]!.text.trim(),
+                                  clearInternalOrder: false,
+                                ),
+                              )
+                              .toList(growable: false);
                           Navigator.of(dialogContext).pop(
                             _AccountingEvidenceResult(
                               facturaUrls: List<String>.from(facturaUrls),
                               paymentReceiptUrls: List<String>.from(receiptUrls),
+                              items: updatedItems,
                             ),
                           );
                         },
@@ -4788,6 +4865,9 @@ Future<_AccountingEvidenceResult?> _promptAccountingEvidence(
   } finally {
     facturaController.dispose();
     receiptController.dispose();
+    for (final controller in internalOrderControllers.values) {
+      controller.dispose();
+    }
   }
 }
 

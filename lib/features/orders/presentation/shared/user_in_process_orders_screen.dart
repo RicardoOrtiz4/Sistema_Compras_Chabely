@@ -1238,7 +1238,7 @@ class _TrackingTimelineTile extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(
-                          status.label,
+                          _trackingStageLabel(status),
                           style: Theme.of(context).textTheme.titleMedium,
                         ),
                       ),
@@ -1570,7 +1570,7 @@ void _showTrackingStatusItemsSheet(
           itemBuilder: (context, index) {
             if (index == 0) {
               return Text(
-                '${status.label} (${items.length} item(s))',
+                '${_trackingStageLabel(status)} (${items.length} item(s))',
                 style: Theme.of(context).textTheme.titleMedium,
               );
             }
@@ -1875,6 +1875,29 @@ String? _noteForStatus(
 
 String _orderTrackingStatusLabel(PurchaseOrder order) {
   return requesterReceiptStatusLabel(order);
+}
+
+String _trackingStageLabel(PurchaseOrderStatus status) {
+  switch (status) {
+    case PurchaseOrderStatus.intakeReview:
+      return 'Autorizar ordenes';
+    case PurchaseOrderStatus.sourcing:
+      return 'Compras / Pendientes';
+    case PurchaseOrderStatus.readyForApproval:
+      return 'Compras / Dashboard';
+    case PurchaseOrderStatus.approvalQueue:
+      return 'Direccion General';
+    case PurchaseOrderStatus.paymentDone:
+      return 'Agregar fecha estimada';
+    case PurchaseOrderStatus.contabilidad:
+      return 'Facturas y evidencias';
+    case PurchaseOrderStatus.eta:
+      return 'Ordenes en proceso';
+    case PurchaseOrderStatus.orderPlaced:
+      return 'Ordenes en proceso';
+    case PurchaseOrderStatus.draft:
+      return 'Requiere correccion';
+  }
 }
 
 String _eventActorLabel(

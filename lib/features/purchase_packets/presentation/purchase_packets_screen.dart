@@ -660,6 +660,14 @@ bool _bundleCountsAsPendingDireccion(PacketBundle bundle) {
   return sorted.first.action != PacketDecisionAction.returnForRework;
 }
 
+String _compactLinkLabel(String value) {
+  final uri = Uri.tryParse(value.trim());
+  if (uri == null) return value.trim();
+  final host = uri.host.trim();
+  if (host.isEmpty) return value.trim();
+  return uri.pathSegments.isEmpty ? host : '$host/...';
+}
+
 bool _bundleMatchesOrderFilters(
   PacketBundle bundle,
   List<PurchaseOrder> orders, {
@@ -1119,8 +1127,23 @@ class _PacketList extends StatelessWidget {
                   const SizedBox(height: 12),
                   StatusDurationPill(
                     text:
-                        'Tiempo en Direccion General: ${formatDurationLabel(direccionGeneralDuration)}',
+                        'Tiempo en Compras: ${formatDurationLabel(direccionGeneralDuration)}',
                   ),
+                  if (packet.evidenceUrls.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final link in packet.evidenceUrls)
+                          ActionChip(
+                            avatar: const Icon(Icons.link_outlined, size: 18),
+                            label: Text(_compactLinkLabel(link)),
+                            onPressed: () => unawaited(_openExternalLink(context, link)),
+                          ),
+                      ],
+                    ),
+                  ],
                 ],
                 if (!isDireccionCard && bundle.decisions.isNotEmpty) ...[
                   const SizedBox(height: 10),

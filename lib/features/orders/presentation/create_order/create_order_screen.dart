@@ -448,22 +448,11 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
     );
     if (result == null) return;
 
-    final currentItems = ref.read(createOrderControllerProvider).items;
-    for (final index in result.itemIndexes) {
-      if (index < 0 || index >= currentItems.length) continue;
-      notifier.updateItem(
-        index,
-        result.clearClient
-            ? currentItems[index].copyWith(clearCustomer: true)
-            : currentItems[index].copyWith(customer: result.clientName),
-      );
-    }
+    notifier.replaceItems(result.items);
     _messenger?.showSnackBar(
       SnackBar(
         content: Text(
-          result.clearClient
-              ? 'Cliente removido de ${result.itemIndexes.length} item(s).'
-              : 'Cliente asignado a ${result.itemIndexes.length} item(s).',
+          'Asignacion de clientes actualizada.',
         ),
       ),
     );
@@ -621,14 +610,10 @@ class _CreateOrderActions extends StatelessWidget {
 
 class _ClientAssignmentResult {
   const _ClientAssignmentResult({
-    required this.clientName,
-    required this.itemIndexes,
-    this.clearClient = false,
+    required this.items,
   });
 
-  final String clientName;
-  final Set<int> itemIndexes;
-  final bool clearClient;
+  final List<OrderItemDraft> items;
 }
 
 class _ClientAssignmentDialog extends StatefulWidget {
@@ -648,10 +633,30 @@ class _ClientAssignmentDialog extends StatefulWidget {
 
 class _ClientAssignmentDialogState extends State<_ClientAssignmentDialog> {
   final Set<int> _selected = <int>{};
+  late List<OrderItemDraft> _items;
   String? _clientName;
 
   bool get _allSelected =>
-      widget.items.isNotEmpty && _selected.length == widget.items.length;
+      _selectableIndexes.isNotEmpty && _selected.length == _selectableIndexes.length;
+
+  Set<int> get _selectableIndexes {
+    final selectedClient = (_clientName ?? '').trim();
+    final indexes = <int>{};
+    for (var i = 0; i < _items.length; i++) {
+      final assignedClient = (_items[i].customer ?? '').trim();
+      if (assignedClient.isEmpty ||
+          (selectedClient.isNotEmpty && assignedClient == selectedClient)) {
+        indexes.add(i);
+      }
+    }
+    return indexes;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _items = widget.items.map((item) => item.copyWith()).toList(growable: true);
+  }
 
   Future<void> _pickClient() async {
     final selected = await showSearchableSelect(
@@ -662,16 +667,17 @@ class _ClientAssignmentDialogState extends State<_ClientAssignmentDialog> {
       onAdd: widget.onAddClient,
     );
     if (selected == null) return;
-    setState(() => _clientName = selected.trim());
+    setState(() {
+      _clientName = selected.trim();
+      _selected.removeWhere((index) => !_selectableIndexes.contains(index));
+    });
   }
 
   void _toggleAll(bool selected) {
     setState(() {
       _selected.clear();
       if (selected) {
-        for (var i = 0; i < widget.items.length; i++) {
-          _selected.add(i);
-        }
+        _selected.addAll(_selectableIndexes);
       }
     });
   }
@@ -689,25 +695,22 @@ class _ClientAssignmentDialogState extends State<_ClientAssignmentDialog> {
   void _apply() {
     final clientName = _clientName?.trim() ?? '';
     if (clientName.isEmpty || _selected.isEmpty) return;
-    Navigator.pop(
-      context,
-      _ClientAssignmentResult(
-        clientName: clientName,
-        itemIndexes: Set<int>.from(_selected),
-      ),
-    );
+    setState(() {
+      _items = [
+        for (var i = 0; i < _items.length; i++)
+          _selected.contains(i)
+              ? _items[i].copyWith(customer: clientName)
+              : _items[i],
+      ];
+      _selected.clear();
+    });
   }
 
-  void _clearAssignedClient() {
-    if (_selected.isEmpty) return;
-    Navigator.pop(
-      context,
-      _ClientAssignmentResult(
-        clientName: '',
-        itemIndexes: Set<int>.from(_selected),
-        clearClient: true,
-      ),
-    );
+  void _clearAssignedClient(int index) {
+    setState(() {
+      _items[index] = _items[index].copyWith(clearCustomer: true);
+      _selected.remove(index);
+    });
   }
 
   @override
@@ -743,8 +746,10 @@ class _ClientAssignmentDialogState extends State<_ClientAssignmentDialog> {
                   ),
                   const SizedBox(width: 8),
                   IconButton(
-                    tooltip: 'Quitar cliente',
-                    onPressed: _selected.isEmpty ? null : _clearAssignedClient,
+                    tooltip: 'Limpiar seleccion',
+                    onPressed: _selected.isEmpty
+                        ? null
+                        : () => setState(_selected.clear),
                     icon: const Icon(Icons.close),
                   ),
                 ],
@@ -754,7 +759,8 @@ class _ClientAssignmentDialogState extends State<_ClientAssignmentDialog> {
                 children: [
                   Checkbox(
                     value: _allSelected,
-                    onChanged: (value) => _toggleAll(value ?? false),
+                    onChanged:
+                        _selectableIndexes.isEmpty ? null : (value) => _toggleAll(value ?? false),
                   ),
                   const Text('Seleccionar todos'),
                   const Spacer(),
@@ -772,8 +778,11 @@ class _ClientAssignmentDialogState extends State<_ClientAssignmentDialog> {
                   shrinkWrap: true,
                   itemCount: widget.items.length,
                   itemBuilder: (context, index) {
-                    final item = widget.items[index];
+                    final item = _items[index];
                     final customer = (item.customer ?? '').trim();
+                    final selectedClient = (_clientName ?? '').trim();
+                    final selectable = customer.isEmpty ||
+                        (selectedClient.isNotEmpty && customer == selectedClient);
                     final details = <String>[
                       if (item.partNumber.trim().isNotEmpty)
                         'No. parte: ${item.partNumber}',
@@ -781,10 +790,14 @@ class _ClientAssignmentDialogState extends State<_ClientAssignmentDialog> {
                       if (customer.isNotEmpty) 'Cliente actual: $customer',
                     ];
 
-                    return CheckboxListTile(
+                    return ListTile(
                       contentPadding: EdgeInsets.zero,
-                      value: _selected.contains(index),
-                      onChanged: (value) => _toggleItem(index, value ?? false),
+                      leading: Checkbox(
+                        value: _selected.contains(index),
+                        onChanged: selectable
+                            ? (value) => _toggleItem(index, value ?? false)
+                            : null,
+                      ),
                       title: Text(
                         'Item ${item.line}: ${item.description}',
                         maxLines: 2,
@@ -794,6 +807,13 @@ class _ClientAssignmentDialogState extends State<_ClientAssignmentDialog> {
                         details.join(' | '),
                         style: theme.textTheme.bodySmall,
                       ),
+                      trailing: customer.isEmpty
+                          ? null
+                          : IconButton(
+                              tooltip: 'Deshacer cliente',
+                              onPressed: () => _clearAssignedClient(index),
+                              icon: const Icon(Icons.undo_outlined),
+                            ),
                     );
                   },
                 ),
@@ -806,6 +826,13 @@ class _ClientAssignmentDialogState extends State<_ClientAssignmentDialog> {
         TextButton(
           onPressed: () => Navigator.pop(context),
           child: const Text('Cancelar'),
+        ),
+        FilledButton.tonal(
+          onPressed: () => Navigator.pop(
+            context,
+            _ClientAssignmentResult(items: _items),
+          ),
+          child: const Text('Listo'),
         ),
         FilledButton(
           onPressed: canApply ? _apply : null,

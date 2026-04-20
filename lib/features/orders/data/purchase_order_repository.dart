@@ -156,6 +156,30 @@ class PurchaseOrderRepository {
     return _parseOrdersMap(snapshot.value);
   }
 
+  Future<void> saveOrder(
+    PurchaseOrder order, {
+    AppUser? actor,
+  }) async {
+    final payload = order.toMap()
+      ..['updatedAt'] = appServerTimestamp;
+    await _ordersRef.child(order.id).update(payload);
+
+    if (actor != null) {
+      unawaited(
+        _appendEvent(
+          _ordersRef.child(order.id),
+          fromStatus: order.status,
+          toStatus: order.status,
+          byUserId: actor.id,
+          byRole: _actorRoleLabel(actor),
+          type: 'save',
+          comment: 'Orden actualizada.',
+          itemsSnapshot: order.items,
+        ),
+      );
+    }
+  }
+
   Future<List<PurchaseOrder>> fetchOrdersByStatus(
     PurchaseOrderStatus status, {
     int? limit,

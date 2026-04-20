@@ -1,218 +1,309 @@
-OBJETIVO:
-Crear un dashboard limpio, minimalista y altamente legible para monitoreo de órdenes, optimizado para escaneo rápido (que se entienda en menos de 3 segundos).
+Quiero que actúes como un ingeniero senior de migración de software y arquitectura frontend. Tu tarea es migrar mi proyecto actual hecho en Flutter a una nueva aplicación en Next.js, manteniendo la lógica de negocio, la estructura funcional y el comportamiento del sistema lo más fiel posible, pero adaptando la experiencia de usuario a un sistema web profesional para escritorio.
 
-PRINCIPIOS DE DISEÑO (MUY IMPORTANTE):
-- Eliminar información repetida
-- Priorizar jerarquía visual sobre texto
-- Usar color como significado (no decoración)
-- Reducir texto al mínimo
-- Cada tarjeta debe ser entendible sin leer todo
+IMPORTANTE:
+- No quiero una demo.
+- No quiero una maqueta vacía.
+- No quiero que inventes módulos que no existan.
+- No quiero que simplifiques la lógica si ya existe implementada.
+- Quiero una migración real, ordenada, mantenible y escalable.
+- Antes de modificar código, primero analiza el proyecto completo y explícame qué encontraste.
+- Si algo no puede migrarse 1:1, propón la mejor equivalencia en web y luego impleméntala.
+- Trabaja por fases, pero deja código funcional en cada fase.
+- No hagas cambios destructivos sin explicarlos.
+- Conserva nombres de módulos, entidades, procesos y flujo del negocio siempre que sea posible.
 
-ESTRUCTURA DE LA PANTALLA:
-1) HEADER SUPERIOR:
-- Título: "Monitoreo"
-- Input de búsqueda (bordes redondeados)
-- Botones:
-  - "Rango de fechas"
-  - "Exportar CSV"
-  - "Exportar PDF"
-2) SECCIÓN KPI (Resumen operativo):
-- 3 tarjetas:
-  - Activas (color azul)
-  - Normales (gris)
-  - Urgentes (rojo)
-- Número grande
-- Texto pequeño debajo
-- Diseño limpio sin ruido visual
-3) SECCIÓN "ACTIVIDAD RECIENTE":
-Cada orden debe mostrarse como una TARJETA LIMPIA con esta estructura EXACTA:
-DISEÑO DE TARJETA:
-- LADO IZQUIERDO:
-  Barra vertical de color según estado:
-  - Verde → Normal
-  - Amarillo → En proceso
-  - Rojo → Urgente
-  - Azul → Informativo
-- CONTENIDO PRINCIPAL:
-  Fila 1:
-  - Folio (grande, en negrita)
-  - Usuario + área (texto pequeño, gris)
-  Fila 2:
-  - Etapa (como chip/pastilla con color suave)
-  Fila 3:
-  - Movimiento en formato corto:
-    Ejemplo:
-    "Validación → Cierre documental"
-- LADO DERECHO:
-  - Tiempo (icono ⏱)
-  - Número de movimientos (icono 🔄)
-- ACCIONES:
-  - Botón: "Ver detalle"
-  - Botón: "Ver PDF"
-  - Menú opcional (3 puntos)
-- PARTE INFERIOR DERECHA (resumen visual):
-  Ejemplos:
-  - "1 enviado"
-  - "2 pendientes"
-  Con fondo de color suave
-REGLAS CRÍTICAS:
-- NO repetir la misma información en varias partes
-- NO usar textos largos ni explicativos
-- NO usar etiquetas innecesarias como "Movimiento reciente"
-- Usar espacios en lugar de líneas divisorias
-- Bordes redondeados (12–16)
-- Padding consistente (16–20)
+CONTEXTO DEL PROYECTO:
+Mi proyecto actual está hecho en Flutter y funciona bien en Android, pero necesito moverlo a Next.js porque lo usaré principalmente en PC. El sistema es administrativo/empresarial, así que la nueva interfaz debe estar optimizada para escritorio, con buena legibilidad, tablas claras, formularios cómodos, navegación lateral, filtros, estados visuales y carga eficiente de datos.
 
-ESTILO VISUAL:
-- Fondo general: gris muy claro
-- Tarjetas: blanco
-- Sombras: suaves (elevation bajo)
-- Iconos: estilo minimalista (outline)
-- Tipografía:
-  - Títulos: negrita
-  - Secundario: gris
-  - Metadata: pequeño
-INTERACCIONES:
-- Hover con ligera elevación (en desktop)
-- Transiciones suaves
-- Click en tarjeta abre detalle
-ENTREGABLES:
-1. Pantalla completa en Flutter (MonitoreoPage)
-2. Widgets reutilizables:
-   - OrderCard
-   - KPIBox
-   - StatusIndicator
-3. Código limpio, organizado y listo para usar
-4. Sin comentarios innecesarios
+OBJETIVO GENERAL:
+Migrar el sistema desde Flutter hacia Next.js conservando:
+1. lógica de negocio
+2. catálogos
+3. formularios
+4. autenticación
+5. roles/permisos
+6. flujos de autorización
+7. consultas
+8. reportes
+9. validaciones
+10. estructura de datos
+11. integración con backend/Firebase si ya existe
 
-OBJETIVO PRINCIPAL:
-Crear una pantalla de reportes tipo dashboard empresarial/SaaS, con excelente jerarquía visual, poco ruido, colores suaves, tarjetas limpias y gráficos fáciles de entender.
+OBJETIVO TÉCNICO:
+Necesito que conviertas el proyecto a una arquitectura moderna basada en:
+- Next.js reciente con App Router
+- JavaScript o TypeScript (prefiero: [ESCRIBE AQUÍ TU PREFERENCIA: TypeScript o JavaScript])
+- componentes reutilizables
+- separación clara entre UI, lógica, servicios y modelos
+- diseño responsive, pero priorizando escritorio
+- código limpio, mantenible y fácil de continuar después
 
-ESTILO VISUAL:
-- Fondo general gris muy claro
-- Tarjetas blancas
-- Bordes redondeados entre 14 y 18 px
-- Sombras suaves, discretas
-- Espaciado amplio
-- Tipografía moderna y legible
-- Iconos outline/minimalistas
-- Colores suaves pero funcionales
-- Aspecto premium tipo dashboard SaaS
-REQUISITOS DE DISEÑO:
-1) HEADER SUPERIOR
-Crear una barra superior limpia con:
-- Ícono de menú a la izquierda
-- Título grande: "Reportes"
-- A la derecha:
-  - Botón "Rango de fechas"
-  - Botón "Limpiar"
-Debajo del header agregar filtros rápidos en forma de chips/botones:
-- "Todo el historial" (activo por defecto)
-- "Hoy"
-- "7 días"
-- "30 días"
-- "Este mes"
-El filtro activo debe verse resaltado con fondo oscuro o primario y texto claro.
-Los demás deben tener fondo claro y borde sutil.
-2) SECCIÓN "RESUMEN EJECUTIVO"
-Debajo de los filtros, agregar una tarjeta/contenedor grande con título:
-- "Resumen ejecutivo"
-Dentro, mostrar una fila de KPI cards, con 6 tarjetas:
-- Órdenes
-- Activas
-- Finalizadas
-- Rechazadas
-- Urgentes
-- Con proveedor
-Cada KPI card debe incluir:
-- Un ícono dentro de un cuadro o círculo con fondo suave
-- Un número grande y dominante
-- El nombre del KPI
-- Un texto secundario pequeño debajo
-Usar color suave distinto por categoría:
-- Órdenes: azul
-- Activas: verde
-- Finalizadas: verde suave o esmeralda
-- Rechazadas: rojo suave
-- Urgentes: naranja o ámbar
-- Con proveedor: azul suave
-Muy importante:
-- Hacer que el número destaque mucho
-- Evitar saturación visual
-- Mantener consistencia total entre las tarjetas
-3) SECCIÓN DE CONTENIDO PRINCIPAL EN 2 COLUMNAS
-Debajo del resumen ejecutivo, crear una fila con dos paneles grandes:
-COLUMNA IZQUIERDA:
-Panel "Top proveedores por orden"
-Debe incluir:
-- Título: "Top proveedores por orden"
-- Subtítulo: "Órdenes acumuladas por proveedor en el rango"
-- Un pequeño bloque resaltado con:
-  - "Total con proveedor: 2"
-Luego una lista visual de proveedores, por ejemplo:
-1. ee
-2. juan
-Cada proveedor debe tener:
-- Número de posición dentro de un círculo suave
-- Nombre del proveedor
-- Cantidad de órdenes alineada a la derecha, por ejemplo: "1 ord"
-- Una barra horizontal decorativa/proporcional debajo del nombre
-Abajo del panel agregar un botón/link:
-- "Ver todos los proveedores"
-Este panel debe verse limpio, elegante y con buena separación vertical.
-COLUMNA DERECHA:
-Panel "Tendencia de órdenes"
-Debe incluir:
-- Título: "Tendencia de órdenes"
-- Subtítulo: "Últimos 6 meses de órdenes registradas"
-- Un chip o etiqueta que diga: "Total órdenes: 5"
-- Un selector pequeño arriba a la derecha que diga: "Por mes"
-Debajo, agregar una gráfica de barras limpia y moderna.
-Datos de ejemplo:
-- Nov 2025 = 1
-- Dic 2025 = 1
-- Ene 2026 = 2
-- Feb 2026 = 0
-- Mar 2026 = 1
-- Abr 2026 = 0
-Requisitos de la gráfica:
-- Barras verticales azules
-- Eje inferior con meses
-- Eje lateral simple
-- Líneas guía muy sutiles
-- Números encima de las barras cuando aplique
-- Diseño limpio y minimalista
-4) BLOQUE INFORMATIVO INFERIOR
-Debajo de ambos paneles, agregar una franja o tarjeta informativa horizontal con:
-- Ícono de información
-- Texto:
-  "Los reportes se generan con base en la fecha de creación de las órdenes."
-Debe verse discreto, útil y bien integrado al diseño.
-REGLAS IMPORTANTES:
-- No repetir texto innecesario
-- No meter texto explicativo largo
-- No saturar con bordes ni líneas pesadas
-- No usar demasiados colores fuertes
-- Todo debe verse limpio y entendible rápidamente
-- La prioridad es claridad, jerarquía visual y apariencia profesional
-- El diseño debe parecer listo para producción
-COMPONENTES REUTILIZABLES QUE DEBES CREAR:
-- ReportsPage
-- ReportsHeader
-- FilterChipGroup
-- SummaryKpiCard
-- TopSuppliersCard
-- SupplierRow
-- OrdersTrendCard
-- InfoBanner
-REQUISITOS TÉCNICOS:
-- Usa widgets reutilizables
-- Código ordenado
-- Separar bien estructura y estilos
-- Mantener nombres claros
-- Evitar comentarios innecesarios
-- Debe quedar listo para integrarse a un proyecto real
-- Si hace falta, usar datos mock para renderizar la interfaz
-ENTREGABLE:
-Genera el código completo de la pantalla en Flutter, con sus widgets auxiliares, manteniendo una apariencia lo más similar posible a la referencia visual y con enfoque en UI premium, moderna y fácil de entender.
+STACK DESEADO:
+Usa esta base, salvo que encuentres una razón fuerte para ajustar algo:
+- Next.js
+- React
+- App Router
+- [TypeScript o JavaScript, según corresponda]
+- Tailwind CSS
+- Firebase si el proyecto actual ya depende de Firebase
+- React Hook Form para formularios
+- Zod para validaciones, si conviene
+- TanStack Query si hay muchas consultas y sincronización útil
+- Zustand o Context API si hace falta estado global
+- Componentes modulares reutilizables
+- Tabla profesional para listados administrativos
+- Manejo correcto de loaders, errores, estados vacíos y feedback visual
 
+INSTRUCCIONES DE TRABAJO:
+Quiero que sigas exactamente este proceso:
+
+FASE 1. ANÁLISIS DEL PROYECTO FLUTTER
+1. Recorre todo el proyecto actual.
+2. Identifica:
+   - pantallas
+   - widgets principales
+   - rutas
+   - modelos
+   - servicios
+   - providers / controllers / blocs / riverpod / lógica de estado usada
+   - lógica de autenticación
+   - integración con Firebase o APIs
+   - validaciones
+   - flujos del negocio
+   - dependencias clave
+3. Entrégame un resumen claro con:
+   - módulos detectados
+   - flujo general del sistema
+   - estructura de carpetas relevante
+   - riesgos de migración
+   - piezas que sí se pueden migrar directo
+   - piezas que necesitan reinterpretación para web
+4. No comiences a migrar sin mostrar primero ese diagnóstico.
+
+FASE 2. MAPEO FLUTTER -> NEXT.JS
+Después del análisis, crea un plan de equivalencias:
+- cada pantalla Flutter -> ruta/página de Next.js
+- cada widget reutilizable -> componente React
+- cada modelo -> interfaz/type o esquema equivalente
+- cada servicio -> módulo de servicios en Next.js
+- cada flujo de navegación -> routing web equivalente
+- cada formulario -> componente web con validación equivalente
+- cada tabla/listado -> tabla web optimizada para escritorio
+- cada operación CRUD -> acción o servicio equivalente
+- cada guard de acceso -> validación de sesión/rol equivalente
+
+Necesito que me muestres este mapeo antes de ejecutar la migración completa.
+
+FASE 3. DEFINICIÓN DE ARQUITECTURA DE DESTINO
+Propón e implementa una estructura profesional como esta o una mejor equivalente:
+
+src/
+  app/
+  components/
+    ui/
+    layout/
+    forms/
+    tables/
+    shared/
+  features/
+    auth/
+    dashboard/
+    [modulos-del-sistema]
+  lib/
+    firebase/
+    utils/
+    validators/
+    constants/
+  services/
+  hooks/
+  store/
+  types/
+
+Si encuentras una mejor estructura, úsala, pero explícala.
+
+FASE 4. IMPLEMENTACIÓN BASE
+Construye primero la base del sistema:
+1. configuración del proyecto
+2. layout principal de escritorio
+3. sidebar
+4. header
+5. sistema de rutas
+6. login
+7. protección de rutas
+8. manejo de sesión
+9. roles/permisos
+10. tema visual base administrativo/profesional
+
+REQUISITOS DE UI:
+- Nada de diseño móvil reciclado
+- Nada de tarjetas gigantes innecesarias
+- Nada de espacios exagerados
+- La app debe sentirse como sistema administrativo real de empresa
+- Sidebar fijo y claro
+- Header limpio
+- Breadcrumbs si aportan valor
+- Tablas con búsqueda, filtros y paginación si aplica
+- Formularios claros y cómodos
+- Buena jerarquía visual
+- Colores sobrios y profesionales
+- Estados visuales para aprobado / pendiente / rechazado / en proceso / completado, o los equivalentes del sistema
+- Componentes consistentes entre módulos
+
+FASE 5. MIGRACIÓN DE MÓDULOS
+Migra los módulos del sistema uno por uno, respetando prioridad funcional. Para cada módulo:
+1. identifica su fuente Flutter
+2. migra UI
+3. migra lógica
+4. migra validaciones
+5. conecta datos reales
+6. verifica permisos
+7. deja el módulo funcional antes de pasar al siguiente
+
+ORDEN SUGERIDO:
+- autenticación
+- dashboard
+- catálogos
+- registros
+- procesos operativos
+- autorizaciones
+- reportes
+- configuración
+- utilidades
+
+Si el sistema tiene un orden real distinto, respétalo.
+
+FASE 6. FIREBASE / BACKEND / DATOS
+Si el proyecto Flutter usa Firebase, conserva la integración.
+Debes identificar y migrar correctamente:
+- Authentication
+- Realtime Database / Firestore
+- Storage
+- reglas de acceso según rol
+- lectura/escritura
+- estructuras de documentos o nodos
+- listeners en tiempo real si existen
+- flujos de actualización de estado
+
+Si el sistema depende de backend externo o APIs:
+- localiza endpoints
+- documenta qué hace cada uno
+- crea servicios equivalentes en Next.js
+- centraliza fetch/axios
+- maneja errores correctamente
+- evita repetir lógica
+
+IMPORTANTE:
+No rompas la lógica del negocio por intentar “modernizar” de más.
+Primero conserva funcionamiento; después mejora estructura.
+
+FASE 7. VALIDACIONES Y COMPORTAMIENTO
+Necesito que respetes:
+- validaciones obligatorias
+- reglas de negocio
+- estados permitidos
+- restricciones por rol
+- condiciones para mostrar/ocultar acciones
+- secuencias de autorización
+- mensajes de error
+- comportamiento condicional en formularios
+- cálculos automáticos si existen
+- autollenado de campos si existe en Flutter
+- persistencia y lectura correcta de datos
+
+FASE 8. DIFERENCIAS ENTRE APP MÓVIL Y WEB
+Quiero que hagas adaptaciones correctas de UX:
+- formularios más amplios
+- tablas en vez de listas cuando tenga sentido
+- modales solo donde aporten valor
+- acciones masivas si conviene
+- accesibilidad con teclado
+- confirmaciones claras para acciones críticas
+- vista detallada bien estructurada
+- filtros persistentes si aplica
+- exportación/impresión/download si el sistema lo requiere
+
+Pero:
+- no cambies el negocio
+- no inventes procesos nuevos
+- no elimines funciones existentes sin justificarlo
+
+FASE 9. ENTREGABLES QUE QUIERO EN CADA AVANCE
+En cada bloque de trabajo entrégame:
+1. qué encontraste
+2. qué vas a migrar
+3. qué archivos crearás o modificarás
+4. código completo, no solo fragmentos, cuando el archivo cambie de forma importante
+5. explicación breve pero técnica
+6. posibles riesgos
+7. siguiente paso recomendado
+
+FASE 10. REGLAS DE IMPLEMENTACIÓN
+- No me des solo ideas: implementa
+- No me dejes pseudocódigo
+- No dejes TODOs vacíos salvo que sea estrictamente inevitable
+- No inventes nombres ambiguos
+- Usa nombres claros y consistentes
+- Conserva la semántica de negocio del proyecto original
+- Si detectas código duplicado, refactoriza con cuidado
+- No metas librerías innecesarias
+- Evita sobreingeniería
+- Prioriza claridad, mantenibilidad y funcionamiento real
+
+MODO DE TRABAJO:
+Quiero que trabajes así:
+1. Primero inspecciona el proyecto actual.
+2. Luego dame diagnóstico.
+3. Luego dame el mapa de migración Flutter -> Next.
+4. Luego implementa la base del proyecto.
+5. Luego migra módulo por módulo.
+6. Siempre muestra cambios concretos y funcionales.
+
+SI HAY INCERTIDUMBRE:
+- No te detengas.
+- No preguntes de más si puedes inferirlo del código.
+- Elige la alternativa más profesional y cercana al comportamiento actual.
+- Documenta brevemente la decisión.
+- Continúa.
+
+CRITERIOS DE CALIDAD:
+La migración final debe cumplir con esto:
+- funcionalmente equivalente al sistema Flutter
+- mejor adaptada a escritorio
+- estructura limpia
+- componentes reutilizables
+- navegación clara
+- permisos correctos
+- formularios sólidos
+- tablas profesionales
+- código mantenible
+- lista para seguir creciendo
+
+FORMATO DE RESPUESTA INICIAL QUE QUIERO DE TI:
+Empieza respondiendo exactamente con estas secciones:
+1. Resumen del sistema detectado
+2. Módulos encontrados
+3. Dependencias y arquitectura actual
+4. Riesgos de migración
+5. Equivalencias Flutter -> Next.js
+6. Propuesta de arquitectura destino
+7. Plan de implementación por fases
+
+Después de mostrar eso, comienza la implementación.
+
+REPOSITORIO / PROYECTO A ANALIZAR:
+[PEGA AQUÍ TU CÓDIGO O ABRE EL REPOSITORIO ACTUAL]
+
+SI DETECTAS QUE EL PROYECTO CORRESPONDE A UN SISTEMA DE COMPRAS O ADMINISTRATIVO:
+Quiero que priorices una interfaz tipo ERP ligero / panel administrativo profesional:
+- sidebar lateral
+- módulos por secciones
+- dashboard claro
+- tablas densas pero legibles
+- filtros útiles
+- formularios por bloques
+- estados y trazabilidad visibles
+- historial o timeline cuando aplique
+- experiencia pensada para capturistas, administrativos, compras, autorización y dirección, si esos roles existen en el sistema
+
+MUY IMPORTANTE:
+No me entregues una migración superficial. Quiero una conversión seria del proyecto Flutter a Next.js, guiada por el código real del repositorio.
