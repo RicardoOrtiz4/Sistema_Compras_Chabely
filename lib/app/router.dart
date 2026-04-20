@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:sistema_compras/features/orders/presentation/preview/pdf_open_helper.dart';
 
+import 'package:sistema_compras/core/access_control.dart';
 import 'package:sistema_compras/core/navigation/app_shell_keys.dart';
 import 'package:sistema_compras/features/screens.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
@@ -110,81 +110,54 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const ReportsScreen(),
       ),
       GoRoute(
-        path: '/orders/pending',
-        name: 'pendingOrders',
-        builder: (context, state) => const PendingOrdersScreen(),
+        path: '/orders/authorize',
+        name: 'authorizeOrders',
+        builder: (context, state) => const AuthorizeOrdersScreen(),
       ),
       GoRoute(
-        path: '/orders/cotizaciones',
-        name: 'cotizacionesOrders',
-        builder: (context, state) => const CotizacionesOrdersScreen(),
+        path: '/orders/compras',
+        name: 'compras',
+        builder: (context, state) => const ComprasHubScreen(),
       ),
       GoRoute(
-        path: '/orders/cotizaciones/dashboard',
-        name: 'cotizacionesDashboard',
-        builder: (context, state) => const CotizacionesDashboardScreen(
-          mode: CotizacionesDashboardMode.compras,
-        ),
+        path: '/orders/compras/pendientes',
+        name: 'comprasPendientes',
+        builder: (context, state) => const ComprasPendingScreen(),
       ),
       GoRoute(
-        path: '/orders/cotizaciones/:orderId',
-        name: 'cotizacionOrderReview',
-        builder: (context, state) {
-          final orderId = state.pathParameters['orderId']!;
-          final fromDashboard =
-              state.uri.queryParameters['fromDashboard'] == '1';
-          return CotizacionOrderReviewScreen(
-            orderId: orderId,
-            fromDashboard: fromDashboard,
-          );
-        },
+        path: '/orders/compras/dashboard',
+        name: 'comprasDashboard',
+        builder: (context, state) => const ComprasDashboardScreen(),
       ),
       GoRoute(
-        path: '/orders/eta',
-        name: 'pendingEtaOrders',
-        builder: (context, state) => const InProcessSupplierEtaScreen(),
+        path: '/orders/compras/historial-pdfs',
+        name: 'generalQuoteHistory',
+        builder: (context, state) => const GeneralQuoteHistoryScreen(),
+      ),
+      GoRoute(
+        path: '/orders/direccion-general',
+        name: 'direccionGeneral',
+        builder: (context, state) => const PurchasePacketsScreen.direccionGeneral(),
+      ),
+      GoRoute(
+        path: '/orders/agregar-fecha-estimada',
+        name: 'addEstimatedDate',
+        builder: (context, state) => const AddEstimatedDateScreen(),
+      ),
+      GoRoute(
+        path: '/orders/facturas-evidencias',
+        name: 'facturasEvidencias',
+        builder: (context, state) => const FacturasEvidenciasScreen(),
+      ),
+      GoRoute(
+        path: '/purchase-packets',
+        name: 'purchasePackets',
+        builder: (context, state) => const PurchasePacketsScreen(),
       ),
       GoRoute(
         path: '/orders/in-process',
         name: 'userInProcessOrders',
         builder: (context, state) => const UserInProcessOrdersScreen(),
-      ),
-      GoRoute(
-        path: '/orders/direccion',
-        name: 'direccionOrders',
-        builder: (context, state) => const DireccionOrdersScreen(),
-      ),
-      GoRoute(
-        path: '/orders/direccion/dashboard',
-        name: 'direccionDashboard',
-        builder: (context, state) => CotizacionesDashboardScreen(
-          mode: CotizacionesDashboardMode.direccion,
-          onOpenOrder: (orderId) => guardedPdfPush(context, '/orders/$orderId/pdf'),
-        ),
-      ),
-      GoRoute(
-        path: '/orders/direccion/cotizacion/:quoteId',
-        name: 'direccionQuoteReview',
-        builder: (context, state) {
-          final quoteId = state.pathParameters['quoteId']!;
-          return DireccionQuoteReviewScreen(quoteId: quoteId);
-        },
-      ),
-      GoRoute(
-        path: '/orders/review/:orderId',
-        name: 'pendingOrderReview',
-        builder: (context, state) {
-          final orderId = state.pathParameters['orderId']!;
-          return PendingOrderReviewScreen(orderId: orderId);
-        },
-      ),
-      GoRoute(
-        path: '/orders/review/:orderId/approve',
-        name: 'pendingOrderApprove',
-        builder: (context, state) {
-          final orderId = state.pathParameters['orderId']!;
-          return PendingOrderApprovalScreen(orderId: orderId);
-        },
       ),
       GoRoute(
         path: '/orders/rejected',
@@ -193,26 +166,13 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/orders/rejected/all',
-        name: 'globalActionMonitoring',
-        builder: (context, state) => const GlobalActionMonitoringScreen(),
+        name: 'rejectedOrdersAll',
+        builder: (context, state) => const RejectedOrdersAllScreen(),
       ),
       GoRoute(
         path: '/orders/monitoring',
         name: 'orderMonitoring',
         builder: (context, state) => const OrderMonitoringScreen(),
-      ),
-      GoRoute(
-        path: '/orders/contabilidad',
-        name: 'contabilidadOrders',
-        builder: (context, state) => const ContabilidadSupplierGroupsScreen(),
-      ),
-      GoRoute(
-        path: '/orders/contabilidad/:orderId',
-        name: 'contabilidadOrderReview',
-        builder: (context, state) {
-          final orderId = state.pathParameters['orderId']!;
-          return ContabilidadOrderReviewScreen(orderId: orderId);
-        },
       ),
       GoRoute(
         path: '/orders/:orderId/pdf',
@@ -251,6 +211,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         return loggingIn ? null : '/login';
       }
       if (loggingIn || atSplash) {
+        return '/home';
+      }
+      final user = profileAsync.value;
+      if (!canAccessRoute(user, state.matchedLocation)) {
         return '/home';
       }
       return null;

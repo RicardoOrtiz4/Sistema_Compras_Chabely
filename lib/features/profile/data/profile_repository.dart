@@ -52,29 +52,7 @@ class ProfileRepository {
   }
 
   Stream<List<AreaOption>> watchAreas() {
-    return _database.ref('areas').onValue.map((event) {
-      final value = event.snapshot.value;
-      if (value is! Map) return <AreaOption>[];
-      final areas = <AreaOption>[];
-      value.forEach((key, raw) {
-        final id = key.toString();
-        var name = id;
-        if (raw is Map && raw['name'] is String) {
-          final rawName = (raw['name'] as String).trim();
-          if (rawName.isNotEmpty) {
-            name = rawName;
-          }
-        } else if (raw is String) {
-          final rawName = raw.trim();
-          if (rawName.isNotEmpty) {
-            name = rawName;
-          }
-        }
-        areas.add(AreaOption(id: id, name: normalizeAreaLabel(name)));
-      });
-      areas.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-      return areas;
-    });
+    return Stream.value(_requiredAreaOptions);
   }
 
   Future<void> updateProfileToken({
@@ -107,45 +85,37 @@ class ProfileRepository {
     });
   }
 
-  Future<void> updateContactEmail({
+  Future<void> updateAdminEditableProfile({
     required String uid,
-    required String contactEmail,
-  }) async {
-    final trimmed = contactEmail.trim();
-    await _database.ref('users/$uid').update({
-      'contactEmail': trimmed.isEmpty ? null : trimmed,
-      'updatedAt': appServerTimestamp,
-    });
-  }
-
-  Future<void> createUserWithRole({
     required String name,
-    required String email,
-    required String password,
     required String role,
     required String areaId,
+    required String areaName,
   }) async {
-    throw StateError('Operacion no disponible sin Cloud Functions.');
-  }
-
-  Future<void> deleteUser({required String uid}) async {
-    throw StateError('Operacion no disponible sin Cloud Functions.');
+    final trimmedName = name.trim();
+    await _database.ref('users/$uid').update({
+      'name': trimmedName,
+      'role': role,
+      'areaId': areaId,
+      'areaName': areaName,
+      'updatedAt': appServerTimestamp,
+    });
   }
 
   Future<void> seedAreas() async {
     final areasRef = _database.ref('areas');
     final snapshot = await areasRef.get();
     if (!snapshot.exists) {
-      await areasRef.set(_defaultAreas);
+      await areasRef.set(_requiredDefaultAreas);
       return;
     }
     if (snapshot.value is! Map) {
-      await areasRef.set(_defaultAreas);
+      await areasRef.set(_requiredDefaultAreas);
       return;
     }
     final existing = Map<String, dynamic>.from(snapshot.value as Map);
     final updates = <String, dynamic>{};
-    for (final entry in _defaultAreas.entries) {
+    for (final entry in _requiredDefaultAreas.entries) {
       if (!existing.containsKey(entry.key)) {
         updates[entry.key] = entry.value;
       }
@@ -165,12 +135,69 @@ String _encodeTokenKey(String token) {
   return token.replaceAll(RegExp(r'[.#$\\[\\]/]'), '_');
 }
 
-const _defaultAreas = <String, Map<String, String>>{
-  'Compras': {'name': 'Compras'},
-  'Gerencia': {'name': 'Dirección General'},
-  'Contabilidad': {'name': 'Contabilidad'},
-  'Software': {'name': 'Software'},
+const _requiredDefaultAreas = <String, Map<String, String>>{
+  adminAreaLabel: {'name': adminAreaLabel},
+  direccionGeneralLabel: {'name': direccionGeneralLabel},
+  contraloriaLabel: {'name': contraloriaLabel},
+  comprasLabel: {'name': comprasLabel},
+  'Sistema de Gestion de Calidad (SGC)': {
+    'name': 'Sistema de Gestion de Calidad (SGC)',
+  },
+  'Ventas (VEN)': {'name': 'Ventas (VEN)'},
+  'Desarrollo y Nuevos Proyectos (DNP)': {
+    'name': 'Desarrollo y Nuevos Proyectos (DNP)',
+  },
+  'Ingenieria de Manufactura (IMA)': {
+    'name': 'Ingenieria de Manufactura (IMA)',
+  },
+  'Planeacion y Control de la Produccion (PPR)': {
+    'name': 'Planeacion y Control de la Produccion (PPR)',
+  },
+  'Produccion (PRO)': {'name': 'Produccion (PRO)'},
+  'Control de Calidad (CCA)': {'name': 'Control de Calidad (CCA)'},
+  'Almacenes (ALM)': {'name': 'Almacenes (ALM)'},
+  'Mantenimiento (MAN)': {'name': 'Mantenimiento (MAN)'},
+  'Recursos Humanos (RHU)': {'name': 'Recursos Humanos (RHU)'},
+  'Seguridad e Higiene (EHS)': {'name': 'Seguridad e Higiene (EHS)'},
+  contabilidadLabel: {'name': contabilidadLabel},
+  tesoreriaLabel: {'name': tesoreriaLabel},
+  nominasLabel: {'name': nominasLabel},
 };
+
+const _requiredAreaOptions = <AreaOption>[
+  AreaOption(id: direccionGeneralLabel, name: direccionGeneralLabel),
+  AreaOption(id: contraloriaLabel, name: contraloriaLabel),
+  AreaOption(id: comprasLabel, name: comprasLabel),
+  AreaOption(
+    id: 'Sistema de Gestion de Calidad (SGC)',
+    name: 'Sistema de Gestion de Calidad (SGC)',
+  ),
+  AreaOption(id: 'Ventas (VEN)', name: 'Ventas (VEN)'),
+  AreaOption(
+    id: 'Desarrollo y Nuevos Proyectos (DNP)',
+    name: 'Desarrollo y Nuevos Proyectos (DNP)',
+  ),
+  AreaOption(
+    id: 'Ingenieria de Manufactura (IMA)',
+    name: 'Ingenieria de Manufactura (IMA)',
+  ),
+  AreaOption(
+    id: 'Planeacion y Control de la Produccion (PPR)',
+    name: 'Planeacion y Control de la Produccion (PPR)',
+  ),
+  AreaOption(id: 'Produccion (PRO)', name: 'Produccion (PRO)'),
+  AreaOption(id: 'Control de Calidad (CCA)', name: 'Control de Calidad (CCA)'),
+  AreaOption(id: 'Almacenes (ALM)', name: 'Almacenes (ALM)'),
+  AreaOption(id: 'Mantenimiento (MAN)', name: 'Mantenimiento (MAN)'),
+  AreaOption(id: 'Recursos Humanos (RHU)', name: 'Recursos Humanos (RHU)'),
+  AreaOption(
+    id: 'Seguridad e Higiene (EHS)',
+    name: 'Seguridad e Higiene (EHS)',
+  ),
+  AreaOption(id: contabilidadLabel, name: contabilidadLabel),
+  AreaOption(id: tesoreriaLabel, name: tesoreriaLabel),
+  AreaOption(id: nominasLabel, name: nominasLabel),
+];
 final currentUserProfileProvider = StreamProvider<AppUser?>((ref) {
   final uid = ref.watch(currentUserIdProvider);
   if (uid == null) {

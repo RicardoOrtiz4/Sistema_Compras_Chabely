@@ -1,14 +1,11 @@
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:pdfx/pdfx.dart';
 
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
-import 'package:sistema_compras/features/orders/domain/supplier_quote.dart';
 import 'package:sistema_compras/features/orders/presentation/monitoring/order_monitoring_support.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/pdf_download_helper.dart';
 
@@ -21,7 +18,6 @@ class MonitoringPdfViewScreen extends StatefulWidget {
     required this.companyName,
     required this.scopeLabel,
     required this.eventsByOrder,
-    required this.quotes,
     required this.actorNamesById,
     super.key,
   });
@@ -31,7 +27,6 @@ class MonitoringPdfViewScreen extends StatefulWidget {
   final String companyName;
   final String scopeLabel;
   final Map<String, List<PurchaseOrderEvent>> eventsByOrder;
-  final List<SupplierQuote> quotes;
   final Map<String, String> actorNamesById;
 
   @override
@@ -42,7 +37,11 @@ class _MonitoringPdfViewScreenState extends State<MonitoringPdfViewScreen> {
   late final Future<Uint8List> _bytesFuture;
   PdfController? _webController;
   PhotoViewController? _photoController;
+  TransformationController? _windowsTransformController;
   bool _downloading = false;
+
+  bool get _usesWindowsSafePdfView =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
 
   @override
   void initState() {
@@ -53,7 +52,6 @@ class _MonitoringPdfViewScreenState extends State<MonitoringPdfViewScreen> {
       companyName: widget.companyName,
       scopeLabel: widget.scopeLabel,
       eventsByOrder: widget.eventsByOrder,
-      quotes: widget.quotes,
       actorNamesById: widget.actorNamesById,
     );
   }
@@ -67,12 +65,17 @@ class _MonitoringPdfViewScreenState extends State<MonitoringPdfViewScreen> {
   void _disposeControllers() {
     final webController = _webController;
     if (webController != null) {
-      webController.document.then((doc) => doc.close()).catchError((_) {});
+      if (!(defaultTargetPlatform == TargetPlatform.windows && !kIsWeb)) {
+        webController.document.then((doc) => doc.close()).catchError((_) {});
+      }
       webController.dispose();
       _webController = null;
     }
-    _photoController?.dispose();
+    // PhotoView removes its listeners during child dispose; disposing the
+    // shared controller here first can trigger a null-listener crash on unmount.
     _photoController = null;
+    _windowsTransformController?.dispose();
+    _windowsTransformController = null;
   }
 
   Future<void> _downloadPdf() async {
@@ -135,24 +138,61 @@ class _MonitoringPdfViewScreenState extends State<MonitoringPdfViewScreen> {
             return const Center(child: Text('No se pudo generar el PDF.'));
           }
           final bytesForPdf = Uint8List.fromList(bytes);
+          if (_usesWindowsSafePdfView) {
+            _webController ??= PdfController(
+              document: PdfDocument.openData(bytesForPdf),
+            );
+            _windowsTransformController ??= TransformationController();
+            return Stack(
+              children: [
+                Positioned.fill(
+                  child: InteractiveViewer(
+                    transformationController: _windowsTransformController,
+                    minScale: 1.0,
+                    maxScale: 4.0,
+                    scaleEnabled: false,
+                    panEnabled: true,
+                    child: SizedBox.expand(
+                      child: PdfView(
+                        controller: _webController!,
+                        scrollDirection: Axis.vertical,
+                        pageSnapping: false,
+                        renderer: _renderMonitoringPdfPage,
+                        builders: PdfViewBuilders<DefaultBuilderOptions>(
+                          options: const DefaultBuilderOptions(),
+                          errorBuilder: (context, error) {
+                            final message = reportError(
+                              error,
+                              StackTrace.current,
+                              context: 'MonitoringPdfViewScreen.PdfView.windows',
+                            );
+                            return Center(child: Text(message));
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: 16,
+                  bottom: 16,
+                  child: _MonitoringPdfZoomControls(
+                    onZoomIn: () => _applyWindowsZoom(1.2),
+                    onZoomOut: () => _applyWindowsZoom(1 / 1.2),
+                    onReset: _resetWindowsZoom,
+                  ),
+                ),
+              ],
+            );
+          }
           _webController ??= PdfController(
             document: PdfDocument.openData(bytesForPdf),
           );
-          _photoController ??= PhotoViewController();
-          return Stack(
-            children: [
-              Listener(
-                onPointerSignal: (event) {
-                  if (event is! PointerScrollEvent) return;
-                  final keyboard = HardwareKeyboard.instance;
-                  final zoomModifier =
-                      keyboard.isControlPressed || keyboard.isMetaPressed;
-                  if (!zoomModifier) return;
-                  final dy = event.scrollDelta.dy;
-                  if (dy == 0) return;
-                  _applyZoom(dy > 0 ? 1 / 1.1 : 1.1);
-                },
-                child: PdfView(
+          if (kIsWeb) {
+            _photoController ??= PhotoViewController();
+            return Stack(
+              children: [
+                PdfView(
                   controller: _webController!,
                   scrollDirection: Axis.vertical,
                   pageSnapping: false,
@@ -174,7 +214,9 @@ class _MonitoringPdfViewScreenState extends State<MonitoringPdfViewScreen> {
                           index,
                           document.id,
                         ),
-                        controller: _photoController,
+                        controller: _usesWindowsSafePdfView
+                            ? null
+                            : _photoController,
                         minScale: PhotoViewComputedScale.contained * 1.0,
                         maxScale: PhotoViewComputedScale.contained * 3.0,
                         initialScale: PhotoViewComputedScale.contained * 1.0,
@@ -183,17 +225,34 @@ class _MonitoringPdfViewScreenState extends State<MonitoringPdfViewScreen> {
                     },
                   ),
                 ),
-              ),
-              Positioned(
-                right: 16,
-                bottom: 16,
-                child: _MonitoringPdfZoomControls(
-                  onZoomIn: () => _applyZoom(1.2),
-                  onZoomOut: () => _applyZoom(1 / 1.2),
-                  onReset: _resetZoom,
+                Positioned(
+                  right: 16,
+                  bottom: 16,
+                  child: _MonitoringPdfZoomControls(
+                    onZoomIn: () => _applyZoom(1.2),
+                    onZoomOut: () => _applyZoom(1 / 1.2),
+                    onReset: _resetZoom,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            );
+          }
+          return PdfView(
+            controller: _webController!,
+            scrollDirection: Axis.vertical,
+            pageSnapping: false,
+            renderer: _renderMonitoringPdfPage,
+            builders: PdfViewBuilders<DefaultBuilderOptions>(
+              options: const DefaultBuilderOptions(),
+              errorBuilder: (context, error) {
+                final message = reportError(
+                  error,
+                  StackTrace.current,
+                  context: 'MonitoringPdfViewScreen.PdfView.native',
+                );
+                return Center(child: Text(message));
+              },
+            ),
           );
         },
       ),
@@ -210,6 +269,24 @@ class _MonitoringPdfViewScreenState extends State<MonitoringPdfViewScreen> {
 
   void _resetZoom() {
     _photoController?.reset();
+  }
+
+  void _applyWindowsZoom(double factor) {
+    final controller = _windowsTransformController;
+    if (controller == null) return;
+    final current = controller.value.clone();
+    final currentScale = current.getMaxScaleOnAxis();
+    final nextScale = (currentScale * factor).clamp(1.0, 4.0);
+    final delta = nextScale / currentScale;
+    if (delta == 1.0) return;
+    final zoomed = Matrix4.identity()
+      ..scale(delta)
+      ..multiply(current);
+    controller.value = zoomed;
+  }
+
+  void _resetWindowsZoom() {
+    _windowsTransformController?.value = Matrix4.identity();
   }
 }
 
@@ -237,9 +314,9 @@ class _MonitoringPdfZoomControls extends StatelessWidget {
     required this.onReset,
   });
 
-  final VoidCallback onZoomIn;
-  final VoidCallback onZoomOut;
-  final VoidCallback onReset;
+  final VoidCallback? onZoomIn;
+  final VoidCallback? onZoomOut;
+  final VoidCallback? onReset;
 
   @override
   Widget build(BuildContext context) {
@@ -280,7 +357,7 @@ class _MonitoringPdfZoomButton extends StatelessWidget {
 
   final IconData icon;
   final String tooltip;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {

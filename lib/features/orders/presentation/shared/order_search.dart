@@ -107,12 +107,9 @@ String _buildOrderSearchText(
   addValue(order.status.label);
   addValue(order.clientNote);
   addValue(order.urgentJustification);
-  addValue(order.lastReturnReason);
   addValue(order.supplier);
   addValue(order.internalOrder);
-  addValue(order.comprasComment);
   addValue(order.budget);
-  addValue(order.returnCount);
   if (includeDates) {
     addDate(order.createdAt);
     addDate(order.updatedAt);

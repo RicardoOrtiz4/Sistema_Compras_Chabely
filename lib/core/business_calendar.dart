@@ -1,6 +1,7 @@
-const int urgentRequestedDeliveryBusinessDays = 5;
+const int normalRequestedDeliveryLeadDays = 3;
+const int urgentRequestedDeliveryWindowDays = 3;
 
-// Días de descanso obligatorio de México usados para contar la ventana urgente.
+// Días de descanso obligatorio de México usados para validar días hábiles.
 DateTime normalizeCalendarDate(DateTime value) {
   return DateTime(value.year, value.month, value.day);
 }
@@ -13,19 +14,31 @@ bool isBusinessDay(DateTime value) {
   return !isMandatoryRestDayInMexico(date);
 }
 
-List<DateTime> nextBusinessDaysAfter(
-  DateTime start, {
-  int count = urgentRequestedDeliveryBusinessDays,
+DateTime firstAllowedNormalRequestedDeliveryDate({
+  DateTime? today,
 }) {
-  final dates = <DateTime>[];
-  var cursor = normalizeCalendarDate(start);
-  while (dates.length < count) {
+  final minimumDate = normalizeCalendarDate(
+    today ?? DateTime.now(),
+  ).add(const Duration(days: normalRequestedDeliveryLeadDays));
+  var cursor = minimumDate;
+  while (!isBusinessDay(cursor)) {
     cursor = cursor.add(const Duration(days: 1));
-    if (isBusinessDay(cursor)) {
-      dates.add(cursor);
-    }
   }
-  return dates;
+  return cursor;
+}
+
+bool isAllowedNormalRequestedDeliveryDate(
+  DateTime value, {
+  DateTime? today,
+}) {
+  final date = normalizeCalendarDate(value);
+  final minimumDate = normalizeCalendarDate(
+    today ?? DateTime.now(),
+  ).add(const Duration(days: normalRequestedDeliveryLeadDays));
+  if (date.isBefore(minimumDate)) {
+    return false;
+  }
+  return isBusinessDay(date);
 }
 
 bool isAllowedUrgentRequestedDeliveryDate(
@@ -33,11 +46,14 @@ bool isAllowedUrgentRequestedDeliveryDate(
   DateTime? today,
 }) {
   final date = normalizeCalendarDate(value);
-  final allowedDates = nextBusinessDaysAfter(
-    today ?? DateTime.now(),
-    count: urgentRequestedDeliveryBusinessDays,
+  final normalizedToday = normalizeCalendarDate(today ?? DateTime.now());
+  final lastAllowedDate = normalizedToday.add(
+    const Duration(days: urgentRequestedDeliveryWindowDays),
   );
-  return allowedDates.any((allowed) => isSameCalendarDate(allowed, date));
+  if (date.isBefore(normalizedToday)) {
+    return false;
+  }
+  return !date.isAfter(lastAllowedDate);
 }
 
 bool isSameCalendarDate(DateTime left, DateTime right) {

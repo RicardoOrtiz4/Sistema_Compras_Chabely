@@ -2,6 +2,9 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'error_file_logger_stub.dart'
+    if (dart.library.io) 'error_file_logger_io.dart';
+
 class AppError {
   const AppError(this.message, {this.cause, this.stack});
 
@@ -55,9 +58,16 @@ void logError(
   } else {
     buffer.write(' message=$error');
   }
-  debugPrint(buffer.toString());
+  final message = buffer.toString();
+  debugPrint(message);
+  appendErrorToLocalLog(
+    message,
+    stackTrace: stack?.toString(),
+  );
   if (error is FirebaseFunctionsException && error.details != null) {
-    debugPrint('ERROR details: ${error.details}');
+    final details = 'ERROR details: ${error.details}';
+    debugPrint(details);
+    appendErrorToLocalLog(details);
   }
   if (stack != null) {
     debugPrint(stack.toString());

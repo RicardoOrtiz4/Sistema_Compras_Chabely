@@ -1,18 +1,21 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:csv/csv.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
 
-import 'package:sistema_compras/core/area_labels.dart';
+import 'package:sistema_compras/core/access_control.dart';
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
+import 'package:sistema_compras/core/save_bytes.dart';
 import 'package:sistema_compras/core/widgets/app_logo.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/features/auth/domain/app_user.dart';
-import 'package:sistema_compras/features/home/application/home_notifications.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
@@ -21,7 +24,7 @@ import 'package:sistema_compras/features/profile/presentation/profile_sheet.dart
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_inline_view.dart';
-import 'package:sistema_compras/features/orders/presentation/preview/pdf_download_helper.dart';
+import 'package:sistema_compras/features/purchase_packets/application/purchase_packet_use_cases.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -32,12 +35,15 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   ProviderSubscription<AsyncValue<AppUser?>>? _profileSubscription;
   ProviderSubscription<CompanyBranding>? _brandingSubscription;
-  ProviderSubscription<AsyncValue<List<PurchaseOrder>>>? _userOrdersSubscription;
   ProviderSubscription<AsyncValue<List<PurchaseOrder>>>?
-      _operationalOrdersSubscription;
+  _userOrdersSubscription;
+  ProviderSubscription<AsyncValue<List<PurchaseOrder>>>?
+  _operationalOrdersSubscription;
   final Set<String> _autoFinalizeInFlight = <String>{};
+  bool _isDrawerOpen = false;
 
   @override
   void initState() {
@@ -64,19 +70,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         _scheduleAutoFinalize(next.valueOrNull ?? const <PurchaseOrder>[]);
       },
     );
-    _operationalOrdersSubscription =
-        ref.listenManual<AsyncValue<List<PurchaseOrder>>>(
-      operationalOrdersProvider,
-      (_, next) {
-        final user = ref.read(currentUserProfileProvider).value;
-        if (user == null) return;
-        final canProcessAll = isAdminRole(user.role) ||
-            isComprasLabel(user.areaDisplay) ||
-            isDireccionGeneralLabel(user.areaDisplay);
-        if (!canProcessAll) return;
-        _scheduleAutoFinalize(next.valueOrNull ?? const <PurchaseOrder>[]);
-      },
-    );
+    _operationalOrdersSubscription = ref
+        .listenManual<AsyncValue<List<PurchaseOrder>>>(
+          operationalOrdersProvider,
+          (_, next) {
+            final user = ref.read(currentUserProfileProvider).value;
+            if (user == null) return;
+            final canProcessAll = canViewMonitoring(user);
+            if (!canProcessAll) return;
+            _scheduleAutoFinalize(next.valueOrNull ?? const <PurchaseOrder>[]);
+          },
+        );
   }
 
   @override
@@ -99,19 +103,32 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   Future<void> _autoFinalizeOrder(PurchaseOrder order) async {
     try {
-      await ref.read(purchaseOrderRepositoryProvider).autoConfirmRequesterReceived(
-            order: order,
-          );
-      refreshRequesterReceiptWorkflowData(
-        ref,
-        orderIds: <String>[order.id],
-      );
+      await ref
+          .read(purchaseOrderRepositoryProvider)
+          .autoConfirmRequesterReceived(order: order);
+      refreshRequesterReceiptWorkflowData(ref, orderIds: <String>[order.id]);
     } catch (error, stack) {
-      logError(error, stack, context: 'HomeScreen.autoConfirmRequesterReceived');
+      logError(
+        error,
+        stack,
+        context: 'HomeScreen.autoConfirmRequesterReceived',
+      );
     } finally {
       _autoFinalizeInFlight.remove(order.id);
     }
   }
+
+  Future<void> _navigateFromDrawer(String location) async {
+    final reopenDrawer = _isDrawerOpen;
+    Navigator.of(context).pop();
+    await guardedPush(context, location);
+    if (!mounted || !reopenDrawer) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _scaffoldKey.currentState?.openDrawer();
+    });
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -119,25 +136,37 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final userAsync = ref.watch(currentUserProfileProvider);
     final user = userAsync.value;
     final branding = ref.watch(currentBrandingProvider);
-    final isAdmin = user != null && isAdminRole(user.role);
-    final canSwitchCompany = _canSwitchCompany(user, isAdmin);
-    final isCompras = user != null && isComprasLabel(user.areaDisplay);
-    final isDireccionGeneral =
-        user != null && isDireccionGeneralLabel(user.areaDisplay);
-    final canViewGeneralHistory =
-        user != null && (isAdmin || isDireccionGeneral || isCompras);
-    final isContabilidad =
-        user != null && isContabilidadLabel(user.areaDisplay);
+    final isAdmin = hasAdminAccess(user);
+    final canSwitchCompany = isAdmin;
+    final canAccessMonitoring = canViewMonitoring(user);
     final surfaceColor = scheme.surface;
 
     return Scaffold(
+      key: _scaffoldKey,
+      onDrawerChanged: (isOpen) {
+        if (_isDrawerOpen == isOpen) return;
+        setState(() => _isDrawerOpen = isOpen);
+      },
       drawer: _HomeDrawer(
-        isAdmin: isAdmin,
-        canViewOrderHistory: user != null,
-        canViewGeneralHistory: canViewGeneralHistory,
+        user: user,
         onOpenProfile: () => showProfileSheet(context, ref),
+        onNavigate: _navigateFromDrawer,
       ),
       appBar: AppBar(
+        automaticallyImplyLeading: false,
+        leading: IconButton(
+          icon: const Icon(Icons.menu),
+          tooltip: _isDrawerOpen
+              ? 'Cerrar menú de navegacion'
+              : 'Abrir menú de navegacion',
+          onPressed: () {
+            if (_isDrawerOpen) {
+              Navigator.of(context).maybePop();
+              return;
+            }
+            _scaffoldKey.currentState?.openDrawer();
+          },
+        ),
         toolbarHeight: 96,
         backgroundColor: surfaceColor,
         surfaceTintColor: surfaceColor,
@@ -152,7 +181,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               children: [
                 const Text('Inicio'),
                 Text(
-                  user == null ? 'Bienvenido' : 'Bienvenido ${user.name}',
+                  user == null ? 'Bienvenido' : 'Bienvenido, ${user.name}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
@@ -160,14 +189,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ],
         ),
         actions: [
-          if (isAdmin || isCompras)
-            IconButton(
-              icon: const Icon(Icons.monitor_heart_outlined),
-              tooltip: 'Monitoreo',
-              onPressed: () => guardedPush(context, '/orders/monitoring'),
-            ),
+          IconButton(
+            icon: const Icon(Icons.monitor_heart_outlined),
+            tooltip: 'Monitoreo',
+            onPressed: canAccessMonitoring
+                ? () => guardedPush(context, '/orders/monitoring')
+                : null,
+          ),
           if (canSwitchCompany)
-            _CompanySwitcherAction(currentBranding: branding),
+            _CompanySwitcherAction(
+              currentBranding: branding,
+              userEmail: user?.email,
+            ),
         ],
       ),
       body: userAsync.when(
@@ -184,85 +217,74 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               foreground: scheme.onPrimary,
               onTap: () => guardedPush(context, '/orders/create'),
             ),
-            if (isAdmin || isCompras)
-              _HomeBlockData(
-                title: 'Autorizar ordenes',
-                subtitle: 'Revision inicial del requerimiento',
-                icon: Icons.fact_check_outlined,
-                color: scheme.secondary,
-                foreground: scheme.onSecondary,
-                countProvider: pendingComprasCountProvider,
-                onTap: () => guardedPush(context, '/orders/pending'),
-              ),
-            if (isAdmin || isCompras)
-              _HomeBlockData(
-                title: 'Compras',
-                subtitle: 'Completar datos y armar compras por proveedor',
-                icon: Icons.request_quote_outlined,
-                color: scheme.secondaryContainer,
-                foreground: scheme.onSecondaryContainer,
-                countProvider: cotizacionesModuleCountProvider,
-                onTap: () => guardedPush(context, '/orders/cotizaciones'),
-              ),
-            if (isAdmin || isDireccionGeneral)
-              _HomeBlockData(
-                title: 'Dirección General',
-                subtitle: 'Autorizacion de pago por proveedor',
-                icon: Icons.approval_outlined,
-                color: scheme.tertiary,
-                foreground: scheme.onTertiary,
-                countProvider: pendingDireccionBundleCountProvider,
-                onTap: () => guardedPush(context, '/orders/direccion'),
-              ),
-            if (isAdmin || isCompras)
-              _HomeBlockData(
-                title: 'Agregar fecha de llegada',
-                subtitle: 'Definir fecha estimada y enviar a Contabilidad',
-                icon: Icons.assignment_turned_in_outlined,
-                color: scheme.secondary,
-                foreground: scheme.onSecondary,
-                countProvider: pendingEtaCountProvider,
-                onTap: () => guardedPush(context, '/orders/eta'),
-              ),
-            if (isAdmin || isContabilidad)
-              _HomeBlockData(
-                title: 'Contabilidad',
-                subtitle: 'Registro y pagos',
-                icon: Icons.receipt_long_outlined,
-                color: scheme.tertiary,
-                foreground: scheme.onTertiary,
-                countProvider: contabilidadCountProvider,
-                onTap: () => guardedPush(context, '/orders/contabilidad'),
-              ),
             _HomeBlockData(
-              title: 'Órdenes rechazadas',
-              subtitle: 'Correcciones pendientes',
+              title: 'Ordenes rechazadas',
+              subtitle: 'Avisos de rechazo pendientes de enterado',
               icon: Icons.report_problem_outlined,
               color: scheme.error,
               foreground: scheme.onError,
-              isRejected: true,
               countProvider: rejectedCountProvider,
               onTap: () => guardedPush(context, '/orders/rejected'),
             ),
             _HomeBlockData(
+              title: 'Autorizar ordenes',
+              subtitle: 'Primera etapa despues de crear la orden',
+              icon: Icons.fact_check_outlined,
+              color: scheme.secondary,
+              foreground: scheme.onSecondary,
+              enabled: hasAuthorizeOrdersAccess(user),
+              countProvider: intakeReviewCountProvider,
+              onTap: () => guardedPush(context, '/orders/authorize'),
+            ),
+            _HomeBlockData(
+              title: 'Compras',
+              subtitle: 'Pendientes y dashboard de agrupacion por proveedor',
+              icon: Icons.request_quote_outlined,
+              color: scheme.secondaryContainer,
+              foreground: scheme.onSecondaryContainer,
+              enabled: hasComprasAccess(user),
+              countProvider: sourcingModuleCountProvider,
+              onTap: () => guardedPush(context, '/orders/compras'),
+            ),
+            _HomeBlockData(
+              title: 'Direccion General',
+              subtitle: 'Aprobacion ejecutiva separada de Compras',
+              icon: Icons.approval_outlined,
+              color: scheme.tertiaryContainer,
+              foreground: scheme.onTertiaryContainer,
+              enabled: hasDireccionApprovalAccess(user),
+              countProvider: pendingDireccionPacketsCountProvider,
+              onTap: () => guardedPush(context, '/orders/direccion-general'),
+            ),
+            _HomeBlockData(
+              title: 'Agregar fecha estimada',
+              subtitle: 'Registrar ETA despues de la aprobacion ejecutiva',
+              icon: Icons.event_available_outlined,
+              color: scheme.tertiary,
+              foreground: scheme.onTertiary,
+              enabled: hasEtaAccess(user),
+              countProvider: pendingEtaCountProvider,
+              onTap: () => guardedPush(context, '/orders/agregar-fecha-estimada'),
+            ),
+            _HomeBlockData(
+              title: 'Facturas y evidencias',
+              subtitle: 'Ultima etapa documental antes del cierre final',
+              icon: Icons.receipt_long_outlined,
+              color: scheme.tertiaryFixed,
+              foreground: scheme.onTertiaryFixed,
+              enabled: hasFacturasEvidenciasAccess(user),
+              countProvider: contabilidadCountProvider,
+              onTap: () => guardedPush(context, '/orders/facturas-evidencias'),
+            ),
+            _HomeBlockData(
               title: 'Ordenes en proceso',
-              subtitle: 'Seguimiento del avance de tus solicitudes',
+              subtitle: 'Seguimiento y cierre final de tus solicitudes',
               icon: Icons.track_changes_outlined,
               color: scheme.primaryContainer,
               foreground: scheme.onPrimaryContainer,
               countProvider: userInProcessOrdersCountProvider,
               onTap: () => guardedPush(context, '/orders/in-process'),
             ),
-            if (isAdmin || isCompras)
-              _HomeBlockData(
-                title: 'Monitoreo de acciones',
-                subtitle: 'Rechazadas y finalizadas pendientes de recibido',
-                icon: Icons.report_gmailerrorred_outlined,
-                color: scheme.errorContainer,
-                foreground: scheme.onErrorContainer,
-                countProvider: globalActionMonitoringCountProvider,
-                onTap: () => guardedPush(context, '/orders/rejected/all'),
-              ),
           ];
 
           return Center(
@@ -323,87 +345,91 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
 class _HomeDrawer extends StatelessWidget {
   const _HomeDrawer({
-    required this.isAdmin,
-    required this.canViewOrderHistory,
-    required this.canViewGeneralHistory,
+    required this.user,
     required this.onOpenProfile,
+    required this.onNavigate,
   });
 
-  final bool isAdmin;
-  final bool canViewOrderHistory;
-  final bool canViewGeneralHistory;
+  final AppUser? user;
   final VoidCallback onOpenProfile;
+  final Future<void> Function(String location) onNavigate;
 
   @override
   Widget build(BuildContext context) {
+    final canManageSuppliersAccess = canManageSuppliers(user);
+    final canManageClientsAccess = canManageClients(user);
+    final canViewReportsAccess = canViewReports(user);
+    final canManageUsersAccess = canManageUsers(user);
+    final canViewGlobalHistoryAccess = canViewGlobalHistory(user);
+    final canComprasModule = hasComprasAccess(user);
     return Drawer(
       child: SafeArea(
         child: ListView(
           padding: const EdgeInsets.symmetric(vertical: 12),
           children: [
-            ListTile(
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.menu),
+                    tooltip: 'Cerrar menú de navegacion',
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                  const SizedBox(width: 4),
+                  Text('Menú', style: Theme.of(context).textTheme.titleMedium),
+                ],
+              ),
+            ),
+            _DrawerTile(
+              enabled: canManageSuppliersAccess,
               leading: const Icon(Icons.storefront_outlined),
               title: const Text('Gestión de proveedores'),
-              onTap: () {
-                Navigator.pop(context);
-                guardedPush(context, '/partners/suppliers');
-              },
+              onTap: () => unawaited(onNavigate('/partners/suppliers')),
             ),
-            ListTile(
+            _DrawerTile(
+              enabled: canManageClientsAccess,
               leading: const Icon(Icons.groups_outlined),
               title: const Text('Gestión de clientes'),
-              onTap: () {
-                Navigator.pop(context);
-                guardedPush(context, '/partners/clients');
-              },
+              onTap: () => unawaited(onNavigate('/partners/clients')),
             ),
-            if (isAdmin)
-              ListTile(
-                leading: const Icon(Icons.insights_outlined),
-                title: const Text('Reportes'),
-                onTap: () {
-                  Navigator.pop(context);
-                  guardedPush(context, '/reports');
-                },
-              ),
-            if (isAdmin)
-              ListTile(
-                leading: const Icon(Icons.admin_panel_settings_outlined),
-                title: const Text('Administrar usuarios'),
-                onTap: () {
-                  Navigator.pop(context);
-                  guardedPush(context, '/admin/users');
-                },
-              ),
-            if (canViewOrderHistory)
-              ListTile(
-                leading: const Icon(Icons.access_time),
-                title: const Text('Historial de ordenes'),
-                onTap: () {
-                  Navigator.pop(context);
-                  guardedPush(context, '/orders/history');
-                },
-              ),
-            if (canViewGeneralHistory)
-              ListTile(
-                leading: const Icon(Icons.manage_search_outlined),
-                title: const Text('Historial general'),
-                onTap: () {
-                  Navigator.pop(context);
-                  guardedPush(context, '/orders/history/all');
-                },
-              ),
+            _DrawerTile(
+              enabled: canViewReportsAccess,
+              leading: const Icon(Icons.insights_outlined),
+              title: const Text('Reportes'),
+              onTap: () => unawaited(onNavigate('/reports')),
+            ),
+            _DrawerTile(
+              enabled: canComprasModule,
+              leading: const Icon(Icons.picture_as_pdf_outlined),
+              title: const Text('Historial de PDFs de paquetes por proveedor'),
+              onTap: () => unawaited(onNavigate('/orders/compras/historial-pdfs')),
+            ),
+            _DrawerTile(
+              enabled: canManageUsersAccess,
+              leading: const Icon(Icons.admin_panel_settings_outlined),
+              title: const Text('Administrar usuarios'),
+              onTap: () => unawaited(onNavigate('/admin/users')),
+            ),
             ListTile(
-              leading: const Icon(Icons.description_outlined),
-              title: const Text('Formato'),
+              leading: const Icon(Icons.history_outlined),
+              title: const Text('Historial de mis ordenes'),
+              onTap: () => unawaited(onNavigate('/orders/history')),
+            ),
+            _DrawerTile(
+              enabled: canViewGlobalHistoryAccess,
+              leading: const Icon(Icons.manage_search_outlined),
+              title: const Text('Historial general'),
+              onTap: () => unawaited(onNavigate('/orders/history/all')),
+            ),
+            ListTile(
+              leading: const Icon(Icons.download_outlined),
+              title: const Text('Ejemplo CSV'),
+              subtitle: const Text('Plantilla para importar articulos'),
               onTap: () {
-                final navigator = Navigator.of(context);
-                navigator.pop();
-                navigator.push(
-                  MaterialPageRoute(
-                    builder: (_) => const _BlankRequisitionFormatScreen(),
-                  ),
-                );
+                final messenger = ScaffoldMessenger.of(context);
+                Navigator.pop(context);
+                unawaited(_downloadCsvImportExample(messenger));
               },
             ),
             ListTile(
@@ -421,6 +447,94 @@ class _HomeDrawer extends StatelessWidget {
   }
 }
 
+class _DrawerTile extends StatelessWidget {
+  const _DrawerTile({
+    required this.enabled,
+    required this.leading,
+    required this.title,
+    required this.onTap,
+  });
+
+  final bool enabled;
+  final Widget leading;
+  final Widget title;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      enabled: enabled,
+      leading: leading,
+      title: title,
+      onTap: enabled ? onTap : null,
+    );
+  }
+}
+
+Future<void> _downloadCsvImportExample(ScaffoldMessengerState messenger) async {
+  const suggestedName = 'ejemplo_requisicion.csv';
+  final csv = buildCsvImportExample();
+  final bytes = Uint8List.fromList(utf8.encode('\uFEFF$csv'));
+
+  try {
+    final savedPath = await pickSavePath(
+      suggestedName: suggestedName,
+      dialogTitle: 'Guardar ejemplo CSV',
+      allowedExtensions: const <String>['csv'],
+    );
+    if (savedPath == null) return;
+    await saveBytesToSelectedPath(savedPath, bytes);
+
+    if (messenger.mounted) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Ejemplo CSV descargado.')),
+      );
+    }
+  } catch (_) {
+    if (messenger.mounted) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('No se pudo descargar el ejemplo CSV.')),
+      );
+    }
+  }
+}
+
+String buildCsvImportExample() {
+  const rows = <List<String>>[
+    [
+      'linea',
+      'noParte',
+      'descripcion',
+      'cantidad',
+      'unidad',
+    ],
+    [
+      '1',
+      'ROD-6204',
+      'Rodamiento sellado 6204 2RS',
+      '12',
+      'PZA',
+    ],
+    [
+      '2',
+      'ACE-HID-46',
+      'Aceite hidraulico ISO VG 46',
+      '4',
+      'GAL',
+    ],
+    [
+      '3',
+      'TOR-M8X30',
+      'Tornillo hexagonal M8 x 30 mm grado 8.8',
+      '100',
+      'PZA',
+    ],
+  ];
+
+  const converter = ListToCsvConverter();
+  return converter.convert(rows);
+}
+
 class _BlankRequisitionFormatScreen extends ConsumerStatefulWidget {
   const _BlankRequisitionFormatScreen();
 
@@ -431,7 +545,6 @@ class _BlankRequisitionFormatScreen extends ConsumerStatefulWidget {
 
 class _BlankRequisitionFormatScreenState
     extends ConsumerState<_BlankRequisitionFormatScreen> {
-  bool _downloading = false;
 
   @override
   Widget build(BuildContext context) {
@@ -440,20 +553,7 @@ class _BlankRequisitionFormatScreenState
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Formato de requisicion'),
-        actions: [
-          IconButton(
-            onPressed: _downloading ? null : () => _downloadPdf(pdfData),
-            tooltip: 'Descargar PDF',
-            icon: _downloading
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.download_outlined),
-          ),
-        ],
+        title: const Text('Formato de requisición'),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
@@ -462,23 +562,6 @@ class _BlankRequisitionFormatScreenState
     );
   }
 
-  Future<void> _downloadPdf(OrderPdfData pdfData) async {
-    if (_downloading) return;
-    setState(() => _downloading = true);
-    try {
-      final bytes = await buildOrderPdf(pdfData, useIsolate: false);
-      if (!mounted) return;
-      await savePdfBytes(
-        context,
-        bytes: bytes,
-        suggestedName: 'formato_requisicion_compra.pdf',
-      );
-    } finally {
-      if (mounted) {
-        setState(() => _downloading = false);
-      }
-    }
-  }
 }
 
 OrderPdfData _blankRequisitionFormatData(CompanyBranding branding) {
@@ -494,13 +577,6 @@ OrderPdfData _blankRequisitionFormatData(CompanyBranding branding) {
     folio: '',
     internalOrder: '',
     supplier: '',
-    comprasComment: '',
-    comprasReviewerName: '',
-    comprasReviewerArea: '',
-    processedByName: '',
-    processedByArea: '',
-    direccionGeneralName: '',
-    direccionGeneralArea: '',
     urgentJustification: '',
     blankTemplate: true,
     cacheSalt: 'blank-requisition-format',
@@ -514,8 +590,8 @@ class _HomeBlockData {
     required this.icon,
     required this.color,
     required this.foreground,
-    required this.onTap,
-    this.isRejected = false,
+    this.onTap,
+    this.enabled = true,
     this.countProvider,
   });
 
@@ -524,9 +600,9 @@ class _HomeBlockData {
   final IconData icon;
   final Color color;
   final Color foreground;
+  final bool enabled;
   final ProviderListenable<AsyncValue<int>>? countProvider;
-  final VoidCallback onTap;
-  final bool isRejected;
+  final VoidCallback? onTap;
 }
 
 class _HomeBlockCard extends StatefulWidget {
@@ -544,47 +620,70 @@ class _HomeBlockCardState extends State<_HomeBlockCard> {
   @override
   Widget build(BuildContext context) {
     final data = widget.data;
-    final background = data.color;
-    final borderColor = _hovered
-        ? data.foreground.withValues(alpha: 0.34)
-        : data.foreground.withValues(alpha: 0.14);
-    final shadowColor = _hovered
-        ? data.foreground.withValues(alpha: 0.16)
-        : Colors.black.withValues(alpha: 0.08);
     final scheme = Theme.of(context).colorScheme;
+    final enabled = data.enabled && data.onTap != null;
+    final effectiveHovered = enabled && _hovered;
+    final foreground = enabled ? data.foreground : scheme.outline;
+    final background = enabled
+        ? data.color
+        : (Color.lerp(
+              scheme.surfaceContainerHighest,
+              scheme.outlineVariant,
+              0.45,
+            ) ??
+            scheme.surfaceContainerHighest);
+    final borderColor = effectiveHovered
+        ? foreground.withValues(alpha: 0.34)
+        : (enabled ? foreground.withValues(alpha: 0.14) : scheme.outline);
+    final shadowColor = effectiveHovered
+        ? foreground.withValues(alpha: 0.16)
+        : (enabled ? Colors.black.withValues(alpha: 0.08) : Colors.transparent);
     final softError =
         Color.lerp(scheme.error, Colors.white, 0.35) ?? scheme.error;
-    final badgeColor = data.isRejected ? Colors.white : softError;
-    final badgeTextColor = data.isRejected ? Colors.black : Colors.white;
+    final badgeColor = softError;
+    final badgeTextColor = Colors.white;
     final titleStyle = Theme.of(context).textTheme.titleSmall?.copyWith(
       fontWeight: FontWeight.w700,
-      color: data.foreground,
+      color: foreground,
       fontSize: 13.5,
     );
     final subtitleStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
-      color: data.foreground.withValues(alpha: _hovered ? 0.88 : 0.8),
+      color: foreground.withValues(alpha: effectiveHovered ? 0.88 : 0.78),
       fontSize: 11,
+      fontWeight: enabled ? null : FontWeight.w600,
     );
-    final iconSurface = _hovered
-        ? data.foreground.withValues(alpha: 0.18)
-        : data.foreground.withValues(alpha: 0.1);
+    final iconSurface = effectiveHovered
+        ? foreground.withValues(alpha: 0.18)
+        : foreground.withValues(alpha: enabled ? 0.1 : 0.16);
+    final subtitle = enabled ? data.subtitle : 'Sin permiso para acceder';
 
     return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
+      cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.forbidden,
+      onEnter: (_) {
+        if (enabled) setState(() => _hovered = true);
+      },
+      onExit: (_) {
+        if (_hovered) setState(() => _hovered = false);
+      },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
         curve: Curves.easeOutCubic,
-        transform: Matrix4.translationValues(0, _hovered ? -2.5 : 0, 0),
+        transform:
+            Matrix4.translationValues(0, effectiveHovered ? -2.5 : 0, 0),
         child: Material(
           color: background,
           borderRadius: BorderRadius.circular(22),
           elevation: 0,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(22),
-            onTap: data.onTap,
-            child: AnimatedContainer(
+          child: AbsorbPointer(
+            absorbing: !enabled,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(22),
+              onTap: enabled ? data.onTap : null,
+              canRequestFocus: enabled,
+              enableFeedback: enabled,
+              mouseCursor:
+                  enabled ? SystemMouseCursors.click : SystemMouseCursors.forbidden,
+              child: AnimatedContainer(
               duration: const Duration(milliseconds: 180),
               curve: Curves.easeOutCubic,
               padding: const EdgeInsets.all(10),
@@ -592,13 +691,13 @@ class _HomeBlockCardState extends State<_HomeBlockCard> {
                 borderRadius: BorderRadius.circular(22),
                 border: Border.all(
                   color: borderColor,
-                  width: _hovered ? 1.2 : 1,
+                  width: effectiveHovered ? 1.2 : (enabled ? 1 : 1.4),
                 ),
                 boxShadow: [
                   BoxShadow(
                     color: shadowColor,
-                    blurRadius: _hovered ? 24 : 14,
-                    offset: Offset(0, _hovered ? 12 : 8),
+                    blurRadius: effectiveHovered ? 24 : 14,
+                    offset: Offset(0, effectiveHovered ? 12 : 8),
                   ),
                 ],
               ),
@@ -608,7 +707,7 @@ class _HomeBlockCardState extends State<_HomeBlockCard> {
                     child: IgnorePointer(
                       child: AnimatedOpacity(
                         duration: const Duration(milliseconds: 180),
-                        opacity: _hovered ? 1 : 0.72,
+                        opacity: effectiveHovered ? 1 : (enabled ? 0.72 : 0.1),
                         child: DecoratedBox(
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(22),
@@ -617,7 +716,7 @@ class _HomeBlockCardState extends State<_HomeBlockCard> {
                               end: Alignment.bottomCenter,
                               colors: [
                                 Colors.white.withValues(
-                                  alpha: _hovered ? 0.14 : 0.06,
+                                  alpha: effectiveHovered ? 0.14 : 0.06,
                                 ),
                                 Colors.white.withValues(alpha: 0.02),
                                 Colors.transparent,
@@ -641,11 +740,11 @@ class _HomeBlockCardState extends State<_HomeBlockCard> {
                         borderRadius: BorderRadius.circular(999),
                         gradient: LinearGradient(
                           colors: [
-                            data.foreground.withValues(
-                              alpha: _hovered ? 0.92 : 0.0,
+                            foreground.withValues(
+                              alpha: effectiveHovered ? 0.92 : 0.0,
                             ),
-                            data.foreground.withValues(
-                              alpha: _hovered ? 0.26 : 0.0,
+                            foreground.withValues(
+                              alpha: effectiveHovered ? 0.26 : 0.0,
                             ),
                           ],
                         ),
@@ -665,14 +764,14 @@ class _HomeBlockCardState extends State<_HomeBlockCard> {
                               color: iconSurface,
                               borderRadius: BorderRadius.circular(10),
                               border: Border.all(
-                                color: data.foreground.withValues(
-                                  alpha: _hovered ? 0.18 : 0.08,
+                                color: foreground.withValues(
+                                  alpha: effectiveHovered ? 0.18 : 0.08,
                                 ),
                               ),
                             ),
                             child: Icon(
                               data.icon,
-                              color: data.foreground,
+                              color: foreground,
                               size: 20,
                             ),
                           ),
@@ -681,7 +780,7 @@ class _HomeBlockCardState extends State<_HomeBlockCard> {
                             child: AnimatedSlide(
                               duration: const Duration(milliseconds: 180),
                               curve: Curves.easeOutCubic,
-                              offset: _hovered
+                              offset: effectiveHovered
                                   ? const Offset(0.01, 0)
                                   : Offset.zero,
                               child: Text(
@@ -692,21 +791,26 @@ class _HomeBlockCardState extends State<_HomeBlockCard> {
                               ),
                             ),
                           ),
-                          _HomeBlockBadgeSlot(
-                            data: data,
-                            hovered: _hovered,
-                            badgeColor: badgeColor,
-                            badgeTextColor: badgeTextColor,
-                          ),
+                          if (enabled)
+                            _HomeBlockBadgeSlot(
+                              data: data,
+                              hovered: effectiveHovered,
+                              badgeColor: badgeColor,
+                              badgeTextColor: badgeTextColor,
+                            )
+                          else
+                            const _DisabledHomeBadge(),
                         ],
                       ),
                       const SizedBox(height: 6),
                       AnimatedSlide(
                         duration: const Duration(milliseconds: 180),
                         curve: Curves.easeOutCubic,
-                        offset: _hovered ? const Offset(0.01, 0) : Offset.zero,
+                        offset: effectiveHovered
+                            ? const Offset(0.01, 0)
+                            : Offset.zero,
                         child: Text(
-                          data.subtitle,
+                          subtitle,
                           style: subtitleStyle,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -715,6 +819,7 @@ class _HomeBlockCardState extends State<_HomeBlockCard> {
                     ],
                   ),
                 ],
+              ),
               ),
             ),
           ),
@@ -768,10 +873,49 @@ class _HomeBlockBadgeSlot extends ConsumerWidget {
   }
 }
 
+class _DisabledHomeBadge extends StatelessWidget {
+  const _DisabledHomeBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(left: 6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        decoration: BoxDecoration(
+          color: scheme.surface,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: scheme.outlineVariant),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.lock_outline, size: 12, color: scheme.outline),
+            const SizedBox(width: 4),
+            Text(
+              'Sin permiso',
+              style: TextStyle(
+                color: scheme.outline,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _CompanySwitcherAction extends ConsumerWidget {
-  const _CompanySwitcherAction({required this.currentBranding});
+  const _CompanySwitcherAction({
+    required this.currentBranding,
+    required this.userEmail,
+  });
 
   final CompanyBranding currentBranding;
+  final String? userEmail;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -784,6 +928,7 @@ class _CompanySwitcherAction extends ConsumerWidget {
         ref,
         currentBranding,
         availableBrandings,
+        userEmail,
       ),
     );
   }
@@ -821,17 +966,12 @@ class _CountBadge extends StatelessWidget {
   }
 }
 
-bool _canSwitchCompany(AppUser? user, bool isAdmin) {
-  if (user == null) return false;
-  if (isAdmin) return true;
-  return companyFromEmail(user.email) == null;
-}
-
 Future<void> _showCompanySwitcher(
   BuildContext context,
   WidgetRef ref,
   CompanyBranding currentBranding,
   List<CompanyBranding> brandings,
+  String? userEmail,
 ) async {
   await showModalBottomSheet<void>(
     context: context,
@@ -851,8 +991,17 @@ Future<void> _showCompanySwitcher(
                     ? const Icon(Icons.check_circle_outline)
                     : null,
                 onTap: () {
-                  ref.read(currentCompanyProvider.notifier).state =
-                      branding.company;
+                  if (branding.id == currentBranding.id) {
+                    Navigator.of(context).pop();
+                    return;
+                  }
+                  ref.read(companySwitchInProgressProvider.notifier).state = true;
+                  unawaited(
+                    ref.read(currentCompanyProvider.notifier).selectCompany(
+                          branding.company,
+                          authenticatedEmail: userEmail,
+                        ),
+                  );
                   Navigator.of(context).pop();
                 },
               ),
@@ -861,215 +1010,4 @@ Future<void> _showCompanySwitcher(
       );
     },
   );
-}
-
-
-class _HomeNotificationsSheet extends ConsumerWidget {
-  const _HomeNotificationsSheet({
-    required this.parentContext,
-    required this.onOpenProfile,
-  });
-
-  final BuildContext parentContext;
-  final VoidCallback onOpenProfile;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final user = ref.watch(currentUserProfileProvider).value;
-    final notifications = ref.watch(homeNotificationsProvider);
-
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxHeight: 640),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Notificaciones',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Avisos internos basados en tus pendientes y el estado de tus órdenes.',
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 12),
-              if (user != null)
-                _HomeNotificationsEmailCard(
-                  user: user,
-                  onOpenProfile: () {
-                    Navigator.of(context).pop();
-                    onOpenProfile();
-                  },
-                ),
-              const SizedBox(height: 12),
-              Expanded(
-                child: notifications.isEmpty
-                    ? Center(
-                        child: Text(
-                          'No hay notificaciones internas por ahora.',
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                      )
-                    : ListView.separated(
-                        itemCount: notifications.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
-                        itemBuilder: (context, index) {
-                          final item = notifications[index];
-                          return _HomeNotificationCard(
-                            item: item,
-                            onTap: () {
-                              Navigator.of(context).pop();
-                              guardedPush(parentContext, item.route);
-                            },
-                          );
-                        },
-                      ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _HomeNotificationsEmailCard extends StatelessWidget {
-  const _HomeNotificationsEmailCard({
-    required this.user,
-    required this.onOpenProfile,
-  });
-
-  final AppUser user;
-  final VoidCallback onOpenProfile;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final hasContactEmail = (user.contactEmail ?? '').trim().isNotEmpty;
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: scheme.outlineVariant),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(
-            hasContactEmail ? Icons.mail_outline : Icons.mark_email_unread_outlined,
-            color: scheme.primary,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  notificationContactEmailLabel(user),
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  hasContactEmail
-                      ? 'Este correo se usa como contacto para recibir avisos y preparar correos desde tu dispositivo.'
-                      : 'Registra tu correo de contacto para recibir avisos manuales y preparar correos desde la app.',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          TextButton(
-            onPressed: onOpenProfile,
-            child: Text(hasContactEmail ? 'Editar' : 'Configurar'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _HomeNotificationCard extends StatelessWidget {
-  const _HomeNotificationCard({
-    required this.item,
-    required this.onTap,
-  });
-
-  final HomeNotificationItem item;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final accent = notificationToneColor(scheme, item.tone);
-
-    return Material(
-      color: scheme.surface,
-      borderRadius: BorderRadius.circular(18),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(18),
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: scheme.outlineVariant),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: accent.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(item.icon, color: accent, size: 20),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      item.title,
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      item.message,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 10),
-              Column(
-                children: [
-                  _CountBadge(
-                    count: item.count,
-                    color: accent,
-                    textColor: Colors.white,
-                  ),
-                  const SizedBox(height: 8),
-                  Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }

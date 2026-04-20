@@ -1,19 +1,22 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
 
 import 'package:sistema_compras/core/company_branding.dart';
-import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
-import 'package:sistema_compras/core/navigation_guard.dart';
+import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
+import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_inline_view.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/pdf_download_helper.dart';
-import 'package:sistema_compras/features/orders/presentation/shared/order_rejection_history.dart';
+import 'package:sistema_compras/core/navigation_guard.dart';
 
 class OrderPdfViewScreen extends ConsumerStatefulWidget {
   const OrderPdfViewScreen({
@@ -30,43 +33,41 @@ class OrderPdfViewScreen extends ConsumerStatefulWidget {
 }
 
 class _OrderPdfViewScreenState extends ConsumerState<OrderPdfViewScreen> {
-  bool _downloading = false;
+  bool _acknowledging = false;
+  bool _downloadingPdf = false;
 
   @override
   Widget build(BuildContext context) {
     final orderAsync = ref.watch(orderByIdStreamProvider(widget.orderId));
 
-    final actions = orderAsync.maybeWhen(
-      data: (order) {
-        if (order == null) return const <Widget>[];
-
-        return <Widget>[
-          IconButton(
-            onPressed: _downloading ? null : () => _downloadPdf(order),
-            tooltip: 'Descargar PDF',
-            icon: _downloading
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.download_outlined),
-          ),
-          _PdfViewHistoryActionButton(
-            order: order,
-            onShowHistory: (events) => _showHistory(context, order, events),
-          ),
-        ];
-      },
-      orElse: () => const <Widget>[],
-    );
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('PDF de orden'),
-        actions: [
-          ...actions,
-        ],
+        actions: orderAsync.valueOrNull == null
+            ? null
+            : [
+                IconButton(
+                  tooltip: 'Copiar',
+                  onPressed: () => guardedPush(
+                    context,
+                    _copyOrderLocation(orderAsync.valueOrNull!.id),
+                  ),
+                  icon: const Icon(Icons.content_copy_outlined),
+                ),
+                IconButton(
+                  tooltip: 'Descargar PDF',
+                  onPressed: _downloadingPdf
+                      ? null
+                      : () => _downloadPdf(orderAsync.valueOrNull!),
+                  icon: _downloadingPdf
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.download_outlined),
+                ),
+              ],
       ),
       body: orderAsync.when(
         data: (order) {
@@ -74,30 +75,54 @@ class _OrderPdfViewScreenState extends ConsumerState<OrderPdfViewScreen> {
             return const AppSplash();
           }
 
-          final isRejectedDraft = _isRejectedDraft(order);
-          final copyRoute =
-              '/orders/create?copyFromId=${Uri.encodeComponent(order.id)}';
-
           return Column(
             children: [
+              if (order.isRejectedPendingAcknowledgment ||
+                  (order.isRejectedDraft && order.isRejectionAcknowledged))
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        if (order.isRejectedPendingAcknowledgment)
+                          FilledButton.icon(
+                            onPressed: _acknowledging
+                                ? null
+                                : () => _acknowledgeRejectedOrder(order),
+                            icon: _acknowledging
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                  )
+                                : const Icon(Icons.task_alt_outlined),
+                            label: const Text('Marcar como enterado'),
+                          )
+                        else if (order.isRejectedDraft &&
+                            order.isRejectionAcknowledged)
+                          Chip(
+                            avatar: const Icon(
+                              Icons.task_alt_outlined,
+                              size: 18,
+                            ),
+                            label: Text(
+                              'Enterada ${order.rejectionAcknowledgedAt?.toShortDate() ?? ''}'
+                                  .trim(),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
               Expanded(
                 child: _OrderPdfBody(
                   order: order,
                   hideBuyerFields: widget.hideBuyerFields,
                 ),
               ),
-              if (isRejectedDraft)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () => guardedPush(context, copyRoute),
-                      icon: const Icon(Icons.content_copy_outlined),
-                      label: const Text('Copiar orden'),
-                    ),
-                  ),
-                ),
             ],
           );
         },
@@ -111,61 +136,75 @@ class _OrderPdfViewScreenState extends ConsumerState<OrderPdfViewScreen> {
     );
   }
 
-  void _showHistory(
-    BuildContext context,
-    PurchaseOrder order,
-    List<PurchaseOrderEvent> events,
-  ) {
-    final branding = ref.read(currentBrandingProvider);
-
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (sheetContext) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: OrderRejectionHistory(
-              branding: branding,
-              order: order,
-              events: events,
-              showOnlyOriginal: true,
-            ),
+  Future<void> _acknowledgeRejectedOrder(PurchaseOrder order) async {
+    if (_acknowledging) return;
+    setState(() => _acknowledging = true);
+    try {
+      await ref
+          .read(purchaseOrderRepositoryProvider)
+          .acknowledgeRejectedOrder(order.id);
+      refreshOrderModuleData(ref, orderIds: <String>[order.id]);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('La orden rechazada se marco como enterada.'),
+        ),
+      );
+    } catch (error, stack) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'No se pudo marcar como enterada: ${reportError(error, stack, context: 'OrderPdfViewScreen.acknowledge')}',
           ),
-        );
-      },
-    );
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _acknowledging = false);
+      }
+    }
   }
 
   Future<void> _downloadPdf(PurchaseOrder order) async {
-    if (_downloading) return;
-    setState(() => _downloading = true);
+    if (_downloadingPdf) return;
+    setState(() => _downloadingPdf = true);
     try {
-      final branding = ref.read(currentBrandingProvider);
-      final pdfData = _buildOrderPdfDataForView(
-        branding,
-        order,
-        hideBuyerFields: widget.hideBuyerFields,
-      );
-      final bytes = await buildOrderPdf(pdfData, useIsolate: false);
+      final bytes = await _resolvePdfBytes(order);
       if (!mounted) return;
       await savePdfBytes(
         context,
         bytes: bytes,
-        suggestedName: 'requisicion_${order.id}.pdf',
+        suggestedName: '${order.id}.pdf',
       );
     } finally {
       if (mounted) {
-        setState(() => _downloading = false);
+        setState(() => _downloadingPdf = false);
       }
     }
   }
-}
 
-bool _isRejectedDraft(PurchaseOrder order) {
-  final reason = order.lastReturnReason;
-  return order.status == PurchaseOrderStatus.draft &&
-      ((reason != null && reason.trim().isNotEmpty) || order.returnCount > 0);
+  Future<Uint8List> _resolvePdfBytes(PurchaseOrder order) async {
+    if (!widget.hideBuyerFields) {
+      final remotePdfUrl = order.pdfUrl?.trim();
+      if (remotePdfUrl != null && remotePdfUrl.isNotEmpty) {
+        final response = await http.get(Uri.parse(remotePdfUrl));
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          return response.bodyBytes;
+        }
+      }
+    }
+    final branding = ref.read(currentBrandingProvider);
+    final pdfData = _buildOrderPdfDataForView(
+      branding,
+      order,
+      hideBuyerFields: widget.hideBuyerFields,
+    );
+    return buildOrderPdf(
+      pdfData,
+      useIsolate: false,
+    );
+  }
 }
 
 class _OrderPdfBody extends ConsumerWidget {
@@ -185,7 +224,18 @@ class _OrderPdfBody extends ConsumerWidget {
       order,
       hideBuyerFields: hideBuyerFields,
     );
-    return OrderPdfInlineView(data: pdfData);
+    final remotePdfUrl = hideBuyerFields ? null : order.pdfUrl;
+    return OrderPdfInlineView(
+      data: pdfData,
+      remotePdfUrl: remotePdfUrl,
+      pdfBuilder: (
+        data, {
+        bool useIsolate = false,
+      }) => buildOrderPdf(
+        data,
+        useIsolate: false,
+      ),
+    );
   }
 }
 
@@ -209,51 +259,12 @@ OrderPdfData _buildOrderPdfDataForView(
     supplier: hideBuyerFields ? '' : null,
     items: sanitizedItems,
     hideBudget: hideBuyerFields,
-    suppressUpdatedAt: _isRejectedDraft(order),
   );
 }
 
-class _PdfViewHistoryActionButton extends ConsumerWidget {
-  const _PdfViewHistoryActionButton({
-    required this.order,
-    required this.onShowHistory,
-  });
-
-  final PurchaseOrder order;
-  final ValueChanged<List<PurchaseOrderEvent>> onShowHistory;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    if (order.returnCount <= 0) {
-      return IconButton(
-        icon: const Icon(Icons.history),
-        tooltip: 'Historial de cambios',
-        onPressed: null,
-      );
-    }
-
-    final eventsAsync = ref.watch(orderEventsProvider(order.id));
-
-    return eventsAsync.when(
-      data: (events) {
-        final canShow = events.any((event) => event.type == 'return');
-
-        return IconButton(
-          icon: const Icon(Icons.history),
-          tooltip: 'Historial de cambios',
-          onPressed: canShow ? () => onShowHistory(events) : null,
-        );
-      },
-      loading: () => IconButton(
-        icon: const Icon(Icons.history),
-        tooltip: 'Historial de cambios',
-        onPressed: null,
-      ),
-      error: (_, __) => IconButton(
-        icon: const Icon(Icons.history),
-        tooltip: 'Historial de cambios',
-        onPressed: null,
-      ),
-    );
-  }
+String _copyOrderLocation(String orderId) {
+  return Uri(
+    path: '/orders/create',
+    queryParameters: {'copyFromId': orderId},
+  ).toString();
 }

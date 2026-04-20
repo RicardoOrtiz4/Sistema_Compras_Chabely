@@ -4,22 +4,18 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:sistema_compras/features/orders/domain/order_dashboard_counts.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
-import 'package:sistema_compras/features/orders/domain/supplier_quote.dart';
 
 class OrderLocalSnapshotStore {
   static const _ordersPrefix = 'orders.snapshot.';
-  static const _quotesPrefix = 'quotes.snapshot.';
   static const _countsPrefix = 'counts.snapshot.';
   static const _schemaVersion = 2;
   static const _envelopeVersionKey = 'version';
   static const _envelopeSavedAtKey = 'savedAt';
   static const _envelopeDataKey = 'data';
   static const _maxCachedOrders = 40;
-  static const _maxCachedQuotes = 40;
   static const _countsTtl = Duration(minutes: 3);
   static const _operationalOrdersTtl = Duration(minutes: 8);
   static const _historyOrdersTtl = Duration(minutes: 20);
-  static const _quotesTtl = Duration(minutes: 12);
   static SharedPreferences? _prefs;
 
   static Future<void> ensureInitialized() async {
@@ -49,32 +45,6 @@ class OrderLocalSnapshotStore {
     await _writeJson('$_ordersPrefix$key', [
       for (final order in orders.take(_maxCachedOrders))
         {'id': order.id, 'data': order.toMap()},
-    ]);
-  }
-
-  static Future<List<SupplierQuote>?> readSupplierQuotes(String key) async {
-    final raw = await _readJson('$_quotesPrefix$key', ttl: _quotesTtl);
-    if (raw is! List) return null;
-
-    final quotes = <SupplierQuote>[];
-    for (final entry in raw) {
-      if (entry is! Map) continue;
-      final map = Map<String, dynamic>.from(entry);
-      final id = (map['id'] as String?)?.trim() ?? '';
-      final data = map['data'];
-      if (id.isEmpty || data is! Map) continue;
-      quotes.add(SupplierQuote.fromMap(id, Map<String, dynamic>.from(data)));
-    }
-    return quotes;
-  }
-
-  static Future<void> writeSupplierQuotes(
-    String key,
-    List<SupplierQuote> quotes,
-  ) async {
-    await _writeJson('$_quotesPrefix$key', [
-      for (final quote in quotes.take(_maxCachedQuotes))
-        {'id': quote.id, 'data': quote.toMap()},
     ]);
   }
 

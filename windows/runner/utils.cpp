@@ -365,7 +365,7 @@ void CreateAndAttachConsole() {
 }
 
 void InstallCrashHandlers() {
-  // Crash investigation instrumentation removed.
+  SetUnhandledExceptionFilter(UnhandledCrashLogger);
 }
 
 std::vector<std::string> GetCommandLineArguments() {

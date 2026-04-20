@@ -27,18 +27,15 @@ class OrderPdfData {
     this.internalOrder,
     this.budget,
     this.supplierBudgets = const {},
-    this.comprasComment,
-    this.comprasReviewerName,
-    this.comprasReviewerArea,
-    this.processedByName,
-    this.processedByArea,
-    this.direccionGeneralName,
-    this.direccionGeneralArea,
     this.urgentJustification,
     this.requestedDeliveryDate,
     this.etaDate,
     this.resubmissionDates = const [],
     this.pendingResubmissionLabel,
+    this.authorizedByName,
+    this.authorizedByArea,
+    this.processByName,
+    this.processByArea,
     this.suppressCreatedTime = false,
     this.blankTemplate = false,
     this.cacheSalt,
@@ -61,15 +58,6 @@ class OrderPdfData {
 
   final num? budget;
   final Map<String, num> supplierBudgets;
-
-  final String? comprasComment;
-  final String? comprasReviewerName;
-  final String? comprasReviewerArea;
-  final String? processedByName;
-  final String? processedByArea;
-
-  final String? direccionGeneralName;
-  final String? direccionGeneralArea;
   final String? urgentJustification;
 
   final DateTime? requestedDeliveryDate;
@@ -77,6 +65,10 @@ class OrderPdfData {
 
   final List<DateTime> resubmissionDates;
   final String? pendingResubmissionLabel;
+  final String? authorizedByName;
+  final String? authorizedByArea;
+  final String? processByName;
+  final String? processByArea;
   final bool suppressCreatedTime;
   final bool blankTemplate;
 
@@ -458,10 +450,10 @@ Future<Uint8List> _buildCotizacionPdfWithAssets(
           final footerSections = _buildFooterSections(data);
           return [
             pw.SizedBox(height: 8),
-            _sectionTitle('DATOS DE REQUISICION'),
+            _sectionTitle('DATOS DE REQUISICIÓN'),
             _buildMetaSection(data, dateFormat, timeFormat),
             pw.SizedBox(height: 8),
-            _sectionTitle('ARTICULOS'),
+            _sectionTitle('ARTÍCULOS'),
             ..._buildItemsTables(data, dateFormat),
             if (footerSections.isNotEmpty) ...[
               pw.SizedBox(height: 8),
@@ -700,10 +692,10 @@ pw.Widget _buildSinglePageCotizacionLayout(
     children: [
       _buildHeader(logo, data.branding, pageNumber: 1, pageCount: 1),
       pw.SizedBox(height: 8),
-      _sectionTitle('DATOS DE REQUISICION'),
+      _sectionTitle('DATOS DE REQUISICIÓN'),
       _buildMetaSection(data, dateFormat, timeFormat),
       pw.SizedBox(height: 8),
-      _sectionTitle('ARTICULOS'),
+      _sectionTitle('ARTÍCULOS'),
       ..._buildItemsTables(data, dateFormat),
       if (footerSections.isNotEmpty) ...[
         pw.SizedBox(height: 8),
@@ -1274,27 +1266,21 @@ String _acerproRefLine(CompanyBranding branding) {
 }
 
 String _autorizaName(OrderPdfData data) {
-  final direccion = (data.direccionGeneralName ?? '').trim();
-  if (direccion.isNotEmpty) return direccion;
-  final compras = (data.comprasReviewerName ?? '').trim();
-  return compras;
+  return (data.authorizedByName ?? '').trim();
 }
 
 String _procesoName(OrderPdfData data) {
-  final processed = (data.processedByName ?? '').trim();
-  return processed;
+  return (data.processByName ?? '').trim();
 }
 
 String? _procesoArea(OrderPdfData data) {
-  final processedArea = (data.processedByArea ?? '').trim();
-  return processedArea.isEmpty ? null : processedArea;
+  final value = (data.processByArea ?? '').trim();
+  return value.isEmpty ? null : value;
 }
 
 String? _autorizaArea(OrderPdfData data) {
-  final direccionArea = (data.direccionGeneralArea ?? '').trim();
-  if (direccionArea.isNotEmpty) return direccionArea;
-  final comprasArea = (data.comprasReviewerArea ?? '').trim();
-  return comprasArea.isEmpty ? null : comprasArea;
+  final value = (data.authorizedByArea ?? '').trim();
+  return value.isEmpty ? null : value;
 }
 
 pw.Widget _buildBlankTextSection(
@@ -1532,7 +1518,7 @@ pw.Widget _signatureBox({
   bool areaInTitle = false,
 }) {
   final border = pw.Border.all(width: 0.8, color: PdfColors.grey700);
-  final areaLabel = (area == null || area.trim().isEmpty) ? '' : area.trim();
+  final areaLabel = _uppercaseSignatureArea(area) ?? '';
 
   return pw.Expanded(
     child: pw.Container(
@@ -1570,6 +1556,12 @@ pw.Widget _signatureBox({
       ),
     ),
   );
+}
+
+String? _uppercaseSignatureArea(String? area) {
+  final trimmed = area?.trim() ?? '';
+  if (trimmed.isEmpty) return null;
+  return trimmed.toUpperCase();
 }
 
 String _pdfCacheKey(OrderPdfData data, PdfPageFormat? format) {
@@ -1633,20 +1625,6 @@ String _pdfCacheKey(OrderPdfData data, PdfPageFormat? format) {
   }
 
   buffer
-    ..write(';comment:')
-    ..write(data.comprasComment ?? '')
-    ..write(';rev:')
-    ..write(data.comprasReviewerName ?? '')
-    ..write('|')
-    ..write(data.comprasReviewerArea ?? '')
-    ..write(';proc:')
-    ..write(data.processedByName ?? '')
-    ..write('|')
-    ..write(data.processedByArea ?? '')
-    ..write(';dg:')
-    ..write(data.direccionGeneralName ?? '')
-    ..write('|')
-    ..write(data.direccionGeneralArea ?? '')
     ..write(';urgentJustification:')
     ..write(data.urgentJustification ?? '')
     ..write(';reqDate:')
@@ -1965,13 +1943,6 @@ OrderPdfData _sanitizePdfData(OrderPdfData data) {
     internalOrder: _sanitizePdfOptional(data.internalOrder),
     budget: data.budget,
     supplierBudgets: _sanitizeBudgets(data.supplierBudgets),
-    comprasComment: _sanitizePdfOptional(data.comprasComment),
-    comprasReviewerName: _sanitizePdfOptional(data.comprasReviewerName),
-    comprasReviewerArea: _sanitizePdfOptional(data.comprasReviewerArea),
-    processedByName: _sanitizePdfOptional(data.processedByName),
-    processedByArea: _sanitizePdfOptional(data.processedByArea),
-    direccionGeneralName: _sanitizePdfOptional(data.direccionGeneralName),
-    direccionGeneralArea: _sanitizePdfOptional(data.direccionGeneralArea),
     urgentJustification: _sanitizePdfOptional(data.urgentJustification),
     requestedDeliveryDate: data.requestedDeliveryDate,
     etaDate: data.etaDate,
@@ -1979,6 +1950,10 @@ OrderPdfData _sanitizePdfData(OrderPdfData data) {
     pendingResubmissionLabel: _sanitizePdfOptional(
       data.pendingResubmissionLabel,
     ),
+    authorizedByName: _sanitizePdfOptional(data.authorizedByName),
+    authorizedByArea: _sanitizePdfOptional(data.authorizedByArea),
+    processByName: _sanitizePdfOptional(data.processByName),
+    processByArea: _sanitizePdfOptional(data.processByArea),
     suppressCreatedTime: data.suppressCreatedTime,
     blankTemplate: data.blankTemplate,
     cacheSalt: data.cacheSalt,
@@ -2148,17 +2123,14 @@ Map<String, dynamic> _serializePdfPayload(
     'internalOrder': data.internalOrder,
     'budget': data.budget,
     'supplierBudgets': data.supplierBudgets,
-    'comprasComment': data.comprasComment,
-    'comprasReviewerName': data.comprasReviewerName,
-    'comprasReviewerArea': data.comprasReviewerArea,
-    'processedByName': data.processedByName,
-    'processedByArea': data.processedByArea,
-    'direccionGeneralName': data.direccionGeneralName,
-    'direccionGeneralArea': data.direccionGeneralArea,
     'urgentJustification': data.urgentJustification,
     'requestedDeliveryDate': data.requestedDeliveryDate?.millisecondsSinceEpoch,
     'etaDate': data.etaDate?.millisecondsSinceEpoch,
     'pendingResubmissionLabel': data.pendingResubmissionLabel,
+    'authorizedByName': data.authorizedByName,
+    'authorizedByArea': data.authorizedByArea,
+    'processByName': data.processByName,
+    'processByArea': data.processByArea,
     'resubmissionDates': data.resubmissionDates
         .map((date) => date.millisecondsSinceEpoch)
         .toList(),
@@ -2281,17 +2253,14 @@ OrderPdfData _deserializeOrderPdfData(
     internalOrder: payload['internalOrder'] as String?,
     budget: payload['budget'] as num?,
     supplierBudgets: _parseSupplierBudgets(payload['supplierBudgets']),
-    comprasComment: payload['comprasComment'] as String?,
-    comprasReviewerName: payload['comprasReviewerName'] as String?,
-    comprasReviewerArea: payload['comprasReviewerArea'] as String?,
-    processedByName: payload['processedByName'] as String?,
-    processedByArea: payload['processedByArea'] as String?,
-    direccionGeneralName: payload['direccionGeneralName'] as String?,
-    direccionGeneralArea: payload['direccionGeneralArea'] as String?,
     urgentJustification: payload['urgentJustification'] as String?,
     requestedDeliveryDate: _parseMillis(payload['requestedDeliveryDate']),
     etaDate: _parseMillis(payload['etaDate']),
     pendingResubmissionLabel: payload['pendingResubmissionLabel'] as String?,
+    authorizedByName: payload['authorizedByName'] as String?,
+    authorizedByArea: payload['authorizedByArea'] as String?,
+    processByName: payload['processByName'] as String?,
+    processByArea: payload['processByArea'] as String?,
     resubmissionDates: _parseResubmissionDates(payload['resubmissionDates']),
     cacheSalt: payload['cacheSalt'] as String?,
   );

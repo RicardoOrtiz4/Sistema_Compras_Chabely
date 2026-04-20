@@ -1,4 +1,4 @@
-linea,noParte,descripcion,cantidad,unidad,cliente,fechaEstimada
-1,NP-001,Tornillos M8x20,200,pzas,Cliente A,2026-02-10
-2,NP-002,Arandela M8 zinc,200,pzas,Cliente A,2026-02-10
-3,NP-003,Bote de pintura 20L,4,pzas,Cliente B,2026-02-15
+linea,noParte,descripcion,cantidad,unidad
+1,ROD-6204,Rodamiento sellado 6204 2RS,12,PZA
+2,ACE-HID-46,Aceite hidraulico ISO VG 46,4,GAL
+3,TOR-M8X30,Tornillo hexagonal M8 x 30 mm grado 8.8,100,PZA

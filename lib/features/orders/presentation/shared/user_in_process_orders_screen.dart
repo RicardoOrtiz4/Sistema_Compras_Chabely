@@ -292,6 +292,18 @@ class _UserInProcessOrdersScreenState
                 : 'Tienes ${orders.length} ordenes finalizadas pendientes de llegada. Cuando las recibas, entra a cada una y confirma de recibido para mandarlas al historial.',
           ),
           actions: [
+            if (orders.isNotEmpty)
+              TextButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop();
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => UserOrderTrackingScreen(orderId: orders.first.id),
+                    ),
+                  );
+                },
+                child: Text(orders.length == 1 ? 'Ir a la orden' : 'Ir a una orden'),
+              ),
             FilledButton(
               onPressed: () => Navigator.of(dialogContext).pop(),
               child: const Text('Entendido'),
@@ -355,6 +367,18 @@ class _UserInProcessOrdersScreenState
                 : 'Tienes ${orders.length} ordenes con llegadas parciales registradas. Revisa en la app cuales items llegaron, cuales faltan y si van en tiempo o con atraso.',
           ),
           actions: [
+            if (orders.isNotEmpty)
+              TextButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop();
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => UserOrderTrackingScreen(orderId: orders.first.id),
+                    ),
+                  );
+                },
+                child: Text(orders.length == 1 ? 'Ir a la orden' : 'Ir a una orden'),
+              ),
             FilledButton(
               onPressed: () => Navigator.of(dialogContext).pop(),
               child: const Text('Revisar despues'),
@@ -370,7 +394,7 @@ class _UserInProcessOrdersScreenState
         .where(
           (order) =>
               order.status != PurchaseOrderStatus.draft &&
-              !order.isRequesterReceiptConfirmed,
+              !order.isWorkflowFinished,
         )
         .toList(growable: false);
   }
@@ -416,21 +440,32 @@ class _UserInProcessOrdersScreenState
       '${_createdDateRangeFilter?.end.millisecondsSinceEpoch ?? ''}';
 }
 
-class _UserInProcessOrderCard extends StatelessWidget {
+class _UserInProcessOrderCard extends ConsumerStatefulWidget {
   const _UserInProcessOrderCard({required this.order});
 
   final PurchaseOrder order;
 
   @override
+  ConsumerState<_UserInProcessOrderCard> createState() =>
+      _UserInProcessOrderCardState();
+}
+
+class _UserInProcessOrderCardState
+    extends ConsumerState<_UserInProcessOrderCard> {
+  bool _confirmingReceived = false;
+
+  @override
   Widget build(BuildContext context) {
-    final committedItems =
-        order.items.where((item) => item.deliveryEtaDate != null).length;
-    final totalItems = order.items.length;
+    final order = widget.order;
+    final committedItems = countItemsWithCommittedDeliveryDate(order);
+    final totalItems = countFulfillmentItems(order);
     final arrivedItems = countArrivedItems(order);
     final pendingArrivalItems = countPendingArrivalItems(order);
     final committedDate = resolveCommittedDeliveryDate(order);
     final requestedDate = resolveRequestedDeliveryDate(order);
     final urgentJustification = (order.urgentJustification ?? '').trim();
+    final notPurchasedCount = countItemsMarkedAsNotPurchased(order);
+    final currentUser = ref.watch(currentUserProfileProvider).value;
 
     return Card(
       child: Padding(
@@ -470,6 +505,13 @@ class _UserInProcessOrderCard extends StatelessWidget {
                   : 'Avance de fechas estimadas: $committedItems/$totalItems item(s)',
               style: Theme.of(context).textTheme.bodyMedium,
             ),
+            if (notPurchasedCount > 0) ...[
+              const SizedBox(height: 4),
+              Text(
+                'Items cerrados sin compra: $notPurchasedCount',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
             if (requestedDate != null) ...[
               const SizedBox(height: 4),
               Text('Fecha requerida: ${requestedDate.toShortDate()}'),
@@ -491,28 +533,64 @@ class _UserInProcessOrderCard extends StatelessWidget {
                 ),
                 child: Text(
                   order.isMaterialArrivalRegistered
-                      ? 'Contabilidad ya reporto que el material llego. Revisa el rastreo y confirma de recibido cuando te lo entreguen.'
-                      : 'La orden ya paso por todo el flujo interno. Revisa el rastreo y confirma cuando realmente hayas recibido los items.',
+                      ? 'El sistema ya tiene registrada la llegada del material. Confirma aqui cuando ya te entreguen fisicamente los items.'
+                      : 'La orden ya quedo finalizada internamente. Cuando realmente recibas los items, confirmala aqui y pasara al historial.',
                 ),
               ),
             ],
             const SizedBox(height: 12),
-            Align(
-              alignment: Alignment.centerRight,
-                child: FilledButton.icon(
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
                   onPressed: () => Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (_) => UserOrderTrackingScreen(orderId: order.id),
+                    ),
                   ),
+                  icon: const Icon(Icons.route_outlined),
+                  label: const Text('Ver rastreo'),
                 ),
-                icon: const Icon(Icons.route_outlined),
-                label: const Text('Ver rastreo'),
-              ),
+                if (order.isAwaitingRequesterReceipt && currentUser != null)
+                  FilledButton.icon(
+                    onPressed: _confirmingReceived
+                        ? null
+                        : () => _confirmReceived(order, currentUser),
+                    icon: _confirmingReceived
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.task_alt_outlined),
+                    label: const Text('Confirmar de recibido'),
+                  ),
+              ],
             ),
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _confirmReceived(PurchaseOrder order, AppUser actor) async {
+    setState(() => _confirmingReceived = true);
+    try {
+      final success = await _confirmRequesterReceipt(
+        context,
+        ref,
+        order: order,
+        actor: actor,
+        errorContext: 'UserInProcessOrdersScreen.confirmRequesterReceived',
+      );
+      if (!mounted || !success) return;
+    } finally {
+      if (mounted) {
+        setState(() => _confirmingReceived = false);
+      }
+    }
   }
 }
 
@@ -550,6 +628,10 @@ class _UserOrderTrackingScreenState
     final orderAsync = ref.watch(orderByIdStreamProvider(widget.orderId));
     final eventsAsync = ref.watch(orderEventsProvider(widget.orderId));
     final currentUser = ref.watch(currentUserProfileProvider).value;
+    final actorNamesById = {
+      for (final user in ref.watch(allUsersProvider).valueOrNull ?? const <AppUser>[])
+        user.id: user.name,
+    };
 
     return Scaffold(
       appBar: AppBar(
@@ -571,7 +653,7 @@ class _UserOrderTrackingScreenState
                 children: [
                   Expanded(
                     child: Text(
-                      'Rastreo de la orden completa',
+                      'Rastreo de la orden',
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                   ),
@@ -646,6 +728,7 @@ class _UserOrderTrackingScreenState
                   order: order,
                   events: events,
                   selection: selection,
+                  actorNamesById: actorNamesById,
                 ),
                 loading: () => const AppSplash(compact: true),
                 error: (error, stack) => Text(
@@ -670,60 +753,172 @@ class _UserOrderTrackingScreenState
   }
 
   Future<void> _confirmReceived(PurchaseOrder order, AppUser actor) async {
-    final accepted = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Confirmar recibido'),
-        content: const Text(
-          'Esto cerrara la orden para ti y la movera al historial. Hazlo solo cuando realmente hayas recibido los items.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Confirmar'),
-          ),
-        ],
-      ),
-    );
-    if (accepted != true || !mounted) return;
-
     setState(() => _confirmingReceived = true);
     try {
-      await ref.read(purchaseOrderRepositoryProvider).confirmRequesterReceived(
-            order: order,
-            actor: actor,
-          );
-      refreshRequesterReceiptWorkflowData(
+      final success = await _confirmRequesterReceipt(
+        context,
         ref,
-        orderIds: <String>[order.id],
+        order: order,
+        actor: actor,
+        errorContext: 'UserOrderTrackingScreen.confirmRequesterReceived',
       );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('La orden se movio al historial.')),
-      );
+      if (!mounted || !success) return;
       Navigator.of(context).pop();
-    } catch (error, stack) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            reportError(
-              error,
-              stack,
-              context: 'UserOrderTrackingScreen.confirmRequesterReceived',
-            ),
-          ),
-        ),
-      );
     } finally {
       if (mounted) {
         setState(() => _confirmingReceived = false);
       }
     }
+  }
+}
+
+Future<bool> _confirmRequesterReceipt(
+  BuildContext context,
+  WidgetRef ref, {
+  required PurchaseOrder order,
+  required AppUser actor,
+  required String errorContext,
+}) async {
+  final accepted = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('Confirmar recibido'),
+      content: const Text(
+        'Esto cerrara la orden para ti y la movera al historial. Hazlo solo cuando realmente hayas recibido los items.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(false),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(dialogContext).pop(true),
+          child: const Text('Confirmar'),
+        ),
+      ],
+    ),
+  );
+  if (accepted != true || !context.mounted) return false;
+
+  try {
+    await ref.read(purchaseOrderRepositoryProvider).confirmRequesterReceived(
+          order: order,
+          actor: actor,
+        );
+    if (!context.mounted) return false;
+    final rating = await _promptServiceRating(context);
+    if (rating != null) {
+      await ref.read(purchaseOrderRepositoryProvider).submitServiceRating(
+            order: order,
+            rating: rating.rating,
+            comment: rating.comment,
+          );
+    }
+    refreshRequesterReceiptWorkflowData(
+      ref,
+      orderIds: <String>[order.id],
+    );
+    if (!context.mounted) return false;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('La orden se movio al historial.')),
+    );
+    return true;
+  } catch (error, stack) {
+    if (!context.mounted) return false;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          reportError(
+            error,
+            stack,
+            context: errorContext,
+          ),
+        ),
+      ),
+    );
+    return false;
+  }
+}
+
+class _ServiceRatingResult {
+  const _ServiceRatingResult({
+    required this.rating,
+    this.comment,
+  });
+
+  final int rating;
+  final String? comment;
+}
+
+Future<_ServiceRatingResult?> _promptServiceRating(BuildContext context) async {
+  var selectedRating = 0;
+  final commentController = TextEditingController();
+  try {
+    return await showDialog<_ServiceRatingResult>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (dialogContext, setState) {
+            return AlertDialog(
+              title: const Text('Calificar el proceso'),
+              content: SizedBox(
+                width: 520,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Califica el servicio y atencion que recibio tu requisicion. Esto se usara despues en reportes.',
+                    ),
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 8,
+                      children: List<Widget>.generate(
+                        5,
+                        (index) => ChoiceChip(
+                          label: Text('${index + 1}'),
+                          selected: selectedRating == index + 1,
+                          onSelected: (_) => setState(() => selectedRating = index + 1),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: commentController,
+                      minLines: 2,
+                      maxLines: 4,
+                      decoration: const InputDecoration(
+                        labelText: 'Comentario opcional',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Omitir'),
+                ),
+                FilledButton(
+                  onPressed: selectedRating <= 0
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(
+                            _ServiceRatingResult(
+                              rating: selectedRating,
+                              comment: commentController.text.trim(),
+                            ),
+                          ),
+                  child: const Text('Guardar'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  } finally {
+    commentController.dispose();
   }
 }
 
@@ -735,7 +930,11 @@ class _PartialArrivalStatusCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final trackedItems = order.items
-        .where((item) => item.deliveryEtaDate != null || item.isArrivalRegistered)
+        .where(
+          (item) =>
+              item.requiresFulfillment &&
+              (item.deliveryEtaDate != null || item.isArrivalRegistered),
+        )
         .toList(growable: false)
       ..sort((a, b) => a.line.compareTo(b.line));
     if (trackedItems.isEmpty) {
@@ -794,11 +993,13 @@ class _TrackingTimelineCard extends StatelessWidget {
     required this.order,
     required this.events,
     required this.selection,
+    required this.actorNamesById,
   });
 
   final PurchaseOrder order;
   final List<PurchaseOrderEvent> events;
   final _TrackingSelection selection;
+  final Map<String, String> actorNamesById;
 
   @override
   Widget build(BuildContext context) {
@@ -817,7 +1018,7 @@ class _TrackingTimelineCard extends StatelessWidget {
                 isLast:
                     statuses.isEmpty &&
                     order.status != PurchaseOrderStatus.eta &&
-                    !order.isRequesterReceiptConfirmed,
+                    !order.isWorkflowFinished,
               ),
             for (var index = 0; index < statuses.length; index++)
               _TrackingTimelineTile(
@@ -827,10 +1028,10 @@ class _TrackingTimelineCard extends StatelessWidget {
                 isLast: index == statuses.length - 1 &&
                     order.status != PurchaseOrderStatus.eta,
                 duration: _statusDurationFor(order, statuses[index], currentStatus),
-                actorSummary: _actorSummaryForStatus(order, statuses[index]),
                 event: _latestEventForStatus(events, statuses[index]),
                 rejectionEvent: _latestReturnForStatus(events, statuses[index]),
                 allEvents: events,
+                actorNamesById: actorNamesById,
                 note: _noteForStatus(
                   order,
                   statuses[index],
@@ -847,11 +1048,11 @@ class _TrackingTimelineCard extends StatelessWidget {
                         )
                     : null,
               ),
-            if (order.status == PurchaseOrderStatus.eta ||
-                order.isRequesterReceiptConfirmed)
+            if (order.status == PurchaseOrderStatus.eta || order.isWorkflowFinished)
               _RequesterReceiptTimelineTile(
                 order: order,
                 events: events,
+                actorNamesById: actorNamesById,
               ),
           ],
         ),
@@ -902,7 +1103,7 @@ class _TrackingPdfCreatedTile extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(
-                          'PDF de la orden creado',
+                          'Orden creada',
                           style: Theme.of(context).textTheme.titleMedium,
                         ),
                       ),
@@ -928,7 +1129,7 @@ class _TrackingPdfCreatedTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Fecha base del documento que acompaña el rastreo.',
+                    'Fecha base con la que inicio el flujo de la orden.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                   Padding(
@@ -955,10 +1156,10 @@ class _TrackingTimelineTile extends StatelessWidget {
     required this.currentStatus,
     required this.isLast,
     required this.duration,
-    required this.actorSummary,
     required this.event,
     required this.rejectionEvent,
     required this.allEvents,
+    required this.actorNamesById,
     required this.note,
     this.itemCount = 0,
     this.onShowItems,
@@ -969,10 +1170,10 @@ class _TrackingTimelineTile extends StatelessWidget {
   final PurchaseOrderStatus currentStatus;
   final bool isLast;
   final Duration duration;
-  final String? actorSummary;
   final PurchaseOrderEvent? event;
   final PurchaseOrderEvent? rejectionEvent;
   final List<PurchaseOrderEvent> allEvents;
+  final Map<String, String> actorNamesById;
   final String? note;
   final int itemCount;
   final VoidCallback? onShowItems;
@@ -992,7 +1193,20 @@ class _TrackingTimelineTile extends StatelessWidget {
                 ? 'Completado'
                 : 'Pendiente';
     final color = isCompleted ? status.statusColor(scheme) : scheme.outlineVariant;
-    final rejectionActor = _eventActorLabel(rejectionEvent);
+    final statusBadgeBackground = isCompleted
+        ? color.withValues(alpha: isCurrent ? 0.22 : 0.14)
+        : scheme.surfaceContainerHighest;
+    final statusBadgeForeground = isCurrent
+        ? const Color(0xFF1F2937)
+        : isCompleted
+            ? color
+            : scheme.onSurfaceVariant;
+    final stageActorEvent =
+        isCompleted && !isCurrent
+            ? _latestStageCompletionEvent(allEvents, status)
+            : null;
+    final displayedActor = _eventActorLabel(stageActorEvent, actorNamesById);
+    final rejectionActor = _eventActorLabel(rejectionEvent, actorNamesById);
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1034,17 +1248,13 @@ class _TrackingTimelineTile extends StatelessWidget {
                           vertical: 4,
                         ),
                         decoration: BoxDecoration(
-                          color: isCompleted
-                              ? color.withValues(alpha: 0.14)
-                              : scheme.surfaceContainerHighest,
+                          color: statusBadgeBackground,
                           borderRadius: BorderRadius.circular(999),
                         ),
                         child: Text(
                           statusText,
                           style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                                color: isCompleted
-                                    ? color
-                                    : scheme.onSurfaceVariant,
+                                color: statusBadgeForeground,
                                 fontWeight: FontWeight.w700,
                               ),
                         ),
@@ -1068,17 +1278,16 @@ class _TrackingTimelineTile extends StatelessWidget {
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ),
-                  if ((actorSummary != null && actorSummary!.isNotEmpty) ||
-                      isRejectedPending)
+                  if (displayedActor.isNotEmpty || isRejectedPending)
                     Padding(
                       padding: const EdgeInsets.only(top: 6),
                       child: Wrap(
                         spacing: 6,
                         runSpacing: 6,
                         children: [
-                          if (actorSummary != null && actorSummary!.isNotEmpty)
+                          if (displayedActor.isNotEmpty)
                             _TrackingMetaTag(
-                              text: 'Actor de etapa: $actorSummary',
+                              text: 'Actor de etapa: $displayedActor',
                             ),
                           if (isRejectedPending)
                             _TrackingMetaTag(
@@ -1158,21 +1367,27 @@ class _RequesterReceiptTimelineTile extends StatelessWidget {
   const _RequesterReceiptTimelineTile({
     required this.order,
     required this.events,
+    required this.actorNamesById,
   });
 
   final PurchaseOrder order;
   final List<PurchaseOrderEvent> events;
+  final Map<String, String> actorNamesById;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final isCompleted = order.isRequesterReceiptConfirmed;
+    final isCompleted = order.isWorkflowFinished;
     final color = isCompleted ? scheme.primary : scheme.outlineVariant;
     final receiptEvent = _latestReceiptEvent(events);
     final etaEvent = _latestEventForStatus(events, PurchaseOrderStatus.eta);
-    final receiptActor = _requesterReceiptActorSummary(order);
+    final receiptActorFromEvent = _eventActorLabel(receiptEvent, actorNamesById);
+    final receiptActor = receiptActorFromEvent.isNotEmpty
+        ? receiptActorFromEvent
+        : _requesterReceiptActorSummary(order);
     final startedAt = etaEvent?.timestamp;
-    final finishedAt = order.requesterReceivedAt ?? DateTime.now();
+    final finishedAt =
+        order.requesterReceivedAt ?? order.completedAt ?? order.updatedAt ?? DateTime.now();
     var duration = Duration.zero;
     if (startedAt != null) {
       duration = finishedAt.difference(startedAt);
@@ -1199,7 +1414,9 @@ class _RequesterReceiptTimelineTile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    order.isRequesterReceiptAutoConfirmed
+                    order.isClosedWithoutPurchase
+                        ? 'Cierre sin compra'
+                        : order.isRequesterReceiptAutoConfirmed
                         ? 'Llegado pero no confirmado'
                         : 'Confirmacion de recibido',
                     style: Theme.of(context).textTheme.titleMedium,
@@ -1232,6 +1449,8 @@ class _RequesterReceiptTimelineTile extends StatelessWidget {
                     child: Text(
                       order.isRequesterReceiptAutoConfirmed
                           ? 'La orden se cerro automaticamente despues de 10 dias sin confirmacion del solicitante.'
+                          : order.isClosedWithoutPurchase
+                          ? 'Todos los items quedaron resueltos sin compra y la orden ya se cerro.'
                           : isCompleted
                           ? 'La orden ya fue confirmada como recibida y paso al historial.'
                           : 'La orden ya fue finalizada internamente y esta pendiente de que la confirmes como recibida.',
@@ -1382,10 +1601,7 @@ void _showTrackingStatusItemsSheet(
 }
 
 String _trackingSelectionTitle(PurchaseOrder order) {
-  if (_shouldShowGroupedTracking(order)) {
-    return 'El rastreo sigue siendo de la orden completa. En cada etapa podras ver cuantos items estan en esa parte del flujo.';
-  }
-  return 'Rastreo de la orden completa';
+  return 'Seguimiento completo de la orden.';
 }
 
 String _formatTrackingDuration(Duration duration) {
@@ -1438,10 +1654,10 @@ PurchaseOrderStatus _normalizeTrackingStatus(PurchaseOrderStatus status) {
 List<PurchaseOrderStatus> _reachedTrackingStatuses(
 ) {
   return const <PurchaseOrderStatus>[
-    PurchaseOrderStatus.pendingCompras,
-    PurchaseOrderStatus.cotizaciones,
-    PurchaseOrderStatus.dataComplete,
-    PurchaseOrderStatus.authorizedGerencia,
+    PurchaseOrderStatus.intakeReview,
+    PurchaseOrderStatus.sourcing,
+    PurchaseOrderStatus.readyForApproval,
+    PurchaseOrderStatus.approvalQueue,
     PurchaseOrderStatus.paymentDone,
     PurchaseOrderStatus.contabilidad,
     PurchaseOrderStatus.eta,
@@ -1449,16 +1665,14 @@ List<PurchaseOrderStatus> _reachedTrackingStatuses(
 }
 
 bool _shouldShowGroupedTracking(PurchaseOrder order) {
-  return order.status.index >= PurchaseOrderStatus.cotizaciones.index;
+  return false;
 }
 
 bool _shouldShowItemBreakdown(
   PurchaseOrder order,
   PurchaseOrderStatus status,
 ) {
-  if (!_shouldShowGroupedTracking(order)) return false;
-  if (status.index <= PurchaseOrderStatus.cotizaciones.index) return false;
-  return _itemsForTrackingStatus(order, status).isNotEmpty;
+  return false;
 }
 
 List<PurchaseOrderItem> _itemsForTrackingStatus(
@@ -1508,27 +1722,8 @@ PurchaseOrderStatus _itemTrackingStatus(
   PurchaseOrder order,
   PurchaseOrderItem item,
 ) {
-  if (order.status == PurchaseOrderStatus.pendingCompras) {
-    return PurchaseOrderStatus.pendingCompras;
-  }
-  if (order.status == PurchaseOrderStatus.contabilidad) {
-    return PurchaseOrderStatus.contabilidad;
-  }
-  if (order.status == PurchaseOrderStatus.eta) {
-    return PurchaseOrderStatus.eta;
-  }
-
-  switch (item.quoteStatus) {
-    case PurchaseOrderItemQuoteStatus.pending:
-    case PurchaseOrderItemQuoteStatus.rejected:
-      return PurchaseOrderStatus.cotizaciones;
-    case PurchaseOrderItemQuoteStatus.draft:
-      return PurchaseOrderStatus.dataComplete;
-    case PurchaseOrderItemQuoteStatus.pendingDireccion:
-      return PurchaseOrderStatus.authorizedGerencia;
-    case PurchaseOrderItemQuoteStatus.approved:
-      return PurchaseOrderStatus.paymentDone;
-  }
+  if (item.isNotPurchased) return PurchaseOrderStatus.eta;
+  return order.status;
 }
 
 PurchaseOrderEvent? _latestEventForStatus(
@@ -1592,30 +1787,28 @@ PurchaseOrderEvent? _latestReturnForStatus(
   return selected;
 }
 
-String? _actorSummaryForStatus(PurchaseOrder order, PurchaseOrderStatus status) {
-  switch (status) {
-    case PurchaseOrderStatus.pendingCompras:
-      return _actorSummary(order.requesterName, order.areaName);
-    case PurchaseOrderStatus.cotizaciones:
-    case PurchaseOrderStatus.dataComplete:
-      return _actorSummary(
-        order.comprasReviewerName,
-        order.comprasReviewerArea,
-      );
-    case PurchaseOrderStatus.authorizedGerencia:
-      return _actorSummary(order.processedByName, order.processedByArea);
-    case PurchaseOrderStatus.paymentDone:
-      return _actorSummary(
-        order.direccionGeneralName,
-        order.direccionGeneralArea,
-      );
-    case PurchaseOrderStatus.contabilidad:
-    case PurchaseOrderStatus.orderPlaced:
-    case PurchaseOrderStatus.eta:
-      return _actorSummary(order.contabilidadName, order.contabilidadArea);
-    case PurchaseOrderStatus.draft:
-      return null;
+PurchaseOrderEvent? _latestStageCompletionEvent(
+  List<PurchaseOrderEvent> events,
+  PurchaseOrderStatus status,
+) {
+  PurchaseOrderEvent? selected;
+  for (final event in events) {
+    if (event.type != 'advance') continue;
+    final fromStatus = event.fromStatus;
+    if (fromStatus == null || _normalizeTrackingStatus(fromStatus) != status) {
+      continue;
+    }
+    if (selected == null) {
+      selected = event;
+      continue;
+    }
+    final currentMs = event.timestamp?.millisecondsSinceEpoch ?? 0;
+    final selectedMs = selected.timestamp?.millisecondsSinceEpoch ?? 0;
+    if (currentMs >= selectedMs) {
+      selected = event;
+    }
   }
+  return selected;
 }
 
 String? _actorSummary(String? name, String? area) {
@@ -1643,6 +1836,9 @@ String? _noteForStatus(
   Set<int> currentLines,
 ) {
   if (status == PurchaseOrderStatus.eta) {
+    if (countFulfillmentItems(order) == 0 && order.hasItemsMarkedAsNotPurchased) {
+      return 'Todos los items de esta orden se cerraron sin compra.';
+    }
     if (order.isMaterialArrivalRegistered) {
       return 'Material reportado como llegado: ${order.materialArrivedAt!.toFullDateTime()}';
     }
@@ -1678,26 +1874,20 @@ String? _noteForStatus(
 
 
 String _orderTrackingStatusLabel(PurchaseOrder order) {
-  if (order.isRequesterReceiptAutoConfirmed) {
-    return 'Llegado pero no confirmado';
-  }
-  if (order.isArrivalPendingConfirmation) {
-    return 'Llegado pendiente de confirmacion';
-  }
-  if (order.isAwaitingRequesterReceipt) {
-    return order.isMaterialArrivalRegistered
-        ? 'Material llegado'
-        : 'Pendiente de confirmar recibido';
-  }
-  if (order.isRequesterReceiptConfirmed) {
-    return 'Recibida';
-  }
-  return order.status.label;
+  return requesterReceiptStatusLabel(order);
 }
 
-String _eventActorLabel(PurchaseOrderEvent? event) {
+String _eventActorLabel(
+  PurchaseOrderEvent? event,
+  Map<String, String> actorNamesById,
+) {
   if (event == null) return '';
-  final resolvedName = event.byUser.trim().isEmpty ? 'Sistema' : event.byUser.trim();
+  final byUser = event.byUser.trim();
+  final resolvedName = byUser.isEmpty
+      ? 'Sistema'
+      : (actorNamesById[byUser]?.trim().isNotEmpty == true
+            ? actorNamesById[byUser]!.trim()
+            : byUser);
   final role = event.byRole.trim();
   if (role.isEmpty) return resolvedName;
   return '$resolvedName ($role)';

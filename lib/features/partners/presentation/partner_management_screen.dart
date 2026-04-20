@@ -6,6 +6,7 @@ import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/providers.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/features/partners/data/partner_repository.dart';
+import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 
 class PartnerManagementScreen extends ConsumerWidget {
   const PartnerManagementScreen({required this.type, super.key});
@@ -45,13 +46,11 @@ class PartnerManagementScreen extends ConsumerWidget {
             separatorBuilder: (_, __) => const SizedBox(height: 12),
             itemBuilder: (context, index) {
               final partner = partners[index];
-              final updatedAt = partner.updatedAt ?? partner.createdAt;
-              final subtitle = updatedAt == null
-                  ? null
-                  : 'Actualizado: ${updatedAt.toFullDateTime()}';
+              final subtitle = _partnerSubtitle(partner);
 
               return Card(
                 child: ListTile(
+                  isThreeLine: subtitle?.contains('\n') ?? false,
                   title: Text(partner.name),
                   subtitle: subtitle == null ? null : Text(subtitle),
                   trailing: Row(
@@ -109,6 +108,7 @@ Future<void> _showUpsertDialog(
 
   final repo = ref.read(partnerRepositoryProvider);
   final uid = ref.read(currentUserIdProvider);
+  final actor = ref.read(currentUserProfileProvider).value;
 
   await showDialog<void>(
     context: context,
@@ -164,6 +164,7 @@ Future<void> _showUpsertDialog(
                               uid: uid,
                               type: type,
                               name: name,
+                              actor: actor,
                             );
                           } else {
                             await repo.updatePartner(
@@ -171,6 +172,7 @@ Future<void> _showUpsertDialog(
                               type: type,
                               id: entry.id,
                               name: name,
+                              actor: actor,
                             );
                           }
 
@@ -207,6 +209,36 @@ Future<void> _showUpsertDialog(
   );
 
   controller.dispose();
+}
+
+String? _partnerSubtitle(PartnerEntry partner) {
+  final lines = <String>[];
+  final createdBy = _createdByLabel(partner);
+  if (createdBy.isNotEmpty) {
+    lines.add('Creado por: $createdBy');
+  }
+  final createdAt = partner.createdAt;
+  if (createdAt != null) {
+    lines.add('Creado: ${createdAt.toFullDateTime()}');
+  }
+  final updatedAt = partner.updatedAt;
+  if (updatedAt != null &&
+      (createdAt == null ||
+          updatedAt.millisecondsSinceEpoch != createdAt.millisecondsSinceEpoch)) {
+    lines.add('Actualizado: ${updatedAt.toFullDateTime()}');
+  }
+  if (lines.isEmpty) return null;
+  return lines.join('\n');
+}
+
+String _createdByLabel(PartnerEntry partner) {
+  final name = partner.createdByName?.trim() ?? '';
+  final area = partner.createdByArea?.trim() ?? '';
+  final id = partner.createdById?.trim() ?? '';
+  if (name.isEmpty && area.isEmpty) return id;
+  if (name.isEmpty) return area;
+  if (area.isEmpty) return name;
+  return '$name | $area';
 }
 
 Future<void> _showDeleteDialog(

@@ -87,9 +87,6 @@ AppDatabase createAppDatabase(AppAuthClient auth) {
   return PluginAppDatabase(FirebaseDatabase.instance);
 }
 
-bool get _useSingleShotWatchOnWindows =>
-    !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
-
 bool get _useRestWriteCompatibilityOnWindowsRelease =>
     kReleaseMode && !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
 
@@ -251,35 +248,6 @@ class RestAppDatabase implements AppDatabase {
     int? limitToLast,
   }) {
     return Stream.multi((controller) {
-      if (_useSingleShotWatchOnWindows) {
-        var cancelled = false;
-        controller.onCancel = () {
-          cancelled = true;
-        };
-        unawaited(() async {
-          try {
-            final snapshot = await get(
-              path: path,
-              orderByChild: orderByChild,
-              equalTo: equalTo,
-              limitToLast: limitToLast,
-            );
-            if (!cancelled) {
-              controller.add(AppDatabaseEvent(snapshot));
-            }
-          } catch (error, stackTrace) {
-            if (!cancelled) {
-              controller.addError(error, stackTrace);
-            }
-          } finally {
-            if (!cancelled) {
-              await controller.close();
-            }
-          }
-        }());
-        return;
-      }
-
       Timer? timer;
       var fetching = false;
       var disposed = false;

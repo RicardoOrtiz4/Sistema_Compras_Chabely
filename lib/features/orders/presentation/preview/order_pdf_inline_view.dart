@@ -1,8 +1,7 @@
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'package:pdfx/pdfx.dart';
 
 import 'package:sistema_compras/core/error_reporter.dart';
@@ -18,6 +17,7 @@ class OrderPdfInlineView extends StatefulWidget {
     required this.data,
     this.skipCache = false,
     this.preferOrderCache = false,
+    this.remotePdfUrl,
     this.pdfBuilder,
     super.key,
   });
@@ -25,6 +25,7 @@ class OrderPdfInlineView extends StatefulWidget {
   final OrderPdfData data;
   final bool skipCache;
   final bool preferOrderCache;
+  final String? remotePdfUrl;
   final Future<Uint8List> Function(
     OrderPdfData data, {
     bool useIsolate,
@@ -40,8 +41,12 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
   PdfControllerPinch? _controller;
   PdfController? _webController;
   PhotoViewController? _photoController;
+  TransformationController? _windowsTransformController;
   String? _signature;
   bool _isRouteSubscribed = false;
+
+  bool get _usesWindowsSafePdfView =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
 
   @override
   void initState() {
@@ -69,6 +74,7 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
     if (_signature != nextSignature ||
         oldWidget.skipCache != widget.skipCache ||
         oldWidget.preferOrderCache != widget.preferOrderCache ||
+        oldWidget.remotePdfUrl != widget.remotePdfUrl ||
         oldWidget.pdfBuilder != widget.pdfBuilder) {
       _disposeController();
       _queueBuild();
@@ -95,6 +101,11 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
 
   void _queueBuild() {
     _signature = _signatureFor(widget.data);
+    final remotePdfUrl = widget.remotePdfUrl?.trim();
+    if (remotePdfUrl != null && remotePdfUrl.isNotEmpty) {
+      _bytesFuture = _fetchRemotePdf(remotePdfUrl);
+      return;
+    }
     if (widget.preferOrderCache && !widget.skipCache) {
       final cachedByFolio = getCachedOrderPdfForFolio(widget.data);
       if (cachedByFolio != null) {
@@ -131,25 +142,48 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
     });
   }
 
+  Future<Uint8List> _fetchRemotePdf(String remotePdfUrl) async {
+    final uri = Uri.tryParse(remotePdfUrl);
+    if (uri == null) {
+      throw Exception('URL de PDF invalida.');
+    }
+    final response = await http.get(uri);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('No se pudo abrir el PDF remoto (${response.statusCode}).');
+    }
+    final bytes = response.bodyBytes;
+    if (bytes.isEmpty) {
+      throw Exception('El PDF remoto llego vacio.');
+    }
+    return bytes;
+  }
+
   void _disposeController() {
     final controller = _controller;
     if (controller != null) {
-      controller.document.then((doc) => doc.close()).catchError((error, stack) {
-        logError(error, stack, context: 'OrderPdfInlineView.dispose');
-      });
+      if (!(defaultTargetPlatform == TargetPlatform.windows && !kIsWeb)) {
+        controller.document.then((doc) => doc.close()).catchError((error, stack) {
+          logError(error, stack, context: 'OrderPdfInlineView.dispose');
+        });
+      }
       controller.dispose();
       _controller = null;
     }
     final webController = _webController;
     if (webController != null) {
-      webController.document.then((doc) => doc.close()).catchError((error, stack) {
-        logError(error, stack, context: 'OrderPdfInlineView.dispose');
-      });
+      if (!(defaultTargetPlatform == TargetPlatform.windows && !kIsWeb)) {
+        webController.document.then((doc) => doc.close()).catchError((error, stack) {
+          logError(error, stack, context: 'OrderPdfInlineView.dispose');
+        });
+      }
       webController.dispose();
       _webController = null;
     }
-    _photoController?.dispose();
+    // PhotoView removes its listeners during child dispose; disposing the
+    // shared controller here first can trigger a null-listener crash on unmount.
     _photoController = null;
+    _windowsTransformController?.dispose();
+    _windowsTransformController = null;
   }
 
   @override
@@ -165,7 +199,10 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
           future: _bytesFuture,
           builder: (context, snapshot) {
             if (snapshot.connectionState != ConnectionState.done) {
-              return _PdfLoading(label: 'Generando PDF...');
+              final label = (widget.remotePdfUrl?.trim().isNotEmpty ?? false)
+                  ? 'Abriendo PDF...'
+                  : 'Generando PDF...';
+              return _PdfLoading(label: label);
             }
             if (snapshot.hasError) {
               reportError(
@@ -183,6 +220,56 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
               return const Center(child: Text('No se pudo generar el PDF.'));
             }
             final bytesForPdf = kIsWeb ? Uint8List.fromList(bytes) : bytes;
+            if (_usesWindowsSafePdfView) {
+              _webController ??= PdfController(
+                document: _openDocument(bytesForPdf),
+              );
+              _windowsTransformController ??= TransformationController();
+              return Stack(
+                children: [
+                  Positioned.fill(
+                    child: InteractiveViewer(
+                      transformationController: _windowsTransformController,
+                      minScale: 1.0,
+                      maxScale: 4.0,
+                      scaleEnabled: false,
+                      panEnabled: true,
+                      child: SizedBox.expand(
+                        child: PdfView(
+                          controller: _webController!,
+                          scrollDirection: Axis.vertical,
+                          pageSnapping: false,
+                          renderer: _renderNativePage,
+                          builders: PdfViewBuilders<DefaultBuilderOptions>(
+                            options: const DefaultBuilderOptions(),
+                            errorBuilder: (context, error) {
+                              reportError(
+                                error,
+                                StackTrace.current,
+                                context: 'OrderPdfInlineView.PdfView.windows',
+                              );
+                              return _PdfErrorDetails(
+                                title: 'Error del visor PDF.',
+                                error: error,
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    right: 16,
+                    bottom: 16,
+                    child: _PdfActionControls(
+                      onZoomIn: () => _applyWindowsZoom(1.2),
+                      onZoomOut: () => _applyWindowsZoom(1 / 1.2),
+                      onReset: _resetWindowsZoom,
+                    ),
+                  ),
+                ],
+              );
+            }
             if (useStandardViewer) {
               _webController ??= PdfController(
                 document: _openDocument(bytesForPdf),
@@ -190,58 +277,48 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
               _photoController ??= PhotoViewController();
               return Stack(
                 children: [
-                  Listener(
-                    onPointerSignal: (event) {
-                      if (event is! PointerScrollEvent) return;
-                      final keyboard = HardwareKeyboard.instance;
-                      final zoomModifier =
-                          keyboard.isControlPressed || keyboard.isMetaPressed;
-                      if (!zoomModifier) return;
-                      final dy = event.scrollDelta.dy;
-                      if (dy == 0) return;
-                      _applyWebZoom(dy > 0 ? 1 / 1.1 : 1.1);
-                    },
-                    child: PdfView(
-                      controller: _webController!,
-                      scrollDirection: Axis.vertical,
-                      pageSnapping: false,
-                      renderer: useStandardViewer && !kIsWeb
-                          ? _renderNativePage
-                          : _renderWebPage,
-                      builders: PdfViewBuilders<DefaultBuilderOptions>(
-                        options: const DefaultBuilderOptions(),
-                        errorBuilder: (context, error) {
-                          reportError(
-                            error,
-                            StackTrace.current,
-                            context: 'OrderPdfInlineView.PdfView',
-                          );
-                          return _PdfErrorDetails(
-                            title: 'Error del visor PDF.',
-                            error: error,
-                          );
-                        },
-                        pageBuilder: (context, pageImage, index, document) {
-                          return PhotoViewGalleryPageOptions(
-                            imageProvider: PdfPageImageProvider(
-                              pageImage,
-                              index,
-                              document.id,
-                            ),
-                            controller: _photoController,
-                            minScale: PhotoViewComputedScale.contained * 1.0,
-                            maxScale: PhotoViewComputedScale.contained * 3.0,
-                            initialScale: PhotoViewComputedScale.contained * 1.0,
-                            filterQuality: FilterQuality.high,
-                          );
-                        },
-                      ),
+                  PdfView(
+                    controller: _webController!,
+                    scrollDirection: Axis.vertical,
+                    pageSnapping: false,
+                    renderer: useStandardViewer && !kIsWeb
+                        ? _renderNativePage
+                        : _renderWebPage,
+                    builders: PdfViewBuilders<DefaultBuilderOptions>(
+                      options: const DefaultBuilderOptions(),
+                      errorBuilder: (context, error) {
+                        reportError(
+                          error,
+                          StackTrace.current,
+                          context: 'OrderPdfInlineView.PdfView',
+                        );
+                        return _PdfErrorDetails(
+                          title: 'Error del visor PDF.',
+                          error: error,
+                        );
+                      },
+                      pageBuilder: (context, pageImage, index, document) {
+                        return PhotoViewGalleryPageOptions(
+                          imageProvider: PdfPageImageProvider(
+                            pageImage,
+                            index,
+                            document.id,
+                          ),
+                          controller: _usesWindowsSafePdfView
+                              ? null
+                              : _photoController,
+                          minScale: PhotoViewComputedScale.contained * 1.0,
+                          maxScale: PhotoViewComputedScale.contained * 3.0,
+                          initialScale: PhotoViewComputedScale.contained * 1.0,
+                          filterQuality: FilterQuality.high,
+                        );
+                      },
                     ),
                   ),
                   Positioned(
                     right: 16,
                     bottom: 16,
-                    child: _ZoomControls(
+                    child: _PdfActionControls(
                       onZoomIn: () => _applyWebZoom(1.2),
                       onZoomOut: () => _applyWebZoom(1 / 1.2),
                       onReset: _resetWebZoom,
@@ -284,7 +361,7 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
                 Positioned(
                   right: 16,
                   bottom: 16,
-                  child: _ZoomControls(
+                  child: _PdfActionControls(
                     onZoomIn: () => _applyZoom(1.2),
                     onZoomOut: () => _applyZoom(1 / 1.2),
                     onReset: _resetZoom,
@@ -308,6 +385,24 @@ class _OrderPdfInlineViewState extends State<OrderPdfInlineView>
 
   void _resetWebZoom() {
     _photoController?.reset();
+  }
+
+  void _applyWindowsZoom(double factor) {
+    final controller = _windowsTransformController;
+    if (controller == null) return;
+    final current = controller.value.clone();
+    final currentScale = current.getMaxScaleOnAxis();
+    final nextScale = (currentScale * factor).clamp(1.0, 4.0);
+    final delta = nextScale / currentScale;
+    if (delta == 1.0) return;
+    final zoomed = Matrix4.identity()
+      ..scale(delta)
+      ..multiply(current);
+    controller.value = zoomed;
+  }
+
+  void _resetWindowsZoom() {
+    _windowsTransformController?.value = Matrix4.identity();
   }
 
   void _applyZoom(double factor) {
@@ -374,6 +469,59 @@ Future<PdfPageImage?> _renderNativePage(PdfPage page) {
     format: PdfPageImageFormat.jpeg,
     backgroundColor: '#ffffff',
   );
+}
+
+class _PdfActionControls extends StatelessWidget {
+  const _PdfActionControls({
+    required this.onZoomIn,
+    required this.onZoomOut,
+    required this.onReset,
+  });
+
+  final VoidCallback? onZoomIn;
+  final VoidCallback? onZoomOut;
+  final VoidCallback? onReset;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: scheme.surface.withValues(alpha: 0.96),
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: const [
+          BoxShadow(
+            blurRadius: 10,
+            offset: Offset(0, 4),
+            color: Color(0x22000000),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              tooltip: 'Acercar',
+              onPressed: onZoomIn,
+              icon: const Icon(Icons.add),
+            ),
+            IconButton(
+              tooltip: 'Alejar',
+              onPressed: onZoomOut,
+              icon: const Icon(Icons.remove),
+            ),
+            IconButton(
+              tooltip: 'Vista original',
+              onPressed: onReset,
+              icon: const Icon(Icons.center_focus_strong_outlined),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _PdfLoading extends StatelessWidget {
@@ -570,14 +718,14 @@ String _signatureFor(OrderPdfData data) {
       addHash(entry.value);
     }
   }
-  addHash(data.comprasReviewerName);
-  addHash(data.comprasReviewerArea);
-  addHash(data.direccionGeneralName);
-  addHash(data.direccionGeneralArea);
   addHash(data.urgentJustification);
   addHash(data.requestedDeliveryDate?.millisecondsSinceEpoch);
   addHash(data.etaDate?.millisecondsSinceEpoch);
   addHash(data.pendingResubmissionLabel);
+  addHash(data.authorizedByName);
+  addHash(data.authorizedByArea);
+  addHash(data.processByName);
+  addHash(data.processByArea);
   for (final date in data.resubmissionDates) {
     addHash(date.millisecondsSinceEpoch);
   }

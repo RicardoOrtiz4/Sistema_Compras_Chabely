@@ -3,14 +3,19 @@ import 'package:flutter/material.dart';
 import 'package:sistema_compras/core/constants.dart';
 
 class OrderFolioPill extends StatelessWidget {
-  const OrderFolioPill({required this.folio, super.key});
+  const OrderFolioPill({
+    required this.folio,
+    this.onTap,
+    super.key,
+  });
 
   final String folio;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
+    final content = Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
         color: scheme.surfaceContainerHighest,
@@ -23,6 +28,15 @@ class OrderFolioPill extends StatelessWidget {
           fontSize: 12,
           fontWeight: FontWeight.bold,
         ),
+      ),
+    );
+    if (onTap == null) return content;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: content,
       ),
     );
   }

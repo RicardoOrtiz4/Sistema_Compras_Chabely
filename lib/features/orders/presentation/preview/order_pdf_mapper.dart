@@ -14,14 +14,11 @@ OrderPdfData buildPdfDataFromOrder(
   String? internalOrder,
   num? budget,
   Map<String, num>? supplierBudgets,
-  String? comprasComment,
-  String? comprasReviewerName,
-  String? comprasReviewerArea,
-  String? processedByName,
-  String? processedByArea,
-  String? direccionGeneralName,
-  String? direccionGeneralArea,
   String? pendingResubmissionLabel,
+  String? authorizedByName,
+  String? authorizedByArea,
+  String? processByName,
+  String? processByArea,
   List<OrderItemDraft>? items,
   DateTime? createdAt,
   DateTime? updatedAt,
@@ -36,14 +33,11 @@ OrderPdfData buildPdfDataFromOrder(
     internalOrder: internalOrder,
     budget: budget,
     supplierBudgets: supplierBudgets,
-    comprasComment: comprasComment,
-    comprasReviewerName: comprasReviewerName,
-    comprasReviewerArea: comprasReviewerArea,
-    processedByName: processedByName,
-    processedByArea: processedByArea,
-    direccionGeneralName: direccionGeneralName,
-    direccionGeneralArea: direccionGeneralArea,
     pendingResubmissionLabel: pendingResubmissionLabel,
+    authorizedByName: authorizedByName,
+    authorizedByArea: authorizedByArea,
+    processByName: processByName,
+    processByArea: processByArea,
     items: items,
     createdAt: createdAt,
     updatedAt: updatedAt,
@@ -67,14 +61,11 @@ OrderPdfData buildPdfDataFromOrder(
       internalOrder: internalOrder,
       budget: budget,
       supplierBudgets: supplierBudgets,
-      comprasComment: comprasComment,
-      comprasReviewerName: comprasReviewerName,
-      comprasReviewerArea: comprasReviewerArea,
-      processedByName: processedByName,
-      processedByArea: processedByArea,
-      direccionGeneralName: direccionGeneralName,
-      direccionGeneralArea: direccionGeneralArea,
       pendingResubmissionLabel: pendingResubmissionLabel,
+      authorizedByName: authorizedByName,
+      authorizedByArea: authorizedByArea,
+      processByName: processByName,
+      processByArea: processByArea,
       items: items,
       createdAt: createdAt,
       updatedAt: updatedAt,
@@ -101,14 +92,11 @@ OrderPdfData buildPdfDataFromOrder(
     internalOrder: internalOrder,
     budget: budget,
     supplierBudgets: supplierBudgets,
-    comprasComment: comprasComment,
-    comprasReviewerName: comprasReviewerName,
-    comprasReviewerArea: comprasReviewerArea,
-    processedByName: processedByName,
-    processedByArea: processedByArea,
-    direccionGeneralName: direccionGeneralName,
-    direccionGeneralArea: direccionGeneralArea,
     pendingResubmissionLabel: pendingResubmissionLabel,
+    authorizedByName: authorizedByName,
+    authorizedByArea: authorizedByArea,
+    processByName: processByName,
+    processByArea: processByArea,
     items: items,
     createdAt: createdAt,
     updatedAt: updatedAt,
@@ -129,14 +117,11 @@ OrderPdfData _buildPdfDataFromOrderImpl(
   String? internalOrder,
   num? budget,
   Map<String, num>? supplierBudgets,
-  String? comprasComment,
-  String? comprasReviewerName,
-  String? comprasReviewerArea,
-  String? processedByName,
-  String? processedByArea,
-  String? direccionGeneralName,
-  String? direccionGeneralArea,
   String? pendingResubmissionLabel,
+  String? authorizedByName,
+  String? authorizedByArea,
+  String? processByName,
+  String? processByArea,
   List<OrderItemDraft>? items,
   DateTime? createdAt,
   DateTime? updatedAt,
@@ -184,14 +169,11 @@ OrderPdfData _buildPdfDataFromOrderImpl(
     internalOrder: internalOrder ?? order.internalOrder ?? '',
     budget: effectiveBudget,
     supplierBudgets: effectiveSupplierBudgets,
-    comprasComment: comprasComment ?? '',
-    comprasReviewerName: comprasReviewerName ?? order.comprasReviewerName ?? '',
-    comprasReviewerArea: comprasReviewerArea ?? order.comprasReviewerArea ?? '',
-    processedByName: processedByName ?? order.processedByName ?? '',
-    processedByArea: processedByArea ?? order.processedByArea ?? '',
-    direccionGeneralName: direccionGeneralName ?? order.direccionGeneralName ?? '',
-    direccionGeneralArea: direccionGeneralArea ?? order.direccionGeneralArea ?? '',
     pendingResubmissionLabel: effectivePendingResubmissionLabel,
+    authorizedByName: authorizedByName ?? order.authorizedByName,
+    authorizedByArea: authorizedByArea ?? order.authorizedByArea,
+    processByName: processByName ?? order.processByName,
+    processByArea: processByArea ?? order.processByArea,
     requestedDeliveryDate: resolveRequestedDeliveryDate(order),
     etaDate: etaDate ?? order.etaDate,
     resubmissionDates: effectiveResubmissionDates,
@@ -204,14 +186,11 @@ bool _canUseDefaultPdfDataCache({
   required String? internalOrder,
   required num? budget,
   required Map<String, num>? supplierBudgets,
-  required String? comprasComment,
-  required String? comprasReviewerName,
-  required String? comprasReviewerArea,
-  required String? processedByName,
-  required String? processedByArea,
-  required String? direccionGeneralName,
-  required String? direccionGeneralArea,
   required String? pendingResubmissionLabel,
+  required String? authorizedByName,
+  required String? authorizedByArea,
+  required String? processByName,
+  required String? processByArea,
   required List<OrderItemDraft>? items,
   required DateTime? createdAt,
   required DateTime? updatedAt,
@@ -225,14 +204,11 @@ bool _canUseDefaultPdfDataCache({
       internalOrder == null &&
       budget == null &&
       supplierBudgets == null &&
-      comprasComment == null &&
-      comprasReviewerName == null &&
-      comprasReviewerArea == null &&
-      processedByName == null &&
-      processedByArea == null &&
-      direccionGeneralName == null &&
-      direccionGeneralArea == null &&
       pendingResubmissionLabel == null &&
+      authorizedByName == null &&
+      authorizedByArea == null &&
+      processByName == null &&
+      processByArea == null &&
       items == null &&
       createdAt == null &&
       updatedAt == null &&
@@ -244,20 +220,12 @@ bool _canUseDefaultPdfDataCache({
 }
 
 String _defaultPdfDataCacheKey(PurchaseOrder order, CompanyBranding branding) {
-  final resubmissions = order.resubmissionDates;
-  final lastResubmission = resubmissions.isEmpty
-      ? 0
-      : resubmissions.last.millisecondsSinceEpoch;
   return [
     branding.id,
     order.id,
     order.companyId ?? '',
     order.status.name,
     (order.updatedAt ?? order.createdAt)?.millisecondsSinceEpoch ?? 0,
-    order.returnCount,
-    order.direccionReturnCount,
-    resubmissions.length,
-    lastResubmission,
     order.items.length,
     order.facturaPdfUrls.length,
   ].join('|');

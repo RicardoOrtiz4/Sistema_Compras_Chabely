@@ -1,5 +1,8 @@
 import 'package:flutter/foundation.dart';
 
+import 'app_log_file_sink_stub.dart'
+    if (dart.library.io) 'app_log_file_sink_io.dart';
+
 class AppLogger {
   static final List<String> _buffer = <String>[];
   static DebugPrintCallback? _originalDebugPrint;
@@ -14,10 +17,9 @@ class AppLogger {
     _originalDebugPrint = debugPrint;
     debugPrint = (String? message, {int? wrapWidth}) {
       if (message == null) return;
-      final line = _format(message);
-      _add(line);
-      _originalDebugPrint?.call(line, wrapWidth: wrapWidth);
+      _emit(_format(message), wrapWidth: wrapWidth);
     };
+    log('logger initialized file=${currentLogFilePath ?? 'disabled'}', tag: 'LOGGER');
   }
 
   static void _add(String line) {
@@ -30,6 +32,18 @@ class AppLogger {
   static String _format(String message) {
     final timestamp = DateTime.now().toIso8601String();
     return '[$timestamp] $message';
+  }
+
+  static String? get currentLogFilePath => getAppLogFilePath();
+
+  static void log(String message, {String tag = 'APP'}) {
+    _emit(_format('[$tag] $message'));
+  }
+
+  static void _emit(String line, {int? wrapWidth}) {
+    _add(line);
+    appendAppLogLine(line);
+    _originalDebugPrint?.call(line, wrapWidth: wrapWidth);
   }
 
   static void dumpToConsole({int count = 120, String? reason}) {

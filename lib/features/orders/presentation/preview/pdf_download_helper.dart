@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
-import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:sistema_compras/core/save_bytes.dart';
 
 Future<void> savePdfBytes(
   BuildContext context, {
@@ -11,15 +11,12 @@ Future<void> savePdfBytes(
   String errorMessage = 'No se pudo descargar el PDF.',
 }) async {
   try {
-    final location = await getSaveLocation(suggestedName: suggestedName);
-    if (location == null) return;
-
-    final file = XFile.fromData(
-      bytes,
-      mimeType: 'application/pdf',
-      name: suggestedName,
+    final path = await pickSavePath(
+      suggestedName: suggestedName,
+      allowedExtensions: const <String>['pdf'],
     );
-    await file.saveTo(location.path);
+    if (path == null) return;
+    await saveBytesToSelectedPath(path, bytes);
 
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(

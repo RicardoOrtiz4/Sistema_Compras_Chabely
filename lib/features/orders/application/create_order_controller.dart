@@ -22,8 +22,6 @@ class OrderItemDraft {
     this.supplier,
     this.budget,
     this.internalOrder,
-    this.quoteId,
-    this.quoteStatus = PurchaseOrderItemQuoteStatus.pending,
     this.estimatedDate,
     this.reviewFlagged = false,
     this.reviewComment,
@@ -41,8 +39,6 @@ class OrderItemDraft {
   final String? supplier;
   final num? budget;
   final String? internalOrder;
-  final String? quoteId;
-  final PurchaseOrderItemQuoteStatus quoteStatus;
   final DateTime? estimatedDate;
   final bool reviewFlagged;
   final String? reviewComment;
@@ -60,14 +56,13 @@ class OrderItemDraft {
     String? supplier,
     num? budget,
     String? internalOrder,
-    String? quoteId,
-    PurchaseOrderItemQuoteStatus? quoteStatus,
     DateTime? estimatedDate,
     bool? reviewFlagged,
     String? reviewComment,
     bool removeEstimatedDate = false,
     bool clearBudget = false,
     bool clearSupplier = false,
+    bool clearCustomer = false,
     bool clearInternalOrder = false,
     bool clearReviewComment = false,
     bool clearReceivedQuantity = false,
@@ -84,12 +79,10 @@ class OrderItemDraft {
       description: description ?? this.description,
       quantity: nextQuantity,
       unit: unit ?? this.unit,
-      customer: customer ?? this.customer,
+      customer: clearCustomer ? null : (customer ?? this.customer),
       supplier: clearSupplier ? null : (supplier ?? this.supplier),
       budget: clearBudget ? null : (budget ?? this.budget),
       internalOrder: clearInternalOrder ? null : (internalOrder ?? this.internalOrder),
-      quoteId: quoteId ?? this.quoteId,
-      quoteStatus: quoteStatus ?? this.quoteStatus,
       estimatedDate: removeEstimatedDate ? null : (estimatedDate ?? this.estimatedDate),
       reviewFlagged: reviewFlagged ?? this.reviewFlagged,
       reviewComment: clearReviewComment ? null : (reviewComment ?? this.reviewComment),
@@ -110,8 +103,6 @@ class OrderItemDraft {
       supplier: supplier,
       budget: budget,
       internalOrder: internalOrder,
-      quoteId: quoteId,
-      quoteStatus: quoteStatus,
       estimatedDate: estimatedDate,
       reviewFlagged: reviewFlagged,
       reviewComment: reviewComment,
@@ -148,8 +139,6 @@ class OrderItemDraft {
       supplier: item.supplier,
       budget: item.budget,
       internalOrder: item.internalOrder,
-      quoteId: item.quoteId,
-      quoteStatus: item.quoteStatus,
       estimatedDate: item.estimatedDate,
       reviewFlagged: item.reviewFlagged,
       reviewComment: item.reviewComment,
@@ -169,8 +158,6 @@ class CreateOrderState {
     this.notes = '',
     this.urgentJustification = '',
     this.isSubmitting = false,
-    this.returnCount = 0,
-    this.resubmissionDates = const [],
     this.previewCreatedAt,
     this.previewUpdatedAt,
     this.previewAccepted = false,
@@ -188,8 +175,6 @@ class CreateOrderState {
   final String notes;
   final String urgentJustification;
   final bool isSubmitting;
-  final int returnCount;
-  final List<DateTime> resubmissionDates;
   final DateTime? previewCreatedAt;
   final DateTime? previewUpdatedAt;
   final bool previewAccepted;
@@ -210,8 +195,6 @@ class CreateOrderState {
     String? notes,
     String? urgentJustification,
     bool? isSubmitting,
-    int? returnCount,
-    List<DateTime>? resubmissionDates,
     DateTime? previewCreatedAt,
     DateTime? previewUpdatedAt,
     bool? previewAccepted,
@@ -237,8 +220,6 @@ class CreateOrderState {
       notes: notes ?? this.notes,
       urgentJustification: urgentJustification ?? this.urgentJustification,
       isSubmitting: isSubmitting ?? this.isSubmitting,
-      returnCount: returnCount ?? this.returnCount,
-      resubmissionDates: resubmissionDates ?? this.resubmissionDates,
       previewCreatedAt: previewCreatedAt ?? this.previewCreatedAt,
       previewUpdatedAt: clearPreviewUpdatedAt
           ? null
@@ -314,9 +295,9 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
     }
     if (normalized != null &&
         state.urgency != PurchaseOrderUrgency.urgente &&
-        !isBusinessDay(normalized)) {
+        !isAllowedNormalRequestedDeliveryDate(normalized)) {
       state = state.copyWith(
-        error: 'La fecha maxima solicitada debe ser un dia habil.',
+        error: _normalRequestedDeliveryDateErrorMessage(),
       );
       return;
     }
@@ -364,48 +345,6 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
         );
         return;
       }
-      final isRejectedDraft = order.status == PurchaseOrderStatus.draft &&
-          ((order.lastReturnReason?.trim().isNotEmpty ?? false) ||
-              order.returnCount > 0);
-      if (isRejectedDraft) {
-        final items = order.items.isEmpty
-            ? [OrderItemDraft.empty(1)]
-            : [
-                for (var i = 0; i < order.items.length; i++)
-                  OrderItemDraft.fromModel(order.items[i]).copyWith(
-                    line: i + 1,
-                    removeEstimatedDate: true,
-                    reviewFlagged: false,
-                    clearReviewComment: true,
-                    clearReceivedQuantity: true,
-                    clearReceivedComment: true,
-                  ),
-              ];
-        final requestedDeliveryDate = _requestedDeliveryDateForUrgency(
-          resolveRequestedDeliveryDate(order),
-          order.urgency,
-        );
-        state = state.copyWith(
-          isLoadingDraft: false,
-          draftId: null,
-          urgency: order.urgency,
-          items: items,
-          requestedDeliveryDate: requestedDeliveryDate,
-          clearRequestedDeliveryDate: requestedDeliveryDate == null,
-          notes: order.clientNote ?? '',
-          urgentJustification: order.urgentJustification ?? '',
-          returnCount: 0,
-          resubmissionDates: const [],
-          previewCreatedAt: DateTime.now(),
-          previewAccepted: false,
-          clearPreviewUpdatedAt: true,
-          clearBaselineSignature: true,
-          clearBaselineUpdatedAt: true,
-          message:
-              'La orden fue rechazada. Se cargo como copia para crear una nueva requisicion.',
-        );
-        return;
-      }
       final items = order.items.isEmpty
           ? [OrderItemDraft.empty(1)]
           : [
@@ -435,8 +374,6 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
         clearRequestedDeliveryDate: requestedDeliveryDate == null,
         notes: order.clientNote ?? '',
         urgentJustification: order.urgentJustification ?? '',
-        returnCount: order.returnCount,
-        resubmissionDates: order.resubmissionDates,
         previewCreatedAt: order.createdAt ?? DateTime.now(),
         previewUpdatedAt: order.updatedAt,
         previewAccepted: false,
@@ -478,6 +415,9 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
                   line: i + 1,
                   removeEstimatedDate: true,
                   reviewFlagged: false,
+                  clearSupplier: true,
+                  clearBudget: true,
+                  clearInternalOrder: true,
                   clearReviewComment: true,
                   clearReceivedQuantity: true,
                   clearReceivedComment: true,
@@ -496,8 +436,6 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
         clearRequestedDeliveryDate: requestedDeliveryDate == null,
         notes: order.clientNote ?? '',
         urgentJustification: order.urgentJustification ?? '',
-        returnCount: 0,
-        resubmissionDates: const [],
         previewCreatedAt: DateTime.now(),
         previewAccepted: false,
         clearPreviewUpdatedAt: true,
@@ -563,13 +501,6 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
   Future<String?> submit() async {
     final user = await _requireUser();
     if (user == null) return null;
-    if (state.returnCount >= _maxCorrections) {
-      state = state.copyWith(
-        error: 'Esta orden ya no puede seguir corrigiendose. Crea una nueva requisicion.',
-      );
-      return null;
-    }
-
     final invalid = state.items.where((item) => !item.isValid()).isNotEmpty;
     if (invalid) {
       state = state.copyWith(error: 'Completa todos los campos de los artículos');
@@ -579,7 +510,7 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
     if (state.urgency == PurchaseOrderUrgency.urgente &&
         state.urgentJustification.trim().isEmpty) {
       state = state.copyWith(
-        error: 'Debes justificar por que la requisicion esta marcada como urgente.',
+        error: 'Debes justificar por que la requisición está marcada como urgente.',
       );
       return null;
     }
@@ -643,7 +574,7 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
 
   String? urgentJustificationError() {
     if (hasValidUrgentJustification) return null;
-    return 'Explica por que esta requisicion es urgente.';
+    return 'Explica por que esta requisición es urgente.';
   }
 
   String? requestedDeliveryDateError() {
@@ -656,8 +587,8 @@ class CreateOrderController extends StateNotifier<CreateOrderState> {
       return 'La fecha maxima solicitada no puede ser anterior a hoy.';
     }
     if (state.urgency != PurchaseOrderUrgency.urgente) {
-      if (!isBusinessDay(requestedDeliveryDate)) {
-        return 'La fecha maxima solicitada debe ser un dia habil.';
+      if (!isAllowedNormalRequestedDeliveryDate(requestedDeliveryDate)) {
+        return _normalRequestedDeliveryDateErrorMessage();
       }
       return null;
     }
@@ -689,6 +620,9 @@ DateTime? _requestedDeliveryDateForUrgency(
   if (requestedDeliveryDate == null) return null;
   final normalized = normalizeCalendarDate(requestedDeliveryDate);
   if (urgency != PurchaseOrderUrgency.urgente) {
+    if (!isAllowedNormalRequestedDeliveryDate(normalized)) {
+      return null;
+    }
     return normalized;
   }
   if (!isAllowedUrgentRequestedDeliveryDate(normalized)) {
@@ -697,9 +631,14 @@ DateTime? _requestedDeliveryDateForUrgency(
   return normalized;
 }
 
+String _normalRequestedDeliveryDateErrorMessage() {
+  return 'Para urgencia normal, la fecha requerida debe ser a partir de '
+      '$normalRequestedDeliveryLeadDays dias despues de hoy y en un dia habil.';
+}
+
 String _urgentRequestedDeliveryDateErrorMessage() {
-  return 'Para urgencia, la fecha requerida debe estar dentro de los próximos '
-      '$urgentRequestedDeliveryBusinessDays días hábiles después de hoy.';
+  return 'Para urgencia, la fecha requerida solo puede estar entre hoy y '
+      '$urgentRequestedDeliveryWindowDays dias mas.';
 }
 
 String buildCreateOrderSignature({
@@ -796,5 +735,4 @@ final createOrderControllerProvider =
   return CreateOrderController(ref);
 });
 
-const _maxCorrections = 3;
 

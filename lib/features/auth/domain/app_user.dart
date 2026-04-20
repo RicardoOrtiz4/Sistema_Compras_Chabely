@@ -8,7 +8,6 @@ class AppUser {
     required this.role,
     required this.areaId,
     this.areaName,
-    this.contactEmail,
     required this.isActive,
     this.createdAt,
     this.fcmTokens = const [],
@@ -20,7 +19,6 @@ class AppUser {
   final String role;
   final String areaId;
   final String? areaName;
-  final String? contactEmail;
   final bool isActive;
   final DateTime? createdAt;
   final List<String> fcmTokens;
@@ -49,7 +47,6 @@ class AppUser {
       id: id,
       name: resolvedName.isEmpty ? 'Sin nombre' : resolvedName,
       email: resolvedEmail,
-      contactEmail: data['contactEmail'] as String?,
       role: (data['role'] as String?) ?? 'usuario',
       areaId: resolvedAreaId,
       areaName: resolvedAreaName.isEmpty ? null : resolvedAreaName,
@@ -63,7 +60,6 @@ class AppUser {
     return {
       'name': name,
       'email': email,
-      'contactEmail': contactEmail,
       'role': role,
       'areaId': areaId,
       'areaName': areaName,

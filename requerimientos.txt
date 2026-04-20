@@ -1,210 +1,218 @@
-Eres OpenAI Codex y vas a construir un sistema completo para el Área de Compras (multi-rol) como una app Flutter (Dart) usando Firebase (Auth + Firestore + Cloud Functions + FCM + Storage). Objetivo: app muy intuitiva, segura, con flujo de aprobación, trazabilidad por estados, generación de PDF con “checks” de aprobación y notificaciones push con sonido/vibración según rol y estado.
+OBJETIVO:
+Crear un dashboard limpio, minimalista y altamente legible para monitoreo de órdenes, optimizado para escaneo rápido (que se entienda en menos de 3 segundos).
 
-IMPORTANTE
-- No inventes pantallas extra innecesarias.
-- Prioriza UX limpia, Material 3, navegación clara.
-- Implementa arquitectura mantenible (Clean-ish / feature-first) con separación: UI, state management, domain, data.
-- Incluye pruebas básicas (unit/widget) donde sea crítico.
-- Todo debe quedar ejecutable localmente con instrucciones.
+PRINCIPIOS DE DISEÑO (MUY IMPORTANTE):
+- Eliminar información repetida
+- Priorizar jerarquía visual sobre texto
+- Usar color como significado (no decoración)
+- Reducir texto al mínimo
+- Cada tarjeta debe ser entendible sin leer todo
 
-STACK Y DECISIONES (si no se indica lo contrario)
-- Flutter estable (última), Material 3.
-- State management: Riverpod (preferible) o Bloc si lo justificas (elige uno y sé consistente).
-- Firebase:
-  - Auth: Email/Password (y deja preparado para SSO futuro).
-  - Firestore: principal DB.
-  - Cloud Functions: lógica sensible (folio autoincremental, cambios de estado, validaciones, auditoría).
-  - FCM: notificaciones push por rol/estado.
-  - Storage: PDFs generados y evidencia adjunta si aplica.
-- Control de acceso: Reglas Firestore estrictas + verificación extra en Functions.
-- Manejo de estados: máquina de estados (enum + transiciones válidas).
-- PDF: generar plantilla similar a “evidencias” (a integrar después). Por ahora usa un template fiel con tabla y 3 firmas reemplazadas por “✅ Aprobado” (o check) para Usuario/Compras/Gerencia.
+ESTRUCTURA DE LA PANTALLA:
+1) HEADER SUPERIOR:
+- Título: "Monitoreo"
+- Input de búsqueda (bordes redondeados)
+- Botones:
+  - "Rango de fechas"
+  - "Exportar CSV"
+  - "Exportar PDF"
+2) SECCIÓN KPI (Resumen operativo):
+- 3 tarjetas:
+  - Activas (color azul)
+  - Normales (gris)
+  - Urgentes (rojo)
+- Número grande
+- Texto pequeño debajo
+- Diseño limpio sin ruido visual
+3) SECCIÓN "ACTIVIDAD RECIENTE":
+Cada orden debe mostrarse como una TARJETA LIMPIA con esta estructura EXACTA:
+DISEÑO DE TARJETA:
+- LADO IZQUIERDO:
+  Barra vertical de color según estado:
+  - Verde → Normal
+  - Amarillo → En proceso
+  - Rojo → Urgente
+  - Azul → Informativo
+- CONTENIDO PRINCIPAL:
+  Fila 1:
+  - Folio (grande, en negrita)
+  - Usuario + área (texto pequeño, gris)
+  Fila 2:
+  - Etapa (como chip/pastilla con color suave)
+  Fila 3:
+  - Movimiento en formato corto:
+    Ejemplo:
+    "Validación → Cierre documental"
+- LADO DERECHO:
+  - Tiempo (icono ⏱)
+  - Número de movimientos (icono 🔄)
+- ACCIONES:
+  - Botón: "Ver detalle"
+  - Botón: "Ver PDF"
+  - Menú opcional (3 puntos)
+- PARTE INFERIOR DERECHA (resumen visual):
+  Ejemplos:
+  - "1 enviado"
+  - "2 pendientes"
+  Con fondo de color suave
+REGLAS CRÍTICAS:
+- NO repetir la misma información en varias partes
+- NO usar textos largos ni explicativos
+- NO usar etiquetas innecesarias como "Movimiento reciente"
+- Usar espacios en lugar de líneas divisorias
+- Bordes redondeados (12–16)
+- Padding consistente (16–20)
 
-ROLES
-- Administradores
-- Director General (Gerencia General)
-- Compras
-- Usuarios (solicitantes)
-- Contabilidad
+ESTILO VISUAL:
+- Fondo general: gris muy claro
+- Tarjetas: blanco
+- Sombras: suaves (elevation bajo)
+- Iconos: estilo minimalista (outline)
+- Tipografía:
+  - Títulos: negrita
+  - Secundario: gris
+  - Metadata: pequeño
+INTERACCIONES:
+- Hover con ligera elevación (en desktop)
+- Transiciones suaves
+- Click en tarjeta abre detalle
+ENTREGABLES:
+1. Pantalla completa en Flutter (MonitoreoPage)
+2. Widgets reutilizables:
+   - OrderCard
+   - KPIBox
+   - StatusIndicator
+3. Código limpio, organizado y listo para usar
+4. Sin comentarios innecesarios
 
-CONCEPTO CLAVE
-Cada usuario pertenece a un área/departamento (aprox 12; por confirmar). El usuario NO elige área en UI; viene como propiedad del perfil (user.areaId).
+OBJETIVO PRINCIPAL:
+Crear una pantalla de reportes tipo dashboard empresarial/SaaS, con excelente jerarquía visual, poco ruido, colores suaves, tarjetas limpias y gráficos fáciles de entender.
 
-CASO DE USO PRINCIPAL (USUARIO)
-1) Login seguro
-- Implementa autenticación.
-- Reglas básicas de seguridad: validación de sesión, manejo de errores, bloqueo de acciones por rol.
-- Prepara verificación de email y política de contraseñas (mínimo razonable).
-- Considera logging de eventos relevantes (login, logout, intentos fallidos) sin guardar datos sensibles.
+ESTILO VISUAL:
+- Fondo general gris muy claro
+- Tarjetas blancas
+- Bordes redondeados entre 14 y 18 px
+- Sombras suaves, discretas
+- Espaciado amplio
+- Tipografía moderna y legible
+- Iconos outline/minimalistas
+- Colores suaves pero funcionales
+- Aspecto premium tipo dashboard SaaS
+REQUISITOS DE DISEÑO:
+1) HEADER SUPERIOR
+Crear una barra superior limpia con:
+- Ícono de menú a la izquierda
+- Título grande: "Reportes"
+- A la derecha:
+  - Botón "Rango de fechas"
+  - Botón "Limpiar"
+Debajo del header agregar filtros rápidos en forma de chips/botones:
+- "Todo el historial" (activo por defecto)
+- "Hoy"
+- "7 días"
+- "30 días"
+- "Este mes"
+El filtro activo debe verse resaltado con fondo oscuro o primario y texto claro.
+Los demás deben tener fondo claro y borde sutil.
+2) SECCIÓN "RESUMEN EJECUTIVO"
+Debajo de los filtros, agregar una tarjeta/contenedor grande con título:
+- "Resumen ejecutivo"
+Dentro, mostrar una fila de KPI cards, con 6 tarjetas:
+- Órdenes
+- Activas
+- Finalizadas
+- Rechazadas
+- Urgentes
+- Con proveedor
+Cada KPI card debe incluir:
+- Un ícono dentro de un cuadro o círculo con fondo suave
+- Un número grande y dominante
+- El nombre del KPI
+- Un texto secundario pequeño debajo
+Usar color suave distinto por categoría:
+- Órdenes: azul
+- Activas: verde
+- Finalizadas: verde suave o esmeralda
+- Rechazadas: rojo suave
+- Urgentes: naranja o ámbar
+- Con proveedor: azul suave
+Muy importante:
+- Hacer que el número destaque mucho
+- Evitar saturación visual
+- Mantener consistencia total entre las tarjetas
+3) SECCIÓN DE CONTENIDO PRINCIPAL EN 2 COLUMNAS
+Debajo del resumen ejecutivo, crear una fila con dos paneles grandes:
+COLUMNA IZQUIERDA:
+Panel "Top proveedores por orden"
+Debe incluir:
+- Título: "Top proveedores por orden"
+- Subtítulo: "Órdenes acumuladas por proveedor en el rango"
+- Un pequeño bloque resaltado con:
+  - "Total con proveedor: 2"
+Luego una lista visual de proveedores, por ejemplo:
+1. ee
+2. juan
+Cada proveedor debe tener:
+- Número de posición dentro de un círculo suave
+- Nombre del proveedor
+- Cantidad de órdenes alineada a la derecha, por ejemplo: "1 ord"
+- Una barra horizontal decorativa/proporcional debajo del nombre
+Abajo del panel agregar un botón/link:
+- "Ver todos los proveedores"
+Este panel debe verse limpio, elegante y con buena separación vertical.
+COLUMNA DERECHA:
+Panel "Tendencia de órdenes"
+Debe incluir:
+- Título: "Tendencia de órdenes"
+- Subtítulo: "Últimos 6 meses de órdenes registradas"
+- Un chip o etiqueta que diga: "Total órdenes: 5"
+- Un selector pequeño arriba a la derecha que diga: "Por mes"
+Debajo, agregar una gráfica de barras limpia y moderna.
+Datos de ejemplo:
+- Nov 2025 = 1
+- Dic 2025 = 1
+- Ene 2026 = 2
+- Feb 2026 = 0
+- Mar 2026 = 1
+- Abr 2026 = 0
+Requisitos de la gráfica:
+- Barras verticales azules
+- Eje inferior con meses
+- Eje lateral simple
+- Líneas guía muy sutiles
+- Números encima de las barras cuando aplique
+- Diseño limpio y minimalista
+4) BLOQUE INFORMATIVO INFERIOR
+Debajo de ambos paneles, agregar una franja o tarjeta informativa horizontal con:
+- Ícono de información
+- Texto:
+  "Los reportes se generan con base en la fecha de creación de las órdenes."
+Debe verse discreto, útil y bien integrado al diseño.
+REGLAS IMPORTANTES:
+- No repetir texto innecesario
+- No meter texto explicativo largo
+- No saturar con bordes ni líneas pesadas
+- No usar demasiados colores fuertes
+- Todo debe verse limpio y entendible rápidamente
+- La prioridad es claridad, jerarquía visual y apariencia profesional
+- El diseño debe parecer listo para producción
+COMPONENTES REUTILIZABLES QUE DEBES CREAR:
+- ReportsPage
+- ReportsHeader
+- FilterChipGroup
+- SummaryKpiCard
+- TopSuppliersCard
+- SupplierRow
+- OrdersTrendCard
+- InfoBanner
+REQUISITOS TÉCNICOS:
+- Usa widgets reutilizables
+- Código ordenado
+- Separar bien estructura y estilos
+- Mantener nombres claros
+- Evitar comentarios innecesarios
+- Debe quedar listo para integrarse a un proyecto real
+- Si hace falta, usar datos mock para renderizar la interfaz
+ENTREGABLE:
+Genera el código completo de la pantalla en Flutter, con sus widgets auxiliares, manteniendo una apariencia lo más similar posible a la referencia visual y con enfoque en UI premium, moderna y fácil de entender.
 
-2) Home (Usuario)
-Pantalla inicial tras login:
-- Botón centrado grande: “Crear orden de compra”
-- Debajo: “Ver mi historial de órdenes de compra”
-- Tercer botón: NO usar “Proceso”; propon 3 alternativas y elige una por defecto:
-  a) “Seguimiento”
-  b) “Estatus”
-  c) “Ruta de aprobación”
-  Implementa con la opción elegida y deja el texto configurable.
-- Esquina superior derecha: ícono de perfil:
-  - Solo lectura de datos del usuario (nombre, correo, área, rol)
-  - Botón cerrar sesión
-
-3) Crear Orden de Compra (Usuario)
-Al pulsar “Crear orden de compra”:
-- Selector de urgencia: Urgente / Alta / Media / Baja (tipo segmented control o chips).
-- Formulario con:
-  - Título visible: “Requisición de compra”
-  - Folio: autogenerado, formato 000001 en adelante.
-    - El contador vive en Firestore y SOLO Admin puede modificarlo (desde consola Firebase, no desde app).
-    - El folio se asigna atómicamente (Cloud Function transaction) para evitar duplicados.
-  - Nombre solicitante: autocompletado desde usuario
-  - Área solicitante: autocompletado desde usuario (en el documento de evidencia lo llaman “proceso”, pero en modelo usar “area”).
-  - Fecha: autogenerada (serverTimestamp)
-  - Tabla de items (líneas):
-    - ITEM (número de fila autoincremental local)
-    - Piezas requeridas (int)
-    - No. de parte (string)
-    - Descripción del producto (string)
-    - Cantidad (num)
-    - Unidad de medida (string / catálogo)
-    - Cliente (string; editable por planeación pero SUJETO A CAMBIOS → modelarlo opcional)
-    - Fecha de entrega estimada (date)
-- Validaciones: campos requeridos, cantidad > 0, fecha coherente, etc.
-- Guardado como “draft” y envío a revisión:
-  - El usuario puede guardar borrador.
-  - Botón “Enviar a revisión” crea el flujo y notifica a Compras.
-
-4) Historial (Usuario)
-- Lista de órdenes del usuario (filtros por estado, fecha, urgencia).
-- Cada orden abre detalle con:
-  - Información completa
-  - Timeline/diagrama de estados (ver punto 5)
-  - Botón descargar/ver PDF (si existe)
-
-5) Seguimiento / Estatus / Ruta de aprobación (Usuario)
-Pantalla que muestre un diagrama/timeline que avanza según el status de la orden.
-Estados propuestos (editables por configuración, pero implementar estos):
-- “Por confirmar (Compras)” (pendiente de revisión de compras)
-- “Autorizado por Gerencia General”
-- “Pago realizado”
-- “Orden realizada”
-- “Fecha estimada de entrega” (en este punto ya lo visualiza todo mundo y especialmente Contabilidad)
-Requisitos del diagrama:
-- En cada cambio de estado registrar fecha y hora (serverTimestamp) y quién hizo el cambio (userId, rol).
-- Mostrar esos stamps en la UI.
-- Esa misma trazabilidad se refleja en el PDF final.
-- En cada proceso, Compras o Gerencia pueden “Regresar” la orden al usuario para modificación:
-  - Debe registrar motivo (comentario obligatorio).
-  - La orden pasa a estado “Requiere cambios (Usuario)”.
-  - El usuario edita y reenvía → vuelve a revisión (Compras).
-- Notificaciones push con sonido/vibración:
-  - A usuario cuando: enviada, requiere cambios, aprobada, etc.
-  - A compras cuando: usuario envía o reenvía
-  - A gerencia cuando: compras aprueba y requiere autorización
-  - A contabilidad cuando: llega a estados relevantes (por ejemplo “Pago realizado”, “Entrega estimada”)
-  - Define una matriz de notificación rol x evento.
-
-ACCESO POR ROLES (alto nivel)
-- Usuario: crea, edita SOLO cuando está en borrador o “requiere cambios”, ve solo sus órdenes.
-- Compras: ve todas o por área (según permisos), confirma/revisa, puede regresar a usuario, puede avanzar a “listo para autorización” de gerencia.
-- Gerencia/Director: autoriza o regresa con comentario.
-- Contabilidad: ve órdenes a partir de cierto estado (por ejemplo desde “Pago realizado” o “Entrega estimada”, según regla configurable).
-- Admin: gestiona usuarios, roles, áreas, contador folio, catálogos (unidades de medida, etc).
-
-PDF FINAL
-- El PDF debe ser similar al formato de evidencias (se integrará después), pero implementa un layout profesional:
-  - Encabezado con “Requisición de compra”, folio, solicitante, área, fecha, urgencia
-  - Tabla de items
-  - Sección de firmas: 3 espacios reemplazados por “✅ Aprobado” y datos (nombre/rol/fecha) de:
-    - Usuario solicitante
-    - Compras
-    - Gerencia
-- El PDF se genera cuando la orden alcanza un estado “final” (defínelo) y se guarda en Storage + URL en Firestore.
-- Permite visualizar/descargar desde la app.
-
-MODELO DE DATOS (Firestore)
-Diseña colecciones sugeridas:
-- users/{userId}
-  - name, email, role, areaId, isActive, createdAt
-- areas/{areaId}
-  - name, code, isActive
-- purchaseOrders/{poId}
-  - folio (string “000001”)
-  - requesterId, requesterName
-  - areaId, areaName
-  - urgency (enum)
-  - status (enum)
-  - createdAt, updatedAt (server)
-  - items: array (o subcollection purchaseOrders/{poId}/items)
-  - visibility: flags para contabilidad, etc
-  - lastReturnReason (optional)
-  - pdfUrl (optional)
-- purchaseOrders/{poId}/events/{eventId}
-  - fromStatus, toStatus, byUserId, byRole, timestamp, comment(optional), type(advance/return/edit)
-- counters/folios
-  - purchaseOrderNext (int)  (solo modificado por Admin)
-- notificationsLog/... (opcional para auditoría)
-
-REGLAS Y SEGURIDAD
-- Firestore Security Rules estrictas:
-  - Usuario sólo lee sus órdenes y escribe solo en borrador/requiere cambios.
-  - Cambios de estado sensibles: SOLO vía Cloud Functions (no desde cliente).
-- Cloud Functions:
-  - assignFolioAndCreateOrder (transaction)
-  - transitionStatus (valida rol + transición + registra evento + dispara notificaciones)
-  - returnToUser (requiere comentario)
-  - generatePdfOnFinalState (trigger on status)
-- Auditoría: registrar timestamps server y actor.
-
-UI/UX
-- Interfaz “bonita e intuitiva”:
-  - Tipografías y espaciado consistentes
-  - Botones claros, feedback (snackbars), loaders
-  - Empty states y errores amigables
-  - Accesibilidad básica (labels, contraste)
-
-ENTREGABLES
-1) Proyecto Flutter completo con estructura limpia.
-2) README.md con:
-   - requisitos
-   - configuración Firebase (pasos)
-   - cómo correr
-   - cómo desplegar (opcional)
-3) Configuración de Firebase (archivos de ejemplo):
-   - firebase.json, .firebaserc (si aplica)
-   - functions/ con TypeScript
-4) Reglas Firestore (firestore.rules)
-5) Matriz de estados y transiciones (en /docs o README)
-6) Matriz de notificaciones rol x evento
-
-PREGUNTAS ABIERTAS (no bloquean; deja TODOs)
-- ¿Los 12 “áreas” se gestionan por Admin? (asumir sí)
-- ¿“Director general” y “Gerencia general” son el mismo rol o distintos? (asumir mismo: GERENCIA)
-- ¿Contabilidad ve desde qué estado exacto? (asumir desde “Pago realizado” y “Entrega estimada”)
-- ¿Compras puede editar items después de enviado? (asumir NO; solo regresar para que edite el usuario)
-- ¿“Orden realizada” significa “PO emitida a proveedor”? (asumir sí)
-- ¿Se requiere adjuntar cotizaciones/evidencias? (asumir opcional, dejar preparado)
-
-TAREA INMEDIATA (primer sprint)
-- Implementar autenticación + perfiles + roles.
-- Implementar Home de Usuario con 3 botones + Perfil.
-- Implementar Crear Orden (draft + submit).
-- Implementar Historial del Usuario.
-- Implementar pantalla de Seguimiento con timeline/diagrama por orden.
-- Implementar Cloud Functions mínimas para:
-  - folio autoincremental
-  - enviar a revisión (cambio de estado)
-  - regresar con comentario
-  - registrar eventos
-- Implementar notificación básica en al menos 2 eventos (enviado a compras, regresado a usuario), dejando el resto en TODO.
-
-CRITERIOS DE ACEPTACIÓN
-- Folios únicos y con padding a 6 dígitos.
-- Un usuario no puede ver órdenes ajenas.
-- Timeline muestra fechas/horas por estado con actor.
-- Regresar orden requiere comentario y habilita edición al usuario.
-- Notificación push funciona (aunque sea con configuración de prueba).
-- Código compilable y README claro.
-
-Comienza creando el proyecto y estructura de carpetas. Luego implementa el Sprint 1 completo.

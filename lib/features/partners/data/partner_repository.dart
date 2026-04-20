@@ -1,8 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
 import 'package:sistema_compras/core/extensions.dart';
+
 import 'package:sistema_compras/core/firebase_database_compat.dart';
 import 'package:sistema_compras/core/providers.dart';
+import 'package:sistema_compras/features/auth/domain/app_user.dart';
 
 enum PartnerType { supplier, client }
 
@@ -41,18 +42,36 @@ class PartnerEntry {
     required this.name,
     this.createdAt,
     this.updatedAt,
+    this.createdById,
+    this.createdByName,
+    this.createdByArea,
+    this.updatedById,
+    this.updatedByName,
+    this.updatedByArea,
   });
 
   final String id;
   final String name;
   final DateTime? createdAt;
   final DateTime? updatedAt;
+  final String? createdById;
+  final String? createdByName;
+  final String? createdByArea;
+  final String? updatedById;
+  final String? updatedByName;
+  final String? updatedByArea;
 
   Map<String, dynamic> toMap() {
     return {
       'name': name,
       'createdAt': createdAt?.millisecondsSinceEpoch,
       'updatedAt': updatedAt?.millisecondsSinceEpoch,
+      'createdById': createdById,
+      'createdByName': createdByName,
+      'createdByArea': createdByArea,
+      'updatedById': updatedById,
+      'updatedByName': updatedByName,
+      'updatedByArea': updatedByArea,
     };
   }
 
@@ -62,6 +81,12 @@ class PartnerEntry {
       name: (data['name'] as String?) ?? '',
       createdAt: _parseDateTime(data['createdAt']),
       updatedAt: _parseDateTime(data['updatedAt']),
+      createdById: data['createdById'] as String?,
+      createdByName: data['createdByName'] as String?,
+      createdByArea: data['createdByArea'] as String?,
+      updatedById: data['updatedById'] as String?,
+      updatedByName: data['updatedByName'] as String?,
+      updatedByArea: data['updatedByArea'] as String?,
     );
   }
 }
@@ -71,27 +96,45 @@ class PartnerRepository {
 
   final AppDatabase _database;
 
-  AppDatabaseRef _partnersRef(PartnerType type, String uid) {
-    return _database.ref('partners/${type.path}/$uid');
+  AppDatabaseRef _partnersRef(PartnerType type) {
+    return _database.ref('partners/${type.path}');
   }
 
   Stream<List<PartnerEntry>> watchPartners({
-    required String uid,
     required PartnerType type,
   }) {
-    return _partnersRef(type, uid).onValue.map((event) {
+    return _partnersRef(type).onValue.map((event) {
       final value = event.snapshot.value;
       if (value is! Map) return <PartnerEntry>[];
 
       final partners = <PartnerEntry>[];
       value.forEach((key, raw) {
         if (raw is Map) {
-          partners.add(
-            PartnerEntry.fromMap(
-              key.toString(),
-              Map<String, dynamic>.from(raw),
-            ),
-          );
+          final data = Map<String, dynamic>.from(raw);
+          if (data['name'] is String) {
+            partners.add(
+              PartnerEntry.fromMap(
+                key.toString(),
+                data,
+              ),
+            );
+            return;
+          }
+
+          data.forEach((legacyKey, legacyRaw) {
+            if (legacyRaw is! Map) return;
+            final legacyData = Map<String, dynamic>.from(legacyRaw);
+            if (legacyData['name'] is! String) return;
+            partners.add(
+              PartnerEntry.fromMap(
+                '${key.toString()}/${legacyKey.toString()}',
+                {
+                  ...legacyData,
+                  'createdById': legacyData['createdById'] ?? key.toString(),
+                },
+              ),
+            );
+          });
         }
       });
 
@@ -100,22 +143,30 @@ class PartnerRepository {
     });
   }
 
-  Future<void> createPartner({
+  Future<String> createPartner({
     required String uid,
     required PartnerType type,
     required String name,
+    AppUser? actor,
   }) async {
     final trimmed = name.trim();
     if (trimmed.isEmpty) {
       throw StateError('Nombre requerido.');
     }
 
-    final ref = _partnersRef(type, uid).push();
+    final ref = _partnersRef(type).push();
     await ref.set({
       'name': trimmed,
       'createdAt': appServerTimestamp,
       'updatedAt': appServerTimestamp,
+      'createdById': actor?.id ?? uid,
+      'createdByName': actor?.name.trim(),
+      'createdByArea': actor?.areaDisplay.trim(),
+      'updatedById': actor?.id ?? uid,
+      'updatedByName': actor?.name.trim(),
+      'updatedByArea': actor?.areaDisplay.trim(),
     });
+    return ref.key ?? trimmed;
   }
 
   Future<void> updatePartner({
@@ -123,15 +174,19 @@ class PartnerRepository {
     required PartnerType type,
     required String id,
     required String name,
+    AppUser? actor,
   }) async {
     final trimmed = name.trim();
     if (trimmed.isEmpty) {
       throw StateError('Nombre requerido.');
     }
 
-    await _partnersRef(type, uid).child(id).update({
+    await _partnersRef(type).child(id).update({
       'name': trimmed,
       'updatedAt': appServerTimestamp,
+      'updatedById': actor?.id ?? uid,
+      'updatedByName': actor?.name.trim(),
+      'updatedByArea': actor?.areaDisplay.trim(),
     });
   }
 
@@ -140,7 +195,7 @@ class PartnerRepository {
     required PartnerType type,
     required String id,
   }) async {
-    await _partnersRef(type, uid).child(id).remove();
+    await _partnersRef(type).child(id).remove();
   }
 }
 
@@ -154,7 +209,7 @@ final userSuppliersProvider = StreamProvider<List<PartnerEntry>>((ref) {
   if (uid == null) return Stream.value(const <PartnerEntry>[]);
 
   final repository = ref.watch(partnerRepositoryProvider);
-  return repository.watchPartners(uid: uid, type: PartnerType.supplier);
+  return repository.watchPartners(type: PartnerType.supplier);
 });
 
 final userClientsProvider = StreamProvider<List<PartnerEntry>>((ref) {
@@ -162,7 +217,7 @@ final userClientsProvider = StreamProvider<List<PartnerEntry>>((ref) {
   if (uid == null) return Stream.value(const <PartnerEntry>[]);
 
   final repository = ref.watch(partnerRepositoryProvider);
-  return repository.watchPartners(uid: uid, type: PartnerType.client);
+  return repository.watchPartners(type: PartnerType.client);
 });
 
 final userSupplierNamesProvider = Provider<List<String>>((ref) {

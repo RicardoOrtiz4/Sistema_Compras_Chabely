@@ -38,6 +38,7 @@ class OrderSummaryLines extends StatelessWidget {
         : (order.internalOrder ?? '').trim();
     final clientNote = (order.clientNote ?? '').trim();
     final urgentJustification = (order.urgentJustification ?? '').trim();
+    final notPurchasedCount = countItemsMarkedAsNotPurchased(order);
 
     final lines = <String>[
       if (includeRequester && order.requesterName.trim().isNotEmpty)
@@ -50,12 +51,15 @@ class OrderSummaryLines extends StatelessWidget {
             ? 'OC internas: $internalOrder'
             : 'OC interna: $internalOrder',
       if (includeBudget && order.budget != null) 'Presupuesto: ${order.budget}',
+      if (notPurchasedCount > 0)
+        'Items cerrados sin compra: $notPurchasedCount',
       if (includeClientNote && clientNote.isNotEmpty) 'Nota: $clientNote',
-      if (includeUrgentJustification && urgentJustification.isNotEmpty)
-        'Urgente: $urgentJustification',
     ];
 
-    if (lines.isEmpty) {
+    final hasUrgentJustification =
+        includeUrgentJustification && urgentJustification.isNotEmpty;
+
+    if (lines.isEmpty && !hasUrgentJustification) {
       return Text(emptyLabel, style: theme.textTheme.bodySmall);
     }
 
@@ -64,6 +68,16 @@ class OrderSummaryLines extends StatelessWidget {
       children: [
         for (final line in lines) ...[
           Text(line, style: theme.textTheme.bodySmall),
+          const SizedBox(height: 2),
+        ],
+        if (hasUrgentJustification) ...[
+          Text(
+            'Urgente: $urgentJustification',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.error,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
           const SizedBox(height: 2),
         ],
       ],

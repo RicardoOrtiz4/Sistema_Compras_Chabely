@@ -12,8 +12,11 @@ class AuthRepository {
 
   Stream<AppAuthUser?> authStateChanges() => _auth.authStateChanges();
 
-  Future<void> signIn({required String email, required String password}) async {
-    await _auth.signInWithEmailAndPassword(email: email, password: password);
+  Future<AppAuthUser> signIn({
+    required String email,
+    required String password,
+  }) async {
+    return _auth.signInWithEmailAndPassword(email: email, password: password);
   }
 
   Future<void> signOut() => _auth.signOut();

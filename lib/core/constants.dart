@@ -1,17 +1,16 @@
 import 'package:flutter/material.dart';
 
-const pendingRequirementAuthorizationLabel =
-    'Por autorizacion de requerimiento';
-const paymentAuthorizationLabel = 'Por autorizacion de pago';
-const releaseProcessLabel = 'Proceso de liberacion';
-const inTransitArrivalLabel = 'En transito de llegada';
+const intakeReviewLabel = 'Revision operativa';
+const approvalQueueLabel = 'Validacion';
+const executionPrepLabel = 'Preparacion';
+const arrivalTrackingLabel = 'Seguimiento logistica';
 
 enum PurchaseOrderStatus {
   draft,
-  pendingCompras,
-  cotizaciones,
-  dataComplete,
-  authorizedGerencia,
+  intakeReview,
+  sourcing,
+  readyForApproval,
+  approvalQueue,
   paymentDone,
   contabilidad,
   orderPlaced,
@@ -22,18 +21,18 @@ extension PurchaseOrderStatusX on PurchaseOrderStatus {
     switch (this) {
       case PurchaseOrderStatus.draft:
         return 'Requiere correccion';
-      case PurchaseOrderStatus.pendingCompras:
-        return pendingRequirementAuthorizationLabel;
-      case PurchaseOrderStatus.cotizaciones:
-        return 'Compras';
-      case PurchaseOrderStatus.dataComplete:
-        return releaseProcessLabel;
-      case PurchaseOrderStatus.authorizedGerencia:
-        return paymentAuthorizationLabel;
+      case PurchaseOrderStatus.intakeReview:
+        return intakeReviewLabel;
+      case PurchaseOrderStatus.sourcing:
+        return 'Preparacion';
+      case PurchaseOrderStatus.readyForApproval:
+        return 'Lista para ejecucion';
+      case PurchaseOrderStatus.approvalQueue:
+        return approvalQueueLabel;
       case PurchaseOrderStatus.paymentDone:
-        return inTransitArrivalLabel;
+        return arrivalTrackingLabel;
       case PurchaseOrderStatus.contabilidad:
-        return 'En Contabilidad';
+        return 'Cierre documental';
       case PurchaseOrderStatus.orderPlaced:
         return 'Orden realizada';
       case PurchaseOrderStatus.eta:
@@ -44,13 +43,13 @@ extension PurchaseOrderStatusX on PurchaseOrderStatus {
     switch (this) {
       case PurchaseOrderStatus.draft:
         return Icons.edit_note;
-      case PurchaseOrderStatus.pendingCompras:
+      case PurchaseOrderStatus.intakeReview:
         return Icons.playlist_add_check_circle_outlined;
-      case PurchaseOrderStatus.cotizaciones:
+      case PurchaseOrderStatus.sourcing:
         return Icons.request_quote_outlined;
-      case PurchaseOrderStatus.dataComplete:
+      case PurchaseOrderStatus.readyForApproval:
         return Icons.fact_check_outlined;
-      case PurchaseOrderStatus.authorizedGerencia:
+      case PurchaseOrderStatus.approvalQueue:
         return Icons.approval_outlined;
       case PurchaseOrderStatus.paymentDone:
         return Icons.sync_alt_outlined;
@@ -66,13 +65,13 @@ extension PurchaseOrderStatusX on PurchaseOrderStatus {
     switch (this) {
       case PurchaseOrderStatus.draft:
         return scheme.outline;
-      case PurchaseOrderStatus.pendingCompras:
+      case PurchaseOrderStatus.intakeReview:
         return scheme.primary;
-      case PurchaseOrderStatus.cotizaciones:
+      case PurchaseOrderStatus.sourcing:
         return scheme.secondaryContainer;
-      case PurchaseOrderStatus.dataComplete:
+      case PurchaseOrderStatus.readyForApproval:
         return scheme.secondary;
-      case PurchaseOrderStatus.authorizedGerencia:
+      case PurchaseOrderStatus.approvalQueue:
         return scheme.secondary;
       case PurchaseOrderStatus.paymentDone:
         return scheme.tertiary;
@@ -108,9 +107,9 @@ const appLogoAsset = 'evidencias/LOGO CHABELY.png';
 const int defaultOrderPageSize = 10;
 const int orderPageSizeStep = 10;
 const defaultStatusFlow = <PurchaseOrderStatus>[
-  PurchaseOrderStatus.pendingCompras,
-  PurchaseOrderStatus.cotizaciones,
-  PurchaseOrderStatus.dataComplete,
+  PurchaseOrderStatus.intakeReview,
+  PurchaseOrderStatus.sourcing,
+  PurchaseOrderStatus.readyForApproval,
   PurchaseOrderStatus.paymentDone,
   PurchaseOrderStatus.contabilidad,
   PurchaseOrderStatus.eta,

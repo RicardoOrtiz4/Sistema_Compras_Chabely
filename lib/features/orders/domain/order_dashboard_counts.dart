@@ -1,33 +1,30 @@
 class OrderDashboardCounts {
   const OrderDashboardCounts({
-    required this.pendingCompras,
-    required this.cotizaciones,
-    required this.cotizacionesReadyToSend,
+    required this.intakeReview,
+    required this.sourcing,
+    required this.sourcingReadyToSend,
     required this.pendingDireccion,
     required this.pendingEta,
     required this.contabilidad,
-    required this.rejected,
     required this.hasRemoteCounters,
   });
 
   static const empty = OrderDashboardCounts(
-    pendingCompras: 0,
-    cotizaciones: 0,
-    cotizacionesReadyToSend: 0,
+    intakeReview: 0,
+    sourcing: 0,
+    sourcingReadyToSend: 0,
     pendingDireccion: 0,
     pendingEta: 0,
     contabilidad: 0,
-    rejected: 0,
     hasRemoteCounters: false,
   );
 
-  final int pendingCompras;
-  final int cotizaciones;
-  final int cotizacionesReadyToSend;
+  final int intakeReview;
+  final int sourcing;
+  final int sourcingReadyToSend;
   final int pendingDireccion;
   final int pendingEta;
   final int contabilidad;
-  final int rejected;
   final bool hasRemoteCounters;
 
   factory OrderDashboardCounts.fromMap(
@@ -35,46 +32,41 @@ class OrderDashboardCounts {
     required String? userId,
   }) {
     final status = _asMap(data['status']);
-    final cotizaciones = _asMap(data['cotizaciones']);
-    final rejectedByUser = _asMap(data['rejectedByUser']);
+    final sourcing = _asMap(data['sourcing']);
 
-    final hasRemoteCounters =
-        status.isNotEmpty || cotizaciones.isNotEmpty || rejectedByUser.isNotEmpty;
+    final hasRemoteCounters = status.isNotEmpty || sourcing.isNotEmpty;
 
     return OrderDashboardCounts(
-      pendingCompras: _asInt(status['pendingCompras']),
-      cotizaciones: _asInt(status['cotizaciones']),
-      cotizacionesReadyToSend: _asInt(cotizaciones['readyToSend']),
-      pendingDireccion: _asInt(status['authorizedGerencia']),
+      intakeReview: _asInt(status['intakeReview']),
+      sourcing: _asInt(status['sourcing']),
+      sourcingReadyToSend: _asInt(sourcing['readyToSend']),
+      pendingDireccion: _asInt(status['approvalQueue']),
       pendingEta: _asInt(status['paymentDone']),
       contabilidad: _asInt(status['contabilidad']),
-      rejected: userId == null ? 0 : _asInt(rejectedByUser[userId]),
       hasRemoteCounters: hasRemoteCounters,
     );
   }
 
   factory OrderDashboardCounts.fromLocalMap(Map<String, dynamic> data) {
     return OrderDashboardCounts(
-      pendingCompras: _asInt(data['pendingCompras']),
-      cotizaciones: _asInt(data['cotizaciones']),
-      cotizacionesReadyToSend: _asInt(data['cotizacionesReadyToSend']),
+      intakeReview: _asInt(data['intakeReview']),
+      sourcing: _asInt(data['sourcing']),
+      sourcingReadyToSend: _asInt(data['sourcingReadyToSend']),
       pendingDireccion: _asInt(data['pendingDireccion']),
       pendingEta: _asInt(data['pendingEta']),
       contabilidad: _asInt(data['contabilidad']),
-      rejected: _asInt(data['rejected']),
       hasRemoteCounters: _asBool(data['hasRemoteCounters']),
     );
   }
 
   Map<String, dynamic> toLocalMap() {
     return {
-      'pendingCompras': pendingCompras,
-      'cotizaciones': cotizaciones,
-      'cotizacionesReadyToSend': cotizacionesReadyToSend,
+      'intakeReview': intakeReview,
+      'sourcing': sourcing,
+      'sourcingReadyToSend': sourcingReadyToSend,
       'pendingDireccion': pendingDireccion,
       'pendingEta': pendingEta,
       'contabilidad': contabilidad,
-      'rejected': rejected,
       'hasRemoteCounters': hasRemoteCounters,
     };
   }

@@ -1,31 +1,6 @@
 import 'package:sistema_compras/core/area_labels.dart';
 import 'package:sistema_compras/core/constants.dart';
 
-enum PurchaseOrderItemQuoteStatus {
-  pending,
-  draft,
-  pendingDireccion,
-  approved,
-  rejected,
-}
-
-extension PurchaseOrderItemQuoteStatusX on PurchaseOrderItemQuoteStatus {
-  String get label {
-    switch (this) {
-      case PurchaseOrderItemQuoteStatus.pending:
-        return 'Pendiente de compra';
-      case PurchaseOrderItemQuoteStatus.draft:
-        return 'En compra';
-      case PurchaseOrderItemQuoteStatus.pendingDireccion:
-        return paymentAuthorizationLabel;
-      case PurchaseOrderItemQuoteStatus.approved:
-        return 'Aprobado';
-      case PurchaseOrderItemQuoteStatus.rejected:
-        return 'Rechazado';
-    }
-  }
-}
-
 class PurchaseOrderItem {
   const PurchaseOrderItem({
     required this.line,
@@ -38,8 +13,6 @@ class PurchaseOrderItem {
     this.supplier,
     this.budget,
     this.internalOrder,
-    this.quoteId,
-    this.quoteStatus = PurchaseOrderItemQuoteStatus.pending,
     this.estimatedDate,
     this.deliveryEtaDate,
     this.sentToContabilidadAt,
@@ -50,6 +23,10 @@ class PurchaseOrderItem {
     this.arrivedAt,
     this.arrivedByName,
     this.arrivedByArea,
+    this.notPurchasedAt,
+    this.notPurchasedByName,
+    this.notPurchasedByArea,
+    this.notPurchasedReason,
   });
 
   final int line;
@@ -62,8 +39,6 @@ class PurchaseOrderItem {
   final String? supplier;
   final num? budget;
   final String? internalOrder;
-  final String? quoteId;
-  final PurchaseOrderItemQuoteStatus quoteStatus;
   final DateTime? estimatedDate;
   final DateTime? deliveryEtaDate;
   final DateTime? sentToContabilidadAt;
@@ -74,8 +49,15 @@ class PurchaseOrderItem {
   final DateTime? arrivedAt;
   final String? arrivedByName;
   final String? arrivedByArea;
+  final DateTime? notPurchasedAt;
+  final String? notPurchasedByName;
+  final String? notPurchasedByArea;
+  final String? notPurchasedReason;
 
   bool get isArrivalRegistered => arrivedAt != null;
+  bool get isNotPurchased => notPurchasedAt != null;
+  bool get requiresFulfillment => !isNotPurchased;
+  bool get isResolved => isNotPurchased || isArrivalRegistered;
 
   PurchaseOrderItem copyWith({
     int? line,
@@ -88,8 +70,6 @@ class PurchaseOrderItem {
     String? supplier,
     num? budget,
     String? internalOrder,
-    String? quoteId,
-    PurchaseOrderItemQuoteStatus? quoteStatus,
     DateTime? estimatedDate,
     DateTime? deliveryEtaDate,
     DateTime? sentToContabilidadAt,
@@ -97,7 +77,6 @@ class PurchaseOrderItem {
     String? reviewComment,
     bool clearReviewComment = false,
     bool clearInternalOrder = false,
-    bool clearQuoteId = false,
     bool clearDeliveryEtaDate = false,
     bool clearSentToContabilidadAt = false,
     num? receivedQuantity,
@@ -110,6 +89,14 @@ class PurchaseOrderItem {
     bool clearArrivedAt = false,
     bool clearArrivedByName = false,
     bool clearArrivedByArea = false,
+    DateTime? notPurchasedAt,
+    String? notPurchasedByName,
+    String? notPurchasedByArea,
+    String? notPurchasedReason,
+    bool clearNotPurchasedAt = false,
+    bool clearNotPurchasedByName = false,
+    bool clearNotPurchasedByArea = false,
+    bool clearNotPurchasedReason = false,
   }) {
     return PurchaseOrderItem(
       line: line ?? this.line,
@@ -122,8 +109,6 @@ class PurchaseOrderItem {
       supplier: supplier ?? this.supplier,
       budget: budget ?? this.budget,
       internalOrder: clearInternalOrder ? null : (internalOrder ?? this.internalOrder),
-      quoteId: clearQuoteId ? null : (quoteId ?? this.quoteId),
-      quoteStatus: quoteStatus ?? this.quoteStatus,
       estimatedDate: estimatedDate ?? this.estimatedDate,
       deliveryEtaDate: clearDeliveryEtaDate
           ? null
@@ -138,6 +123,18 @@ class PurchaseOrderItem {
       arrivedAt: clearArrivedAt ? null : (arrivedAt ?? this.arrivedAt),
       arrivedByName: clearArrivedByName ? null : (arrivedByName ?? this.arrivedByName),
       arrivedByArea: clearArrivedByArea ? null : (arrivedByArea ?? this.arrivedByArea),
+      notPurchasedAt: clearNotPurchasedAt
+          ? null
+          : (notPurchasedAt ?? this.notPurchasedAt),
+      notPurchasedByName: clearNotPurchasedByName
+          ? null
+          : (notPurchasedByName ?? this.notPurchasedByName),
+      notPurchasedByArea: clearNotPurchasedByArea
+          ? null
+          : (notPurchasedByArea ?? this.notPurchasedByArea),
+      notPurchasedReason: clearNotPurchasedReason
+          ? null
+          : (notPurchasedReason ?? this.notPurchasedReason),
     );
   }
 
@@ -153,8 +150,6 @@ class PurchaseOrderItem {
       'supplier': supplier,
       'budget': budget,
       'internalOrder': internalOrder,
-      'quoteId': quoteId,
-      'quoteStatus': quoteStatus.name,
       'estimatedDate': estimatedDate?.millisecondsSinceEpoch,
       'deliveryEtaDate': deliveryEtaDate?.millisecondsSinceEpoch,
       'sentToContabilidadAt': sentToContabilidadAt?.millisecondsSinceEpoch,
@@ -165,6 +160,10 @@ class PurchaseOrderItem {
       'arrivedAt': arrivedAt?.millisecondsSinceEpoch,
       'arrivedByName': arrivedByName,
       'arrivedByArea': arrivedByArea,
+      'notPurchasedAt': notPurchasedAt?.millisecondsSinceEpoch,
+      'notPurchasedByName': notPurchasedByName,
+      'notPurchasedByArea': notPurchasedByArea,
+      'notPurchasedReason': notPurchasedReason,
     };
   }
 
@@ -187,9 +186,6 @@ class PurchaseOrderItem {
       supplier: data['supplier'] as String?,
       budget: budget,
       internalOrder: data['internalOrder'] as String?,
-      quoteId: data['quoteId'] as String?,
-      quoteStatus: _itemQuoteStatusFromString(data['quoteStatus'] as String?) ??
-          PurchaseOrderItemQuoteStatus.pending,
       estimatedDate: _parseDateTime(data['estimatedDate']),
       deliveryEtaDate: _parseDateTime(data['deliveryEtaDate']),
       sentToContabilidadAt: _parseDateTime(data['sentToContabilidadAt']),
@@ -200,7 +196,36 @@ class PurchaseOrderItem {
       arrivedAt: _parseDateTime(data['arrivedAt']),
       arrivedByName: data['arrivedByName'] as String?,
       arrivedByArea: data['arrivedByArea'] as String?,
+      notPurchasedAt: _parseDateTime(data['notPurchasedAt']),
+      notPurchasedByName: data['notPurchasedByName'] as String?,
+      notPurchasedByArea: data['notPurchasedByArea'] as String?,
+      notPurchasedReason: data['notPurchasedReason'] as String?,
     );
+  }
+}
+
+enum PurchaseOrderResolutionState {
+  inProgress,
+  awaitingRequesterConfirmation,
+  closedComplete,
+  closedPartial,
+  closedWithoutPurchase,
+}
+
+extension PurchaseOrderResolutionStateX on PurchaseOrderResolutionState {
+  String get label {
+    switch (this) {
+      case PurchaseOrderResolutionState.inProgress:
+        return 'En proceso';
+      case PurchaseOrderResolutionState.awaitingRequesterConfirmation:
+        return 'Pendiente de confirmacion';
+      case PurchaseOrderResolutionState.closedComplete:
+        return 'Cerrada completa';
+      case PurchaseOrderResolutionState.closedPartial:
+        return 'Cerrada parcial';
+      case PurchaseOrderResolutionState.closedWithoutPurchase:
+        return 'Cerrada sin compra';
+    }
   }
 }
 
@@ -258,27 +283,27 @@ class PurchaseOrder {
     this.createdAt,
     this.updatedAt,
     this.lastReturnReason,
+    this.lastReturnFromStatus,
+    this.rejectionAcknowledgedAt,
+    this.lastReviewDurationMs,
     this.supplier,
     this.internalOrder,
     this.budget,
     this.supplierBudgets = const {},
-    this.comprasComment,
-    this.comprasReviewerName,
-    this.comprasReviewerArea,
-    this.processedByName,
-    this.processedByArea,
-    this.direccionGeneralName,
-    this.direccionGeneralArea,
-    this.direccionComment,
     this.requestedDeliveryDate,
     this.etaDate,
-    this.restoredToCotizacionesOrders = false,
     this.facturaPdfUrl,
     this.facturaPdfUrls = const [],
+    this.paymentReceiptUrls = const [],
     this.pdfUrl,
+    this.authorizedByName,
+    this.authorizedByArea,
+    this.authorizedAt,
+    this.processByName,
+    this.processByArea,
+    this.processAt,
     this.resubmissionDates = const [],
     this.returnCount = 0,
-    this.direccionReturnCount = 0,
     this.statusDurations = const {},
     this.statusEnteredAt,
     this.contabilidadName,
@@ -291,6 +316,9 @@ class PurchaseOrder {
     this.requesterReceivedAt,
     this.requesterReceivedName,
     this.requesterReceivedArea,
+    this.serviceRating,
+    this.serviceRatingComment,
+    this.serviceRatedAt,
     this.requesterReceiptAutoConfirmed = false,
     this.isDraft = false,
   });
@@ -309,27 +337,27 @@ class PurchaseOrder {
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final String? lastReturnReason;
+  final PurchaseOrderStatus? lastReturnFromStatus;
+  final DateTime? rejectionAcknowledgedAt;
+  final int? lastReviewDurationMs;
   final String? supplier;
   final String? internalOrder;
   final num? budget;
   final Map<String, num> supplierBudgets;
-  final String? comprasComment;
-  final String? comprasReviewerName;
-  final String? comprasReviewerArea;
-  final String? processedByName;
-  final String? processedByArea;
-  final String? direccionGeneralName;
-  final String? direccionGeneralArea;
-  final String? direccionComment;
   final DateTime? requestedDeliveryDate;
   final DateTime? etaDate;
-  final bool restoredToCotizacionesOrders;
   final String? facturaPdfUrl;
   final List<String> facturaPdfUrls;
+  final List<String> paymentReceiptUrls;
   final String? pdfUrl;
+  final String? authorizedByName;
+  final String? authorizedByArea;
+  final DateTime? authorizedAt;
+  final String? processByName;
+  final String? processByArea;
+  final DateTime? processAt;
   final List<DateTime> resubmissionDates;
   final int returnCount;
-  final int direccionReturnCount;
   final Map<String, int> statusDurations;
   final DateTime? statusEnteredAt;
   final String? contabilidadName;
@@ -342,18 +370,39 @@ class PurchaseOrder {
   final DateTime? requesterReceivedAt;
   final String? requesterReceivedName;
   final String? requesterReceivedArea;
+  final int? serviceRating;
+  final String? serviceRatingComment;
+  final DateTime? serviceRatedAt;
   final bool requesterReceiptAutoConfirmed;
   final bool isDraft;
 
   bool get canEdit => isDraft || status == PurchaseOrderStatus.draft;
+  bool get isRejectedDraft {
+    final reason = lastReturnReason?.trim() ?? '';
+    return status == PurchaseOrderStatus.draft &&
+        (reason.isNotEmpty || returnCount > 0);
+  }
+
+  bool get isRejectionAcknowledged => rejectionAcknowledgedAt != null;
+  bool get isRejectedPendingAcknowledgment =>
+      isRejectedDraft && !isRejectionAcknowledged;
   bool get isMaterialArrivalRegistered => materialArrivedAt != null;
   bool get isRequesterReceiptConfirmed => requesterReceivedAt != null;
   bool get isRequesterReceiptAutoConfirmed =>
       isRequesterReceiptConfirmed && requesterReceiptAutoConfirmed;
   bool get isAwaitingRequesterReceipt =>
-      status == PurchaseOrderStatus.eta && !isRequesterReceiptConfirmed;
+      status == PurchaseOrderStatus.eta &&
+      !isRequesterReceiptConfirmed &&
+      requiresRequesterReceiptConfirmation(this);
   bool get isArrivalPendingConfirmation =>
       !isRequesterReceiptConfirmed && hasAllItemsArrived(this);
+  bool get hasItemsMarkedAsNotPurchased => hasAnyItemsMarkedAsNotPurchased(this);
+  PurchaseOrderResolutionState get resolutionState =>
+      resolveOrderResolutionState(this);
+  bool get isWorkflowFinished => isOrderWorkflowFinished(this);
+  bool get isClosedPartially => resolutionState == PurchaseOrderResolutionState.closedPartial;
+  bool get isClosedWithoutPurchase =>
+      resolutionState == PurchaseOrderResolutionState.closedWithoutPurchase;
 
   Map<String, dynamic> toMap() {
     return {
@@ -370,29 +419,29 @@ class PurchaseOrder {
       'createdAt': createdAt?.millisecondsSinceEpoch,
       'updatedAt': updatedAt?.millisecondsSinceEpoch,
       'lastReturnReason': lastReturnReason,
+      'lastReturnFromStatus': lastReturnFromStatus?.name,
+      'rejectionAcknowledgedAt': rejectionAcknowledgedAt?.millisecondsSinceEpoch,
+      'lastReviewDurationMs': lastReviewDurationMs,
       'supplier': supplier,
       'internalOrder': internalOrder,
       'budget': budget,
       'supplierBudgets': supplierBudgets.isEmpty ? null : supplierBudgets,
-      'comprasComment': comprasComment,
-      'comprasReviewerName': comprasReviewerName,
-      'comprasReviewerArea': comprasReviewerArea,
-      'processedByName': processedByName,
-      'processedByArea': processedByArea,
-      'direccionGeneralName': direccionGeneralName,
-      'direccionGeneralArea': direccionGeneralArea,
-      'direccionComment': direccionComment,
       'requestedDeliveryDate': requestedDeliveryDate?.millisecondsSinceEpoch,
       'etaDate': etaDate?.millisecondsSinceEpoch,
-      'restoredToCotizacionesOrders': restoredToCotizacionesOrders,
       'facturaPdfUrl': facturaPdfUrl,
       'facturaPdfUrls': facturaPdfUrls,
+      'paymentReceiptUrls': paymentReceiptUrls,
       'pdfUrl': pdfUrl,
+      'authorizedByName': authorizedByName,
+      'authorizedByArea': authorizedByArea,
+      'authorizedAt': authorizedAt?.millisecondsSinceEpoch,
+      'processByName': processByName,
+      'processByArea': processByArea,
+      'processAt': processAt?.millisecondsSinceEpoch,
       'resubmissions': resubmissionDates
           .map((date) => date.millisecondsSinceEpoch)
           .toList(),
       'returnCount': returnCount,
-      'direccionReturnCount': direccionReturnCount,
       'statusDurations': statusDurations.isEmpty ? null : statusDurations,
       'statusEnteredAt': statusEnteredAt?.millisecondsSinceEpoch,
       'contabilidadName': contabilidadName,
@@ -405,6 +454,9 @@ class PurchaseOrder {
       'requesterReceivedAt': requesterReceivedAt?.millisecondsSinceEpoch,
       'requesterReceivedName': requesterReceivedName,
       'requesterReceivedArea': requesterReceivedArea,
+      'serviceRating': serviceRating,
+      'serviceRatingComment': serviceRatingComment,
+      'serviceRatedAt': serviceRatedAt?.millisecondsSinceEpoch,
       'requesterReceiptAutoConfirmed':
           requesterReceiptAutoConfirmed ? true : null,
       'isDraft': isDraft,
@@ -430,6 +482,7 @@ class PurchaseOrder {
     }
 
     final facturaUrls = _parseStringList(data['facturaPdfUrls']);
+    final paymentReceiptUrls = _parseStringList(data['paymentReceiptUrls']);
     final singleFactura = data['facturaPdfUrl'] as String?;
     if (singleFactura != null &&
         singleFactura.trim().isNotEmpty &&
@@ -477,29 +530,29 @@ class PurchaseOrder {
       createdAt: _parseDateTime(data['createdAt']),
       updatedAt: _parseDateTime(data['updatedAt']),
       lastReturnReason: data['lastReturnReason'] as String?,
+      lastReturnFromStatus: _statusFromString(
+        data['lastReturnFromStatus'] as String?,
+      ),
+      rejectionAcknowledgedAt: _parseDateTime(data['rejectionAcknowledgedAt']),
+      lastReviewDurationMs: (data['lastReviewDurationMs'] as num?)?.toInt(),
       supplier: data['supplier'] as String?,
       internalOrder: data['internalOrder'] as String?,
       budget: data['budget'] as num?,
       supplierBudgets: _parseSupplierBudgets(data['supplierBudgets']),
-      comprasComment: data['comprasComment'] as String?,
-      comprasReviewerName: data['comprasReviewerName'] as String?,
-      comprasReviewerArea: data['comprasReviewerArea'] as String?,
-      processedByName: data['processedByName'] as String?,
-      processedByArea: data['processedByArea'] as String?,
-      direccionGeneralName: data['direccionGeneralName'] as String?,
-      direccionGeneralArea: data['direccionGeneralArea'] as String?,
-      direccionComment: data['direccionComment'] as String?,
       requestedDeliveryDate: _parseDateTime(data['requestedDeliveryDate']),
       etaDate: _parseDateTime(data['etaDate']),
-      restoredToCotizacionesOrders: _parseBool(
-        data['restoredToCotizacionesOrders'],
-      ),
       facturaPdfUrl: singleFactura,
       facturaPdfUrls: facturaUrls,
+      paymentReceiptUrls: paymentReceiptUrls,
       pdfUrl: data['pdfUrl'] as String?,
+      authorizedByName: data['authorizedByName'] as String?,
+      authorizedByArea: data['authorizedByArea'] as String?,
+      authorizedAt: _parseDateTime(data['authorizedAt']),
+      processByName: data['processByName'] as String?,
+      processByArea: data['processByArea'] as String?,
+      processAt: _parseDateTime(data['processAt']),
       resubmissionDates: _parseResubmissions(data['resubmissions']),
       returnCount: (data['returnCount'] as num?)?.toInt() ?? 0,
-      direccionReturnCount: (data['direccionReturnCount'] as num?)?.toInt() ?? 0,
       statusDurations: _parseStatusDurations(data['statusDurations']),
       statusEnteredAt: _parseDateTime(data['statusEnteredAt']),
       contabilidadName: data['contabilidadName'] as String?,
@@ -512,6 +565,9 @@ class PurchaseOrder {
       requesterReceivedAt: _parseDateTime(data['requesterReceivedAt']),
       requesterReceivedName: data['requesterReceivedName'] as String?,
       requesterReceivedArea: data['requesterReceivedArea'] as String?,
+      serviceRating: (data['serviceRating'] as num?)?.toInt(),
+      serviceRatingComment: data['serviceRatingComment'] as String?,
+      serviceRatedAt: _parseDateTime(data['serviceRatedAt']),
       requesterReceiptAutoConfirmed:
           (data['requesterReceiptAutoConfirmed'] as bool?) ?? false,
       isDraft: (data['isDraft'] as bool?) ?? false,
@@ -568,9 +624,36 @@ DateTime? resolveRequestedDeliveryDate(PurchaseOrder order) {
   return selected;
 }
 
+Iterable<PurchaseOrderItem> fulfillmentItems(PurchaseOrder order) sync* {
+  for (final item in order.items) {
+    if (!item.requiresFulfillment) continue;
+    yield item;
+  }
+}
+
+int countItemsMarkedAsNotPurchased(PurchaseOrder order) {
+  return order.items.where((item) => item.isNotPurchased).length;
+}
+
+bool hasAnyItemsMarkedAsNotPurchased(PurchaseOrder order) {
+  return order.items.any((item) => item.isNotPurchased);
+}
+
+int countItemsReturnedFromDireccion(PurchaseOrder order) {
+  return 0;
+}
+
+bool hasItemsReturnedFromDireccion(PurchaseOrder order) {
+  return false;
+}
+
+int countFulfillmentItems(PurchaseOrder order) {
+  return fulfillmentItems(order).length;
+}
+
 DateTime? resolveCommittedDeliveryDate(PurchaseOrder order) {
   DateTime? selected;
-  for (final item in order.items) {
+  for (final item in fulfillmentItems(order)) {
     final date = item.deliveryEtaDate;
     if (date == null) continue;
     final normalized = DateTime(date.year, date.month, date.day);
@@ -582,26 +665,31 @@ DateTime? resolveCommittedDeliveryDate(PurchaseOrder order) {
 }
 
 int countItemsWithCommittedDeliveryDate(PurchaseOrder order) {
-  return order.items.where((item) => item.deliveryEtaDate != null).length;
+  return fulfillmentItems(order)
+      .where((item) => item.deliveryEtaDate != null)
+      .length;
 }
 
 int countArrivedItems(PurchaseOrder order) {
-  return order.items.where((item) => item.isArrivalRegistered).length;
+  return fulfillmentItems(order)
+      .where((item) => item.isArrivalRegistered)
+      .length;
 }
 
 int countPendingArrivalItems(PurchaseOrder order) {
-  return order.items
+  return fulfillmentItems(order)
       .where((item) => item.deliveryEtaDate != null && !item.isArrivalRegistered)
       .length;
 }
 
 bool hasAnyArrivedItems(PurchaseOrder order) {
-  return order.items.any((item) => item.isArrivalRegistered);
+  return fulfillmentItems(order).any((item) => item.isArrivalRegistered);
 }
 
 bool hasAllItemsArrived(PurchaseOrder order) {
-  if (order.items.isEmpty) return false;
-  return order.items.every((item) => item.isArrivalRegistered);
+  final items = fulfillmentItems(order).toList(growable: false);
+  if (items.isEmpty) return false;
+  return items.every((item) => item.isArrivalRegistered);
 }
 
 DateTime? resolveLatestArrivalDate(PurchaseOrder order) {
@@ -618,6 +706,7 @@ DateTime? resolveLatestArrivalDate(PurchaseOrder order) {
 
 DateTime? orderAutoReceiptDueDate(PurchaseOrder order) {
   if (order.isRequesterReceiptConfirmed) return null;
+  if (!requiresRequesterReceiptConfirmation(order)) return null;
   if (!hasAllItemsArrived(order)) return null;
   final latestArrival = resolveLatestArrivalDate(order);
   if (latestArrival == null) return null;
@@ -632,19 +721,31 @@ bool isOrderAutoReceiptDue(PurchaseOrder order, {DateTime? now}) {
 }
 
 String requesterReceiptStatusLabel(PurchaseOrder order) {
+  final hasNotPurchasedItems = hasAnyItemsMarkedAsNotPurchased(order);
+  final fulfillmentCount = countFulfillmentItems(order);
+  if (fulfillmentCount == 0 && hasNotPurchasedItems) {
+    return 'Cerrada sin compra';
+  }
   if (order.isRequesterReceiptAutoConfirmed) {
-    return 'Llegado pero no confirmado';
+    return hasNotPurchasedItems
+        ? 'Cerrada parcial sin confirmacion'
+        : 'Llegado pero no confirmado';
   }
   if (order.isRequesterReceiptConfirmed) {
-    return 'Recibida por solicitante';
+    return hasNotPurchasedItems
+        ? 'Recibida parcial por solicitante'
+        : 'Recibida por solicitante';
   }
   if (order.isArrivalPendingConfirmation) {
-    return 'Llegado pendiente de confirmacion';
+    return hasNotPurchasedItems
+        ? 'Llegada parcial pendiente de confirmacion'
+        : 'Llegado pendiente de confirmacion';
   }
   return order.status.label;
 }
 
 int? itemArrivalDeltaDays(PurchaseOrderItem item) {
+  if (item.isNotPurchased) return null;
   final eta = _dateOnly(item.deliveryEtaDate);
   final arrived = _dateOnly(item.arrivedAt);
   if (eta == null || arrived == null) return null;
@@ -652,6 +753,9 @@ int? itemArrivalDeltaDays(PurchaseOrderItem item) {
 }
 
 String itemArrivalComplianceLabel(PurchaseOrderItem item) {
+  if (item.isNotPurchased) {
+    return 'Item cerrado sin compra';
+  }
   if (!item.isArrivalRegistered) {
     return itemPendingArrivalLabel(item);
   }
@@ -669,6 +773,9 @@ String itemPendingArrivalLabel(
   PurchaseOrderItem item, {
   DateTime? referenceDate,
 }) {
+  if (item.isNotPurchased) {
+    return 'Item cerrado sin compra';
+  }
   final eta = _dateOnly(item.deliveryEtaDate);
   if (eta == null) return 'Sin fecha estimada de entrega';
   final today = _dateOnly(referenceDate ?? DateTime.now())!;
@@ -682,13 +789,58 @@ String itemPendingArrivalLabel(
 }
 
 bool hasAllItemsCommittedDeliveryDate(PurchaseOrder order) {
-  if (order.items.isEmpty) return false;
-  for (final item in order.items) {
+  final items = fulfillmentItems(order).toList(growable: false);
+  if (items.isEmpty) return false;
+  for (final item in items) {
     if (item.deliveryEtaDate == null) {
       return false;
     }
   }
   return true;
+}
+
+bool requiresRequesterReceiptConfirmation(PurchaseOrder order) {
+  return countFulfillmentItems(order) > 0;
+}
+
+bool areAllItemsResolved(PurchaseOrder order) {
+  if (order.items.isEmpty) return false;
+  return order.items.every((item) => item.isResolved);
+}
+
+PurchaseOrderResolutionState resolveOrderResolutionState(PurchaseOrder order) {
+  if (order.items.isEmpty) return PurchaseOrderResolutionState.inProgress;
+
+  final notPurchasedCount = countItemsMarkedAsNotPurchased(order);
+  final fulfillmentCount = countFulfillmentItems(order);
+
+  if (fulfillmentCount == 0 && notPurchasedCount == order.items.length) {
+    return PurchaseOrderResolutionState.closedWithoutPurchase;
+  }
+
+  if (order.isRequesterReceiptConfirmed) {
+    return notPurchasedCount > 0
+        ? PurchaseOrderResolutionState.closedPartial
+        : PurchaseOrderResolutionState.closedComplete;
+  }
+
+  if (hasAllItemsArrived(order)) {
+    return PurchaseOrderResolutionState.awaitingRequesterConfirmation;
+  }
+
+  return PurchaseOrderResolutionState.inProgress;
+}
+
+bool isOrderWorkflowFinished(PurchaseOrder order) {
+  switch (resolveOrderResolutionState(order)) {
+    case PurchaseOrderResolutionState.closedComplete:
+    case PurchaseOrderResolutionState.closedPartial:
+    case PurchaseOrderResolutionState.closedWithoutPurchase:
+      return true;
+    case PurchaseOrderResolutionState.inProgress:
+    case PurchaseOrderResolutionState.awaitingRequesterConfirmation:
+      return false;
+  }
 }
 
 DateTime? _dateOnly(DateTime? value) {
@@ -699,6 +851,14 @@ DateTime? _dateOnly(DateTime? value) {
 PurchaseOrderStatus? _statusFromString(String? raw) {
   if (raw == null) return null;
   final normalized = raw.trim();
+  const legacyAliases = <String, PurchaseOrderStatus>{
+    'pendingCompras': PurchaseOrderStatus.intakeReview,
+    'cotizaciones': PurchaseOrderStatus.sourcing,
+    'dataComplete': PurchaseOrderStatus.readyForApproval,
+    'authorizedGerencia': PurchaseOrderStatus.approvalQueue,
+  };
+  final legacyMatch = legacyAliases[normalized];
+  if (legacyMatch != null) return legacyMatch;
   for (final status in PurchaseOrderStatus.values) {
     if (status.name == normalized) return status;
   }
@@ -713,14 +873,6 @@ PurchaseOrderUrgency? _urgencyFromString(String? raw) {
   }
   for (final urgency in PurchaseOrderUrgency.values) {
     if (urgency.name == normalized) return urgency;
-  }
-  return null;
-}
-
-PurchaseOrderItemQuoteStatus? _itemQuoteStatusFromString(String? raw) {
-  if (raw == null) return null;
-  for (final status in PurchaseOrderItemQuoteStatus.values) {
-    if (status.name == raw) return status;
   }
   return null;
 }
@@ -838,4 +990,3 @@ List<PurchaseOrderItem> _parseItemsSnapshot(dynamic value) {
   }
   return items;
 }
-

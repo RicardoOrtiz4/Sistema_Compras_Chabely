@@ -8,7 +8,6 @@ import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
-import 'package:sistema_compras/features/orders/domain/supplier_quote.dart';
 import 'package:sistema_compras/features/orders/presentation/shared/order_pdf_thumbnail.dart';
 
 import 'order_timeline.dart';
@@ -55,8 +54,6 @@ class OrderDetailScreen extends ConsumerWidget {
           _OrderTimelineSection(order: order, orderId: orderId),
           const SizedBox(height: 16),
           _OrderPdfSection(order: order),
-          const SizedBox(height: 16),
-          _CotizacionSection(orderId: order.id),
           const SizedBox(height: 16),
           _FacturaSection(links: detailData.facturaLinks),
         ],
@@ -183,72 +180,6 @@ class _OrderPdfSection extends StatelessWidget {
   }
 }
 
-class _CotizacionSection extends ConsumerWidget {
-  const _CotizacionSection({required this.orderId});
-
-  final String orderId;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final quotesAsync = ref.watch(supplierQuotesByOrderIdProvider(orderId));
-    final quotes = quotesAsync.valueOrNull ?? const <SupplierQuote>[];
-    final hasLink = quotes.any((quote) => quote.links.isNotEmpty);
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Compra', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 12),
-            if (quotesAsync.isLoading && quotes.isEmpty)
-              const AppSplash(compact: true)
-            else if (hasLink)
-              for (final quote in quotes)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Proveedor: ${quote.supplier.trim().isEmpty ? 'Sin proveedor' : quote.supplier.trim()}',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      Text(
-                        'Estado: ${quote.status.label}',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      for (final link in quote.links)
-                        Text(
-                          link,
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                    ],
-                  ),
-                )
-            else
-              const Text('Sin link de compra.'),
-            if (hasLink) ...[
-              for (final quote in quotes)
-                for (final link in quote.links) ...[
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: OutlinedButton.icon(
-                      onPressed: () => _openExternalLink(context, link),
-                      icon: const Icon(Icons.open_in_new),
-                      label: const Text('Abrir link'),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                ],
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 class _OrderItemProgressSection extends StatelessWidget {
   const _OrderItemProgressSection({required this.order});
@@ -261,6 +192,8 @@ class _OrderItemProgressSection extends StatelessWidget {
     final committedDate = resolveCommittedDeliveryDate(order);
     final arrivedCount = countArrivedItems(order);
     final pendingArrivalCount = countPendingArrivalItems(order);
+    final notPurchasedCount = countItemsMarkedAsNotPurchased(order);
+    final fulfillmentCount = countFulfillmentItems(order);
 
     return Card(
       child: Padding(
@@ -269,17 +202,21 @@ class _OrderItemProgressSection extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Avance parcial por articulos',
+              'Avance parcial por artículos',
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 8),
             Text(
-              'Items con fecha estimada de entrega: $committedCount/${order.items.length}',
+              'Items con fecha estimada de entrega: $committedCount/$fulfillmentCount',
             ),
             const SizedBox(height: 4),
             Text(
               'Items llegados: $arrivedCount | Pendientes de llegada: $pendingArrivalCount',
             ),
+            if (notPurchasedCount > 0) ...[
+              const SizedBox(height: 4),
+              Text('Items cerrados sin compra: $notPurchasedCount'),
+            ],
             if (committedDate != null) ...[
               const SizedBox(height: 4),
               Text(
@@ -309,6 +246,20 @@ class _OrderItemProgressSection extends StatelessWidget {
                     if (item.arrivedAt != null)
                       Text(
                         'Llegada registrada: ${item.arrivedAt!.toFullDateTime()}',
+                      ),
+                    if (item.isNotPurchased &&
+                        (item.notPurchasedReason ?? '').trim().isNotEmpty)
+                      Text(
+                        'Motivo de no compra: ${(item.notPurchasedReason ?? '').trim()}',
+                      ),
+                    if (item.isNotPurchased &&
+                        ((item.notPurchasedByName ?? '').trim().isNotEmpty ||
+                            (item.notPurchasedByArea ?? '').trim().isNotEmpty))
+                      Text(
+                        'Cerrado por: ${[
+                          (item.notPurchasedByName ?? '').trim(),
+                          (item.notPurchasedByArea ?? '').trim(),
+                        ].where((value) => value.isNotEmpty).join(' | ')}',
                       ),
                     if (item.deliveryEtaDate != null || item.arrivedAt != null)
                       Text(itemArrivalComplianceLabel(item)),
@@ -415,6 +366,9 @@ class _OrderTimelineSection extends ConsumerWidget {
 }
 
 String _itemProgressLabel(PurchaseOrder order, PurchaseOrderItem item) {
+  if (item.isNotPurchased) {
+    return 'No se comprara';
+  }
   if (item.isArrivalRegistered) {
     return 'Llego';
   }
@@ -424,25 +378,10 @@ String _itemProgressLabel(PurchaseOrder order, PurchaseOrderItem item) {
   if (order.status == PurchaseOrderStatus.eta) {
     return 'Finalizada';
   }
-  if (order.status == PurchaseOrderStatus.contabilidad) {
-    return 'En Contabilidad';
+  if (order.status == PurchaseOrderStatus.orderPlaced) {
+    return 'Orden realizada';
   }
-
-  switch (item.quoteStatus) {
-    case PurchaseOrderItemQuoteStatus.pending:
-      if (order.status == PurchaseOrderStatus.pendingCompras) {
-        return pendingRequirementAuthorizationLabel;
-      }
-      return 'Pendiente de compra';
-    case PurchaseOrderItemQuoteStatus.draft:
-      return 'En dashboard de compras';
-    case PurchaseOrderItemQuoteStatus.pendingDireccion:
-      return paymentAuthorizationLabel;
-    case PurchaseOrderItemQuoteStatus.approved:
-      return 'Aprobado, pendiente fecha estimada';
-    case PurchaseOrderItemQuoteStatus.rejected:
-      return 'Rechazado';
-  }
+  return 'En proceso';
 }
 
 List<String> _facturaLinks(PurchaseOrder order) {

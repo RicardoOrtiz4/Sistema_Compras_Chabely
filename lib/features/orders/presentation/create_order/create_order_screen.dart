@@ -5,8 +5,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:sistema_compras/core/access_control.dart';
 import 'package:sistema_compras/core/business_calendar.dart';
-import 'package:sistema_compras/core/area_labels.dart';
 import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/core/error_reporter.dart';
 import 'package:sistema_compras/core/extensions.dart';
@@ -14,8 +14,6 @@ import 'package:sistema_compras/core/widgets/app_splash.dart';
 import 'package:sistema_compras/core/widgets/searchable_select.dart';
 import 'package:sistema_compras/features/profile/data/profile_repository.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
-import 'package:sistema_compras/features/orders/application/order_providers.dart';
-import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/partners/data/partner_repository.dart';
 import 'package:sistema_compras/core/navigation_guard.dart';
 
@@ -37,8 +35,6 @@ const _urgencyOrder = <PurchaseOrderUrgency>[
   PurchaseOrderUrgency.normal,
   PurchaseOrderUrgency.urgente,
 ];
-
-const _maxCorrections = 3;
 
 class CreateOrderScreen extends ConsumerStatefulWidget {
   const CreateOrderScreen({super.key, this.draftId, this.copyFromId});
@@ -153,8 +149,6 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
             ? Colors.white
             : Colors.black;
 
-    final isLastAttempt = controller.returnCount == _maxCorrections - 1;
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Requisición de compra'),
@@ -163,6 +157,10 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
         data: (user) {
           if (user == null) return const AppSplash();
           if (controller.isLoadingDraft) return const AppSplash();
+          final canAssignClients = canAssignClientsToOrderItems(user);
+          final clientOptions = canAssignClients
+              ? ref.watch(userClientNamesProvider)
+              : const <String>[];
 
           // Mantener notas sincronizadas sin duplicar cambios
           if (_notesController.text != controller.notes) {
@@ -188,38 +186,6 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                if (isLastAttempt) ...[
-                  const SizedBox(height: 12),
-                  _LastAttemptWarning(
-                    draftId: controller.draftId,
-                  ),
-                ],
-
-                if (controller.returnCount >= _maxCorrections) ...[
-                  const SizedBox(height: 12),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Máximo de correcciones alcanzado',
-                          style: Theme.of(context).textTheme.titleSmall,
-                        ),
-                        const SizedBox(height: 4),
-                        const Text(
-                          'Esta requisición ya no puede enviarse a revisión. Crea otra requisición.',
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-
                 const SizedBox(height: 8),
                 Text('Urgencia', style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),
@@ -292,32 +258,23 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                 ),
 
                 const SizedBox(height: 24),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () => _importCsvItems(notifier),
-                        icon: const Icon(Icons.upload_file_outlined),
-                        label: const Text('Importar CSV'),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () =>
-                            ref.read(createOrderControllerProvider.notifier).addItem(),
-                        icon: const Icon(Icons.add),
-                        label: const Text('Agregar artículo'),
-                      ),
-                    ),
-                  ],
+                _CreateOrderActions(
+                  canAssignClients: canAssignClients,
+                  onImportCsv: () => _importCsvItems(notifier),
+                  onAddItem: () =>
+                      ref.read(createOrderControllerProvider.notifier).addItem(),
+                  onAssignClient: canAssignClients
+                      ? () => _assignClientToItems(
+                            notifier,
+                            controller.items,
+                            clientOptions,
+                          )
+                      : null,
                 ),
-
                 const SizedBox(height: 12),
                 _OrderItemsSection(
                   items: controller.items,
                   unitOptions: _unitOptions,
-                  onAddClient: _addClientFromSearch,
                   onChanged: (index, updated) => ref
                       .read(createOrderControllerProvider.notifier)
                       .updateItem(index, updated),
@@ -342,31 +299,39 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton(
-                    onPressed:
-                        controller.isSubmitting || controller.returnCount >= _maxCorrections
-                            ? null
-                            : () async {
-                                if (!(_formKey.currentState?.validate() ?? false)) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('Revisa los campos requeridos'),
-                                    ),
-                                  );
-                                  return;
-                                }
-                                guardedPdfPush(context, '/orders/preview');
-                              },
+                    onPressed: controller.isSubmitting
+                        ? null
+                        : () async {
+                            final notifier = ref.read(
+                              createOrderControllerProvider.notifier,
+                            );
+                            if (!(_formKey.currentState?.validate() ?? false)) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Revisa los campos requeridos'),
+                                ),
+                              );
+                              return;
+                            }
+                            final requestedDeliveryDateError =
+                                notifier.requestedDeliveryDateError();
+                            if (requestedDeliveryDateError != null) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(requestedDeliveryDateError),
+                                ),
+                              );
+                              return;
+                            }
+                            guardedPdfPush(context, '/orders/preview');
+                          },
                     child: controller.isSubmitting
                         ? const SizedBox(
                             width: 20,
                             height: 20,
                             child: AppSplash(compact: true, size: 20),
                           )
-                        : Text(
-                            controller.returnCount >= _maxCorrections
-                                ? 'Requiere nueva requisición'
-                                : 'Revisar PDF',
-                          ),
+                        : const Text('Revisar PDF'),
                   ),
                 ),
               ],
@@ -390,23 +355,33 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
   ) async {
     final now = DateTime.now();
     final normalizedNow = normalizeCalendarDate(now);
-    final urgentDates = nextBusinessDaysAfter(normalizedNow);
     final isUrgent = urgency == PurchaseOrderUrgency.urgente;
     final initialDate = isUrgent
-        ? _resolveUrgentInitialDate(currentValue, urgentDates)
-        : normalizeCalendarDate(currentValue ?? normalizedNow);
+        ? _resolveUrgentInitialDate(currentValue, normalizedNow)
+        : _resolveNormalInitialDate(currentValue, normalizedNow);
     final picked = await showDatePicker(
       context: context,
       initialDate: initialDate,
-      firstDate: isUrgent ? urgentDates.first : normalizedNow,
-      lastDate: isUrgent ? urgentDates.last : DateTime(2100, 12, 31),
+      firstDate: isUrgent
+          ? normalizedNow
+          : normalizedNow.add(
+              const Duration(days: normalRequestedDeliveryLeadDays),
+            ),
+      lastDate: isUrgent
+          ? normalizedNow.add(
+              const Duration(days: urgentRequestedDeliveryWindowDays),
+            )
+          : DateTime(2100, 12, 31),
       selectableDayPredicate: (day) {
         final normalizedDay = normalizeCalendarDate(day);
         if (normalizedDay.isBefore(normalizedNow)) {
           return false;
         }
         if (!isUrgent) {
-          return isBusinessDay(normalizedDay);
+          return isAllowedNormalRequestedDeliveryDate(
+            normalizedDay,
+            today: normalizedNow,
+          );
         }
         return isAllowedUrgentRequestedDeliveryDate(
           normalizedDay,
@@ -451,6 +426,49 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
     }
   }
 
+  Future<void> _assignClientToItems(
+    CreateOrderController notifier,
+    List<OrderItemDraft> visibleItems,
+    List<String> clientOptions,
+  ) async {
+    if (visibleItems.isEmpty) {
+      _messenger?.showSnackBar(
+        const SnackBar(content: Text('Agrega al menos un item.')),
+      );
+      return;
+    }
+
+    final result = await showDialog<_ClientAssignmentResult>(
+      context: context,
+      builder: (context) => _ClientAssignmentDialog(
+        items: visibleItems,
+        clientOptions: clientOptions,
+        onAddClient: _addClientFromSearch,
+      ),
+    );
+    if (result == null) return;
+
+    final currentItems = ref.read(createOrderControllerProvider).items;
+    for (final index in result.itemIndexes) {
+      if (index < 0 || index >= currentItems.length) continue;
+      notifier.updateItem(
+        index,
+        result.clearClient
+            ? currentItems[index].copyWith(clearCustomer: true)
+            : currentItems[index].copyWith(customer: result.clientName),
+      );
+    }
+    _messenger?.showSnackBar(
+      SnackBar(
+        content: Text(
+          result.clearClient
+              ? 'Cliente removido de ${result.itemIndexes.length} item(s).'
+              : 'Cliente asignado a ${result.itemIndexes.length} item(s).',
+        ),
+      ),
+    );
+  }
+
   Future<String?> _addClientFromSearch(String query) async {
     final name = await _askNewPartnerName(
       title: 'Agregar cliente',
@@ -465,11 +483,18 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
     );
     if (!confirmed) return null;
 
-    final uid = ref.read(currentUserProfileProvider).value?.id;
+    final actor = ref.read(currentUserProfileProvider).value;
+    final uid = actor?.id;
     if (uid == null) return null;
 
     final repo = ref.read(partnerRepositoryProvider);
-    await repo.createPartner(uid: uid, type: PartnerType.client, name: name);
+    await repo.createPartner(
+      uid: uid,
+      type: PartnerType.client,
+      name: name,
+      actor: actor,
+    );
+    ref.invalidate(userClientsProvider);
     return name;
   }
 
@@ -532,6 +557,265 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
 
 }
 
+class _CreateOrderActions extends StatelessWidget {
+  const _CreateOrderActions({
+    required this.canAssignClients,
+    required this.onImportCsv,
+    required this.onAddItem,
+    required this.onAssignClient,
+  });
+
+  final bool canAssignClients;
+  final VoidCallback onImportCsv;
+  final VoidCallback onAddItem;
+  final VoidCallback? onAssignClient;
+
+  @override
+  Widget build(BuildContext context) {
+    final buttons = <Widget>[
+      OutlinedButton.icon(
+        onPressed: onImportCsv,
+        icon: const Icon(Icons.upload_file_outlined),
+        label: const Text('Importar CSV'),
+      ),
+      OutlinedButton.icon(
+        onPressed: onAddItem,
+        icon: const Icon(Icons.add),
+        label: const Text('Agregar item'),
+      ),
+      if (canAssignClients)
+        OutlinedButton.icon(
+          onPressed: onAssignClient,
+          icon: const Icon(Icons.person_add_alt_1_outlined),
+          label: const Text('Asignar cliente'),
+        ),
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isNarrow = constraints.maxWidth < 720;
+        if (isNarrow) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (var i = 0; i < buttons.length; i++) ...[
+                if (i > 0) const SizedBox(height: 8),
+                buttons[i],
+              ],
+            ],
+          );
+        }
+
+        return Row(
+          children: [
+            for (var i = 0; i < buttons.length; i++) ...[
+              if (i > 0) const SizedBox(width: 12),
+              Expanded(child: buttons[i]),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ClientAssignmentResult {
+  const _ClientAssignmentResult({
+    required this.clientName,
+    required this.itemIndexes,
+    this.clearClient = false,
+  });
+
+  final String clientName;
+  final Set<int> itemIndexes;
+  final bool clearClient;
+}
+
+class _ClientAssignmentDialog extends StatefulWidget {
+  const _ClientAssignmentDialog({
+    required this.items,
+    required this.clientOptions,
+    required this.onAddClient,
+  });
+
+  final List<OrderItemDraft> items;
+  final List<String> clientOptions;
+  final Future<String?> Function(String query) onAddClient;
+
+  @override
+  State<_ClientAssignmentDialog> createState() => _ClientAssignmentDialogState();
+}
+
+class _ClientAssignmentDialogState extends State<_ClientAssignmentDialog> {
+  final Set<int> _selected = <int>{};
+  String? _clientName;
+
+  bool get _allSelected =>
+      widget.items.isNotEmpty && _selected.length == widget.items.length;
+
+  Future<void> _pickClient() async {
+    final selected = await showSearchableSelect(
+      context: context,
+      title: 'Selecciona cliente',
+      options: widget.clientOptions,
+      addLabel: 'Crear cliente',
+      onAdd: widget.onAddClient,
+    );
+    if (selected == null) return;
+    setState(() => _clientName = selected.trim());
+  }
+
+  void _toggleAll(bool selected) {
+    setState(() {
+      _selected.clear();
+      if (selected) {
+        for (var i = 0; i < widget.items.length; i++) {
+          _selected.add(i);
+        }
+      }
+    });
+  }
+
+  void _toggleItem(int index, bool selected) {
+    setState(() {
+      if (selected) {
+        _selected.add(index);
+      } else {
+        _selected.remove(index);
+      }
+    });
+  }
+
+  void _apply() {
+    final clientName = _clientName?.trim() ?? '';
+    if (clientName.isEmpty || _selected.isEmpty) return;
+    Navigator.pop(
+      context,
+      _ClientAssignmentResult(
+        clientName: clientName,
+        itemIndexes: Set<int>.from(_selected),
+      ),
+    );
+  }
+
+  void _clearAssignedClient() {
+    if (_selected.isEmpty) return;
+    Navigator.pop(
+      context,
+      _ClientAssignmentResult(
+        clientName: '',
+        itemIndexes: Set<int>.from(_selected),
+        clearClient: true,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final canApply = (_clientName?.trim().isNotEmpty ?? false) && _selected.isNotEmpty;
+
+    return AlertDialog(
+      title: const Text('Asignar cliente'),
+      content: SizedBox(
+        width: 640,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.65,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _pickClient,
+                      icon: const Icon(Icons.person_search_outlined),
+                      label: Text(
+                        (_clientName?.trim().isNotEmpty ?? false)
+                            ? _clientName!.trim()
+                            : 'Seleccionar cliente',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    tooltip: 'Quitar cliente',
+                    onPressed: _selected.isEmpty ? null : _clearAssignedClient,
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Checkbox(
+                    value: _allSelected,
+                    onChanged: (value) => _toggleAll(value ?? false),
+                  ),
+                  const Text('Seleccionar todos'),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: _selected.isEmpty
+                        ? null
+                        : () => setState(_selected.clear),
+                    child: const Text('Limpiar'),
+                  ),
+                ],
+              ),
+              const Divider(height: 1),
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: widget.items.length,
+                  itemBuilder: (context, index) {
+                    final item = widget.items[index];
+                    final customer = (item.customer ?? '').trim();
+                    final details = <String>[
+                      if (item.partNumber.trim().isNotEmpty)
+                        'No. parte: ${item.partNumber}',
+                      'Cantidad: ${item.pieces} ${item.unit}',
+                      if (customer.isNotEmpty) 'Cliente actual: $customer',
+                    ];
+
+                    return CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      value: _selected.contains(index),
+                      onChanged: (value) => _toggleItem(index, value ?? false),
+                      title: Text(
+                        'Item ${item.line}: ${item.description}',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        details.join(' | '),
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: canApply ? _apply : null,
+          child: const Text('Aplicar'),
+        ),
+      ],
+    );
+  }
+}
+
 class _UrgentGuidanceBox extends StatelessWidget {
   const _UrgentGuidanceBox({required this.scheme});
 
@@ -575,9 +859,10 @@ class _RequestedDeliveryDateSection extends StatelessWidget {
         ? 'Fecha requerida: ${requestedDeliveryDate!.toShortDate()}'
         : 'Sin fecha capturada. Define para cuando se requiere lo solicitado.';
     final urgencyHelpText = urgency == PurchaseOrderUrgency.urgente
-        ? 'Para urgencia solo se permiten los próximos '
-            '$urgentRequestedDeliveryBusinessDays días hábiles después de hoy.'
-        : 'Con urgencia normal puedes elegir cualquier fecha.';
+        ? 'Para urgencia solo se permite elegir entre hoy y '
+            '$urgentRequestedDeliveryWindowDays dias mas.'
+        : 'Con urgencia normal solo puedes elegir desde '
+            '$normalRequestedDeliveryLeadDays dias despues de hoy, en dia habil.';
 
     return Container(
       width: double.infinity,
@@ -624,70 +909,52 @@ class _RequestedDeliveryDateSection extends StatelessWidget {
   }
 }
 
-DateTime _resolveUrgentInitialDate(
+DateTime _resolveNormalInitialDate(
   DateTime? currentValue,
-  List<DateTime> urgentDates,
+  DateTime today,
 ) {
   final normalizedCurrent = currentValue == null ? null : normalizeCalendarDate(currentValue);
   if (normalizedCurrent != null &&
-      urgentDates.any((date) => isSameCalendarDate(date, normalizedCurrent))) {
+      isAllowedNormalRequestedDeliveryDate(normalizedCurrent, today: today)) {
     return normalizedCurrent;
   }
-  return urgentDates.first;
+  return firstAllowedNormalRequestedDeliveryDate(today: today);
 }
 
-class _LastAttemptWarning extends ConsumerWidget {
-  const _LastAttemptWarning({required this.draftId});
-
-  final String? draftId;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final contact = _lastReturnContact(ref, draftId);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.secondaryContainer,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Text(
-        _lastAttemptMessage(contact),
-        style: TextStyle(
-          color: Theme.of(context).colorScheme.onSecondaryContainer,
-        ),
-      ),
-    );
+DateTime _resolveUrgentInitialDate(
+  DateTime? currentValue,
+  DateTime today,
+) {
+  final normalizedCurrent = currentValue == null ? null : normalizeCalendarDate(currentValue);
+  if (normalizedCurrent != null &&
+      isAllowedUrgentRequestedDeliveryDate(normalizedCurrent, today: today)) {
+    return normalizedCurrent;
   }
+  return today;
 }
 
-class _OrderItemsSection extends ConsumerWidget {
+class _OrderItemsSection extends StatelessWidget {
   const _OrderItemsSection({
     required this.items,
     required this.unitOptions,
-    required this.onAddClient,
     required this.onChanged,
     required this.onRemove,
   });
 
   final List<OrderItemDraft> items;
   final List<String> unitOptions;
-  final Future<String?> Function(String query)? onAddClient;
   final void Function(int index, OrderItemDraft updated) onChanged;
   final void Function(int index)? onRemove;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final clientOptions = ref.watch(userClientNamesProvider);
+  Widget build(BuildContext context) {
     return Column(
       children: [
         for (final entry in items.asMap().entries)
           _OrderItemCard(
             index: entry.key,
             draft: entry.value,
-            clientOptions: clientOptions,
             unitOptions: unitOptions,
-            onAddClient: onAddClient,
             onChanged: (updated) => onChanged(entry.key, updated),
             onRemove: onRemove == null ? null : () => onRemove!(entry.key),
           ),
@@ -700,18 +967,14 @@ class _OrderItemCard extends StatefulWidget {
   const _OrderItemCard({
     required this.index,
     required this.draft,
-    required this.clientOptions,
     required this.unitOptions,
-    this.onAddClient,
     required this.onChanged,
     this.onRemove,
   });
 
   final int index;
   final OrderItemDraft draft;
-  final List<String> clientOptions;
   final List<String> unitOptions;
-  final Future<String?> Function(String query)? onAddClient;
   final ValueChanged<OrderItemDraft> onChanged;
   final VoidCallback? onRemove;
 
@@ -723,7 +986,6 @@ class _OrderItemCardState extends State<_OrderItemCard> {
   late final TextEditingController _descriptionController;
   late final TextEditingController _piecesController;
   late final TextEditingController _partNumberController;
-  late final TextEditingController _customerController;
   late final TextEditingController _unitController;
 
   @override
@@ -732,7 +994,6 @@ class _OrderItemCardState extends State<_OrderItemCard> {
     _descriptionController = TextEditingController(text: widget.draft.description);
     _piecesController = TextEditingController(text: widget.draft.pieces.toString());
     _partNumberController = TextEditingController(text: widget.draft.partNumber);
-    _customerController = TextEditingController(text: widget.draft.customer ?? '');
     _unitController = TextEditingController(text: widget.draft.unit);
   }
 
@@ -753,11 +1014,6 @@ class _OrderItemCardState extends State<_OrderItemCard> {
       _partNumberController.text = widget.draft.partNumber;
     }
 
-    final customerValue = widget.draft.customer ?? '';
-    if (customerValue != _customerController.text) {
-      _customerController.text = customerValue;
-    }
-
     if (widget.draft.unit != _unitController.text) {
       _unitController.text = widget.draft.unit;
     }
@@ -768,7 +1024,6 @@ class _OrderItemCardState extends State<_OrderItemCard> {
     _descriptionController.dispose();
     _piecesController.dispose();
     _partNumberController.dispose();
-    _customerController.dispose();
     _unitController.dispose();
     super.dispose();
   }
@@ -780,26 +1035,11 @@ class _OrderItemCardState extends State<_OrderItemCard> {
     return 'Cantidad requerida ($normalized)';
   }
 
-  Future<void> _selectCustomer(OrderItemDraft draft) async {
-    final selected = await showSearchableSelect(
-      context: context,
-      title: 'Selecciona cliente',
-      options: widget.clientOptions,
-      addLabel: 'Crear cliente',
-      onAdd: widget.onAddClient,
-    );
-    if (selected == null) return;
-
-    _customerController.text = selected;
-    widget.onChanged(draft.copyWith(customer: selected));
-  }
-
   @override
   Widget build(BuildContext context) {
     final draft = widget.draft;
     final effectiveUnit = _unitController.text.trim();
-    final hasCustomer = _customerController.text.trim().isNotEmpty;
-    final canPickCustomer = widget.clientOptions.isNotEmpty || widget.onAddClient != null;
+    final customer = (draft.customer ?? '').trim();
 
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
@@ -830,37 +1070,25 @@ class _OrderItemCardState extends State<_OrderItemCard> {
               onChanged: (value) => widget.onChanged(draft.copyWith(description: value)),
               validator: (value) => (value == null || value.trim().isEmpty) ? 'Requerido' : null,
             ),
-            const SizedBox(height: 8),
-            TextFormField(
-              key: ValueKey('customer-${widget.index}'),
-              controller: _customerController,
-              readOnly: true,
-              decoration: InputDecoration(
-                labelText: 'Cliente (opcional)',
-                suffixIcon: canPickCustomer
-                    ? Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (hasCustomer)
-                            IconButton(
-                              tooltip: 'Limpiar',
-                              icon: const Icon(Icons.clear),
-                              onPressed: () {
-                                _customerController.clear();
-                                widget.onChanged(draft.copyWith(customer: null));
-                              },
-                            ),
-                          IconButton(
-                            tooltip: 'Buscar',
-                            icon: const Icon(Icons.search),
-                            onPressed: () => _selectCustomer(draft),
-                          ),
-                        ],
-                      )
-                    : null,
+            if (customer.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Icon(
+                    Icons.person_outline,
+                    size: 18,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Cliente: $customer',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ),
+                ],
               ),
-              onTap: canPickCustomer ? () => _selectCustomer(draft) : null,
-            ),
+            ],
 
             const SizedBox(height: 8),
             TextFormField(
@@ -918,38 +1146,6 @@ class _OrderItemCardState extends State<_OrderItemCard> {
   }
 }
 
-String _lastAttemptMessage(String? contactArea) {
-  final area = contactArea?.trim().isNotEmpty == true ? contactArea!.trim() : 'Compras';
-  return 'Advertencia: si esta orden vuelve a rechazarse, deberas crear una nueva requisicion. '
-      'Antes de enviarla, contacta a $area.';
-}
-
-String _lastReturnContact(WidgetRef ref, String? draftId) {
-  if (draftId == null || draftId.trim().isEmpty) return 'Compras';
-
-  final eventsAsync = ref.watch(orderEventsProvider(draftId));
-  return eventsAsync.maybeWhen(
-    data: (events) {
-      PurchaseOrderEvent? lastReturn;
-      for (final event in events) {
-        if (event.type == 'return') {
-          lastReturn = event;
-        }
-      }
-      return _contactLabel(lastReturn?.byRole);
-    },
-    orElse: () => 'Compras',
-  );
-}
-
-String _contactLabel(String? rawRole) {
-  final normalized = normalizeAreaLabel(rawRole?.trim() ?? '');
-  if (normalized.isEmpty) return 'Compras';
-  if (isDireccionGeneralLabel(normalized)) return 'Dirección General';
-  if (isComprasLabel(normalized)) return 'Compras';
-  return normalized;
-}
-
 const _csvHeaderAliases = <String, String>{
   // Línea
   'linea': 'line',
@@ -977,13 +1173,6 @@ const _csvHeaderAliases = <String, String>{
   'proveedor': 'supplier',
   'supplier': 'supplier',
 
-  // Cliente
-  'cliente': 'customer',
-  'customer': 'customer',
-
-  // Fecha estimada
-  'fechaestimada': 'estimatedDate',
-  'estimateddate': 'estimatedDate',
 };
 
 List<OrderItemDraft> _parseCsvItems(String content) {
@@ -1028,15 +1217,12 @@ List<OrderItemDraft> _parseCsvItems(String content) {
 
     final unit = _cleanText(_cellValue(row, headerMap, 'unit')).toUpperCase();
     final partNumber = _cleanText(_cellValue(row, headerMap, 'partNumber'));
-    final customer = _cleanText(_cellValue(row, headerMap, 'customer'));
     final supplier = _cleanText(_cellValue(row, headerMap, 'supplier'));
 
     final pieces = _parseQuantity(
           _cellValue(row, headerMap, 'quantity'),
         ) ??
         1;
-
-    final estimatedDate = _parseDate(_cellValue(row, headerMap, 'estimatedDate'));
 
     items.add(
       OrderItemDraft(
@@ -1046,20 +1232,13 @@ List<OrderItemDraft> _parseCsvItems(String content) {
         description: description,
         quantity: pieces,
         unit: unit.isEmpty ? 'PZA' : unit,
-        customer: customer.isEmpty ? null : customer,
         supplier: supplier.isEmpty ? null : supplier,
-        estimatedDate: estimatedDate,
       ),
     );
   }
 
   if (items.isEmpty) {
     throw const FormatException('El CSV no contiene artículos válidos.');
-  }
-
-  final sharedDate = _earliestDate(items);
-  if (sharedDate != null) {
-    return [for (final item in items) item.copyWith(estimatedDate: sharedDate)];
   }
 
   return items;
@@ -1104,48 +1283,6 @@ int? _parseInt(String raw) {
   final parsed = num.tryParse(cleaned);
   if (parsed == null) return null;
   return parsed.toInt();
-}
-
-DateTime? _parseDate(String raw) {
-  final trimmed = raw.trim();
-  if (trimmed.isEmpty) return null;
-
-  // ISO (yyyy-MM-dd / yyyy-MM-ddTHH:mm:ss)
-  final isoParsed = DateTime.tryParse(trimmed);
-  if (isoParsed != null) {
-    return DateTime(isoParsed.year, isoParsed.month, isoParsed.day);
-  }
-
-  // dd/MM/yyyy
-  final slashParts = trimmed.split('/');
-  if (slashParts.length == 3) {
-    final day = int.tryParse(slashParts[0]);
-    final month = int.tryParse(slashParts[1]);
-    final year = int.tryParse(slashParts[2]);
-    if (day != null && month != null && year != null) {
-      return DateTime(year, month, day);
-    }
-  }
-
-  // yyyy-MM-dd (por si viene con espacios o variantes)
-  final dashParts = trimmed.split('-');
-  if (dashParts.length == 3) {
-    final year = int.tryParse(dashParts[0]);
-    final month = int.tryParse(dashParts[1]);
-    final day = int.tryParse(dashParts[2]);
-    if (day != null && month != null && year != null) {
-      return DateTime(year, month, day);
-    }
-  }
-
-  return null;
-}
-
-DateTime? _earliestDate(List<OrderItemDraft> items) {
-  final dates = items.map((item) => item.estimatedDate).whereType<DateTime>().toList();
-  if (dates.isEmpty) return null;
-  dates.sort();
-  return dates.first;
 }
 
 String _normalizeHeader(String raw) {

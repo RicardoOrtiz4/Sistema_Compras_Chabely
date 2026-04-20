@@ -1,5 +1,5 @@
 import 'package:cloud_functions/cloud_functions.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sistema_compras/core/app_auth.dart';
@@ -20,8 +20,8 @@ final firebaseFunctionsProvider = Provider<FirebaseFunctions>((ref) {
   return FirebaseFunctions.instanceFor(region: 'us-central1');
 });
 
-final firebaseMessagingProvider = Provider<FirebaseMessaging>((ref) {
-  return FirebaseMessaging.instance;
+final firebaseStorageProvider = Provider<FirebaseStorage>((ref) {
+  return FirebaseStorage.instance;
 });
 
 final authStateChangesProvider = StreamProvider<AppAuthUser?>((ref) {

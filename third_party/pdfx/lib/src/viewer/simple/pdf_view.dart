@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:pdfx/src/renderer/interfaces/document.dart';
 import 'package:pdfx/src/renderer/interfaces/page.dart';
@@ -200,27 +201,119 @@ class _PdfViewState extends State<PdfView> {
         heroAttributes: PhotoViewHeroAttributes(tag: '${document.id}-$index'),
       );
 
-  Widget _buildLoaded(BuildContext context) => PhotoViewGallery.builder(
-        builder: (context, index) => widget.builders.pageBuilder(
-          context,
-          _getPageImage(index),
-          index,
-          _controller._document!,
-        ),
-        itemCount: _controller._document?.pagesCount ?? 0,
-        loadingBuilder: (_, __) =>
-            widget.builders.pageLoaderBuilder?.call(context) ??
-            const SizedBox(),
-        backgroundDecoration: widget.backgroundDecoration,
-        pageController: _controller._pageController,
-        onPageChanged: (index) {
-          final pageNumber = index + 1;
-          _controller.pageListenable.value = pageNumber;
-          widget.onPageChanged?.call(pageNumber);
+  bool get _useWindowsSafeViewer =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+
+  Widget _buildLoaded(BuildContext context) {
+    if (_useWindowsSafeViewer) {
+      return _buildWindowsSafeLoaded(context);
+    }
+    return PhotoViewGallery.builder(
+      builder: (context, index) => widget.builders.pageBuilder(
+        context,
+        _getPageImage(index),
+        index,
+        _controller._document!,
+      ),
+      itemCount: _controller._document?.pagesCount ?? 0,
+      loadingBuilder: (_, __) =>
+          widget.builders.pageLoaderBuilder?.call(context) ??
+          const SizedBox(),
+      backgroundDecoration: widget.backgroundDecoration,
+      pageController: _controller._pageController,
+      onPageChanged: (index) {
+        final pageNumber = index + 1;
+        _controller.pageListenable.value = pageNumber;
+        widget.onPageChanged?.call(pageNumber);
+      },
+      scrollDirection: widget.scrollDirection,
+      reverse: widget.reverse,
+      scrollPhysics: widget.physics,
+      pageSnapping: widget.pageSnapping,
+    );
+  }
+
+  Widget _buildWindowsSafeLoaded(BuildContext context) {
+    final document = _controller._document;
+    if (document == null) {
+      return const SizedBox();
+    }
+    final content = widget.scrollDirection == Axis.vertical
+        ? ListView.builder(
+            reverse: widget.reverse,
+            physics: widget.physics,
+            itemCount: document.pagesCount,
+            itemBuilder: (context, index) => _buildWindowsSafePage(
+              context,
+              index,
+              document,
+            ),
+          )
+        : PageView.builder(
+            controller: _controller._pageController,
+            reverse: widget.reverse,
+            physics: widget.physics,
+            pageSnapping: widget.pageSnapping,
+            itemCount: document.pagesCount,
+            onPageChanged: (index) {
+              final pageNumber = index + 1;
+              _controller.pageListenable.value = pageNumber;
+              widget.onPageChanged?.call(pageNumber);
+            },
+            itemBuilder: (context, index) => _buildWindowsSafePage(
+              context,
+              index,
+              document,
+            ),
+          );
+    return DecoratedBox(
+      decoration: widget.backgroundDecoration ?? const BoxDecoration(),
+      child: content,
+    );
+  }
+
+  Widget _buildWindowsSafePage(
+    BuildContext context,
+    int index,
+    PdfDocument document,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: FutureBuilder<PdfPageImage>(
+        future: _getPageImage(index),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return widget.builders.pageLoaderBuilder?.call(context) ??
+                const SizedBox();
+          }
+          if (snapshot.hasError) {
+            final error = snapshot.error;
+            final exception = error is Exception
+                ? error
+                : Exception(error.toString());
+            return widget.builders.errorBuilder?.call(context, exception) ??
+                Center(child: Text(exception.toString()));
+          }
+          final pageImage = snapshot.data;
+          if (pageImage == null) {
+            return const SizedBox();
+          }
+          return InteractiveViewer(
+            minScale: 1.0,
+            maxScale: 3.0,
+            child: Center(
+              child: Image(
+                image: PdfPageImageProvider(
+                  Future.value(pageImage),
+                  index,
+                  document.id,
+                ),
+                gaplessPlayback: true,
+              ),
+            ),
+          );
         },
-        scrollDirection: widget.scrollDirection,
-        reverse: widget.reverse,
-        scrollPhysics: widget.physics,
-        pageSnapping: widget.pageSnapping,
-      );
+      ),
+    );
+  }
 }
