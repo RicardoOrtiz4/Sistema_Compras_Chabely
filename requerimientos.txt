@@ -306,4 +306,4 @@ Quiero que priorices una interfaz tipo ERP ligero / panel administrativo profesi
 - experiencia pensada para capturistas, administrativos, compras, autorización y dirección, si esos roles existen en el sistema
 
 MUY IMPORTANTE:
-No me entregues una migración superficial. Quiero una conversión seria del proyecto Flutter a Next.js, guiada por el código real del repositorio.
+No me entregues una migración superficial. Quiero una conversión seria del proyecto Flutter a Next.js, guiada por el código real del repositorio. 

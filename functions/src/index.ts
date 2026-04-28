@@ -50,7 +50,7 @@ const defaultAreas: Record<string, { name: string }> = {
   ['Direccion General (DIG)']: { name: 'Direccion General (DIG)' },
   ['Contraloria']: { name: 'Contraloria' },
   [AREA_COMPRAS]: { name: AREA_COMPRAS },
-  ['Sistema de Gestion de Calidad (SGC)']: { name: 'Sistema de Gestion de Calidad (SGC)' },
+  ['Sistema de Gestión de Calidad (SGC)']: { name: 'Sistema de Gestión de Calidad (SGC)' },
   ['Ventas (VEN)']: { name: 'Ventas (VEN)' },
   ['Desarrollo y Nuevos Proyectos (DNP)']: { name: 'Desarrollo y Nuevos Proyectos (DNP)' },
   ['Ingenieria de Manufactura (IMA)']: { name: 'Ingenieria de Manufactura (IMA)' },

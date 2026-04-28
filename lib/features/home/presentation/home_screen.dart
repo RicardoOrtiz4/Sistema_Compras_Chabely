@@ -15,6 +15,7 @@ import 'package:sistema_compras/core/extensions.dart';
 import 'package:sistema_compras/core/save_bytes.dart';
 import 'package:sistema_compras/core/widgets/app_logo.dart';
 import 'package:sistema_compras/core/widgets/app_splash.dart';
+import 'package:sistema_compras/features/auth/data/auth_repository.dart';
 import 'package:sistema_compras/features/auth/domain/app_user.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/data/purchase_order_repository.dart';
@@ -209,7 +210,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       body: userAsync.when(
         data: (user) {
           if (user == null) {
-            return const AppSplash();
+            return const _ProfileLoadFallback(
+              title: 'No se pudo cargar tu perfil',
+              message:
+                  'Tu sesion esta abierta, pero el sistema no pudo leer el perfil de este usuario. Puedes cerrar sesion y volver a entrar o revisar permisos en Firebase.',
+            );
           }
           final blocks = <_HomeBlockData>[
             _HomeBlockData(
@@ -359,13 +364,78 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           );
         },
         loading: () => const AppSplash(),
-        error: (error, stack) => Center(
-          child: Text(
-            'Error al cargar usuario: ${reportError(error, stack, context: 'HomeScreen')}',
+        error: (error, stack) => _ProfileLoadFallback(
+          title: 'Error al cargar tu perfil',
+          message: reportError(error, stack, context: 'HomeScreen'),
+        ),
+      ),
+    );
+  }
+}
+
+class _ProfileLoadFallback extends ConsumerStatefulWidget {
+  const _ProfileLoadFallback({
+    required this.title,
+    required this.message,
+  });
+
+  final String title;
+  final String message;
+
+  @override
+  ConsumerState<_ProfileLoadFallback> createState() =>
+      _ProfileLoadFallbackState();
+}
+
+class _ProfileLoadFallbackState extends ConsumerState<_ProfileLoadFallback> {
+  bool _isSigningOut = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.title,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(widget.message),
+                  const SizedBox(height: 20),
+                  FilledButton.icon(
+                    onPressed: _isSigningOut ? null : _signOut,
+                    icon: const Icon(Icons.logout),
+                    label: Text(
+                      _isSigningOut ? 'Cerrando sesion...' : 'Cerrar sesion',
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
     );
+  }
+
+  Future<void> _signOut() async {
+    setState(() => _isSigningOut = true);
+    try {
+      await ref.read(authRepositoryProvider).signOut();
+    } finally {
+      if (mounted) {
+        setState(() => _isSigningOut = false);
+      }
+    }
   }
 }
 

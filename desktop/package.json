@@ -1,0 +1,46 @@
+{
+  "name": "sistema-compras-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist-electron/main/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "npm run dev:desktop",
+    "dev:web": "vite",
+    "dev:desktop": "concurrently -k \"npm:dev:main\" \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:main": "tsc -p tsconfig.electron.json --watch --preserveWatchOutput",
+    "dev:renderer": "vite",
+    "dev:electron": "wait-on tcp:5173 file:dist-electron/main/index.js && electron .",
+    "build": "npm run build:desktop",
+    "build:web": "vite build",
+    "build:desktop": "tsc -p tsconfig.electron.json && vite build",
+    "preview": "vite preview",
+    "preview:web": "vite preview"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.59.20",
+    "clsx": "^2.1.1",
+    "firebase": "^12.12.1",
+    "fontkit": "^2.0.4",
+    "lucide-react": "^0.468.0",
+    "pdf-lib": "^1.17.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.1",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.0",
+    "electron": "^33.2.1",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.16",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "wait-on": "^8.0.1"
+  }
+}

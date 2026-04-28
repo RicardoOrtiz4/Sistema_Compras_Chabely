@@ -1,3 +1,4 @@
 {
-    "cmake.sourceDirectory": "D:/chabely/Sistema_Compras_Chabely/linux"
+    "cmake.sourceDirectory": "D:/chabely/Sistema_Compras_Chabely/linux",
+    "git.ignoreLimitWarning": true
 }

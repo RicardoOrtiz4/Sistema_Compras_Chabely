@@ -140,8 +140,8 @@ const _requiredDefaultAreas = <String, Map<String, String>>{
   direccionGeneralLabel: {'name': direccionGeneralLabel},
   contraloriaLabel: {'name': contraloriaLabel},
   comprasLabel: {'name': comprasLabel},
-  'Sistema de Gestion de Calidad (SGC)': {
-    'name': 'Sistema de Gestion de Calidad (SGC)',
+  'Sistema de Gestión de Calidad (SGC)': {
+    'name': 'Sistema de Gestión de Calidad (SGC)',
   },
   'Ventas (VEN)': {'name': 'Ventas (VEN)'},
   'Desarrollo y Nuevos Proyectos (DNP)': {
@@ -169,8 +169,8 @@ const _requiredAreaOptions = <AreaOption>[
   AreaOption(id: contraloriaLabel, name: contraloriaLabel),
   AreaOption(id: comprasLabel, name: comprasLabel),
   AreaOption(
-    id: 'Sistema de Gestion de Calidad (SGC)',
-    name: 'Sistema de Gestion de Calidad (SGC)',
+    id: 'Sistema de Gestión de Calidad (SGC)',
+    name: 'Sistema de Gestión de Calidad (SGC)',
   ),
   AreaOption(id: 'Ventas (VEN)', name: 'Ventas (VEN)'),
   AreaOption(
@@ -204,7 +204,37 @@ final currentUserProfileProvider = StreamProvider<AppUser?>((ref) {
     return Stream.value(null);
   }
   final repository = ref.watch(profileRepositoryProvider);
-  return repository.watchProfile(uid);
+  return Stream<AppUser?>.multi((controller) {
+    final timeout = Timer(const Duration(seconds: 12), () {
+      controller.addError(
+        TimeoutException(
+          'No se pudo cargar el perfil del usuario a tiempo.',
+        ),
+      );
+    });
+    var firstEventReceived = false;
+    final proxiedSubscription = repository.watchProfile(uid).listen(
+      (event) {
+        if (!firstEventReceived) {
+          firstEventReceived = true;
+          timeout.cancel();
+        }
+        controller.add(event);
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        timeout.cancel();
+        controller.addError(error, stackTrace);
+      },
+      onDone: () {
+        timeout.cancel();
+        controller.close();
+      },
+    );
+    controller.onCancel = () async {
+      timeout.cancel();
+      await proxiedSubscription.cancel();
+    };
+  });
 });
 
 final allUsersProvider = StreamProvider<List<AppUser>>((ref) {

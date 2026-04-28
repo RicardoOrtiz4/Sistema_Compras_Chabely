@@ -1,0 +1,337 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --app-bg: #cbd1d8;
+  --app-surface: #ffffff;
+  --app-surface-variant: #e9e9e9;
+  --app-primary: #111111;
+  --app-secondary: #2f2f2f;
+  --app-tertiary: #3b3b3b;
+  --app-secondary-container: #4a4a4a;
+  --app-tertiary-container: #5a5a5a;
+  --app-header-start: #111111;
+  --app-header-end: #3b3b3b;
+  --app-header-foreground: #ffffff;
+  --app-shell-shadow: 0 24px 60px rgba(15, 23, 42, 0.1);
+  color: var(--app-primary);
+  background: var(--app-bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: var(--app-bg);
+  color: var(--app-primary);
+  font-family:
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+@keyframes loginFloatA {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+  }
+  50% {
+    transform: translate3d(54px, -46px, 0) scale(1.14) rotate(10deg);
+  }
+}
+
+@keyframes loginFloatB {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+  }
+  50% {
+    transform: translate3d(-68px, 34px, 0) scale(1.18) rotate(-12deg);
+  }
+}
+
+@keyframes loginGridShift {
+  0% {
+    background-position: 0 0, 0 0, 0 0;
+  }
+  100% {
+    background-position: 220px 0, -180px 140px, 0 0;
+  }
+}
+
+@keyframes loginGlowPulse {
+  0%,
+  100% {
+    opacity: 0.42;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.78;
+    transform: scale(1.22);
+  }
+}
+
+@layer components {
+  .login-page-bg {
+    position: relative;
+    overflow: hidden;
+    background:
+      radial-gradient(circle at top left, rgba(255, 255, 255, 0.58), transparent 24%),
+      linear-gradient(180deg, #d1d4d9 0%, #bcc2ca 52%, #d3d9e0 100%);
+  }
+
+  .login-page-bg::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(118deg, transparent 0 46%, rgba(255, 255, 255, 0.34) 48%, transparent 50%),
+      linear-gradient(62deg, transparent 0 47%, rgba(255, 255, 255, 0.18) 49%, transparent 51%),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.09) 1px, transparent 1px);
+    background-size: 220px 220px, 180px 180px, 120px 120px;
+    background-repeat: repeat;
+    opacity: 0.78;
+    animation: loginGridShift 14s linear infinite;
+  }
+
+  .login-page-bg::after {
+    content: "";
+    position: absolute;
+    inset: auto auto 12% 14%;
+    height: 220px;
+    width: 220px;
+    border-radius: 9999px;
+    background: radial-gradient(circle, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0));
+    filter: blur(18px);
+    animation: loginGlowPulse 7s ease-in-out infinite;
+  }
+
+  .login-page-blob {
+    position: absolute;
+    border-radius: 9999px;
+    filter: blur(6px);
+    opacity: 0.72;
+    pointer-events: none;
+  }
+
+  .login-page-blob-a {
+    top: -110px;
+    left: -70px;
+    height: 340px;
+    width: 340px;
+    background: radial-gradient(circle, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.04));
+    animation: loginFloatA 8s ease-in-out infinite;
+  }
+
+  .login-page-blob-b {
+    right: -80px;
+    bottom: -120px;
+    height: 320px;
+    width: 320px;
+    background: radial-gradient(circle, rgba(120, 128, 138, 0.5), rgba(255, 255, 255, 0.02));
+    animation: loginFloatB 9s ease-in-out infinite;
+  }
+
+  .app-shell-bg {
+    position: relative;
+    background:
+      radial-gradient(circle at top left, rgba(255, 255, 255, 0.52), transparent 22%),
+      linear-gradient(180deg, #d1d4d9 0%, #bcc2ca 52%, #d3d9e0 100%);
+  }
+
+  .app-shell-bg::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+      linear-gradient(
+        118deg,
+        transparent 0 46%,
+        rgba(255, 255, 255, 0.34) 48%,
+        transparent 50%
+      ),
+      linear-gradient(
+        62deg,
+        transparent 0 47%,
+        rgba(255, 255, 255, 0.18) 49%,
+        transparent 51%
+      ),
+      linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0.09) 1px,
+        transparent 1px
+      );
+    background-size: 280px 280px, 220px 220px, 140px 140px;
+    background-repeat: repeat;
+    opacity: 0.78;
+    animation: loginGridShift 14s linear infinite;
+  }
+
+  .app-shell-bg::after {
+    content: "";
+    position: fixed;
+    inset: auto auto 10% 12%;
+    height: 240px;
+    width: 240px;
+    pointer-events: none;
+    border-radius: 9999px;
+    background: radial-gradient(circle, rgba(255, 255, 255, 0.52), rgba(255, 255, 255, 0));
+    filter: blur(18px);
+    animation: loginGlowPulse 8s ease-in-out infinite;
+  }
+
+  .app-shell-bg > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  .app-topbar {
+    background: linear-gradient(135deg, var(--app-header-start), var(--app-header-end));
+    color: var(--app-header-foreground);
+    box-shadow: var(--app-shell-shadow);
+  }
+
+  .app-glass-panel {
+    background: color-mix(in srgb, var(--app-header-foreground) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--app-header-foreground) 12%, transparent);
+    backdrop-filter: blur(12px);
+  }
+
+  .app-page {
+    @apply space-y-5;
+  }
+
+  .app-card {
+    @apply rounded-[20px] p-5 shadow-sm;
+    border: 1px solid color-mix(in srgb, var(--app-primary) 10%, white);
+    background: color-mix(in srgb, var(--app-surface-variant) 68%, white);
+  }
+
+  .app-card-muted {
+    @apply rounded-[16px] p-4;
+    border: 1px solid color-mix(in srgb, var(--app-primary) 10%, white);
+    background: color-mix(in srgb, var(--app-surface-variant) 82%, white);
+  }
+
+  .app-title-block {
+    @apply flex items-start justify-between gap-4;
+  }
+
+  .app-kicker {
+    @apply text-[11px] font-semibold uppercase tracking-[0.22em];
+    color: color-mix(in srgb, var(--app-primary) 45%, white);
+  }
+
+  .app-title {
+    @apply mt-1 text-[26px] font-semibold;
+    color: var(--app-primary);
+  }
+
+  .app-subtitle {
+    @apply mt-2 text-sm;
+    color: color-mix(in srgb, var(--app-primary) 58%, white);
+  }
+
+  .app-input {
+    @apply w-full rounded-2xl px-4 py-3 text-sm outline-none transition;
+    border: 1px solid color-mix(in srgb, var(--app-primary) 16%, white);
+    background: color-mix(in srgb, var(--app-surface) 78%, white);
+    color: var(--app-primary);
+  }
+
+  .app-select {
+    @apply rounded-2xl px-4 py-3 text-sm outline-none transition;
+    border: 1px solid color-mix(in srgb, var(--app-primary) 16%, white);
+    background: color-mix(in srgb, var(--app-surface) 78%, white);
+    color: var(--app-primary);
+  }
+
+  .app-textarea {
+    @apply w-full rounded-2xl px-4 py-3 text-sm outline-none transition;
+    border: 1px solid color-mix(in srgb, var(--app-primary) 16%, white);
+    background: color-mix(in srgb, var(--app-surface) 78%, white);
+    color: var(--app-primary);
+  }
+
+  .app-button-primary {
+    @apply inline-flex items-center justify-center rounded-2xl px-4 py-3 text-sm font-semibold text-white transition disabled:cursor-not-allowed;
+    background: var(--app-primary);
+    box-shadow: 0 14px 34px color-mix(in srgb, var(--app-primary) 25%, transparent);
+  }
+
+  .app-button-secondary {
+    @apply inline-flex items-center justify-center rounded-2xl px-4 py-3 text-sm font-semibold transition disabled:cursor-not-allowed;
+    border: 1px solid color-mix(in srgb, var(--app-primary) 16%, white);
+    background: var(--app-surface);
+    color: var(--app-secondary);
+  }
+
+  .app-button-danger {
+    @apply inline-flex items-center justify-center rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .app-chip-toggle {
+    @apply rounded-2xl px-4 py-2 text-sm font-medium transition;
+    border: 1px solid color-mix(in srgb, var(--app-primary) 16%, white);
+    background: var(--app-surface);
+    color: var(--app-secondary);
+  }
+
+  .app-chip-toggle-active {
+    @apply text-white;
+    border-color: var(--app-primary);
+    background: var(--app-primary);
+  }
+
+  .app-module-card {
+    @apply relative overflow-hidden rounded-[28px] border p-5 text-left shadow-[0_18px_50px_rgba(15,23,42,0.08)] transition hover:-translate-y-0.5;
+    border-color: color-mix(in srgb, var(--app-primary) 10%, white);
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--app-surface) 82%, white),
+      color-mix(in srgb, var(--app-surface-variant) 65%, white)
+    );
+  }
+
+  .app-module-card::after {
+    content: "";
+    position: absolute;
+    inset: auto -20% -35% auto;
+    height: 140px;
+    width: 140px;
+    border-radius: 9999px;
+    background: color-mix(in srgb, var(--module-accent, var(--app-primary)) 16%, transparent);
+    filter: blur(6px);
+  }
+
+  .app-module-icon {
+    @apply relative inline-flex items-center justify-center rounded-[22px] p-3;
+    background: color-mix(in srgb, var(--module-accent, var(--app-primary)) 12%, white);
+    color: var(--module-accent, var(--app-primary));
+  }
+
+  .app-metric-tile {
+    @apply rounded-[24px] border p-4 shadow-sm;
+    border-color: color-mix(in srgb, var(--app-primary) 10%, white);
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--app-surface) 84%, white),
+      color-mix(in srgb, var(--app-surface-variant) 74%, white)
+    );
+  }
+}

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -113,7 +112,7 @@ class _ComprasDashboardScreenState extends ConsumerState<ComprasDashboardScreen>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         DropdownButtonFormField<String>(
-                          value: selectedSupplier,
+                          initialValue: selectedSupplier,
                           decoration: const InputDecoration(
                             labelText: 'Proveedor',
                             border: OutlineInputBorder(),
@@ -1908,6 +1907,9 @@ class _AuthorizeOrderPdfScreenState
   Future<void> _rejectOrder(BuildContext context, PurchaseOrder order) async {
     final actor = ref.read(currentUserProfileProvider).value;
     if (actor == null) return;
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final container = ProviderScope.containerOf(context, listen: false);
     final comment = await _promptRejectReason(context);
     if (!mounted || comment == null) return;
     setState(() {
@@ -1920,15 +1922,20 @@ class _AuthorizeOrderPdfScreenState
             items: order.items,
             actor: actor,
           );
-      refreshOrderModuleData(ref, orderIds: <String>[order.id]);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Orden enviada a rechazadas.')),
-      );
-      Navigator.of(context).pop();
+      navigator.pop();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        refreshOrderModuleDataFromContainer(
+          container,
+          orderIds: <String>[order.id],
+        );
+        messenger?.showSnackBar(
+          const SnackBar(content: Text('Orden enviada a rechazadas.')),
+        );
+      });
     } catch (error, stack) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        messenger?.showSnackBar(
           SnackBar(
             content: Text(
               reportError(error, stack, context: 'AuthorizeOrderPdfScreen.reject'),
@@ -1948,6 +1955,9 @@ class _AuthorizeOrderPdfScreenState
   Future<void> _sendToCompras(BuildContext context, PurchaseOrder order) async {
     final actor = ref.read(currentUserProfileProvider).value;
     if (actor == null) return;
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final container = ProviderScope.containerOf(context, listen: false);
     setState(() {
       _sending = true;
     });
@@ -1957,15 +1967,20 @@ class _AuthorizeOrderPdfScreenState
             actor: actor,
             comment: 'Orden autorizada y enviada a Compras.',
           );
-      refreshOrderModuleTransitionData(ref, orderIds: <String>[order.id]);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Orden enviada a Compras.')),
-      );
-      Navigator.of(context).pop();
+      navigator.pop();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        refreshOrderModuleTransitionDataFromContainer(
+          container,
+          orderIds: <String>[order.id],
+        );
+        messenger?.showSnackBar(
+          const SnackBar(content: Text('Orden enviada a Compras.')),
+        );
+      });
     } catch (error, stack) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        messenger?.showSnackBar(
           SnackBar(
             content: Text(
               reportError(error, stack, context: 'AuthorizeOrderPdfScreen.send'),
@@ -2206,6 +2221,9 @@ class _ComprasPendingPdfScreenState extends ConsumerState<ComprasPendingPdfScree
     final actor = ref.read(currentUserProfileProvider).value;
     final effectiveItems = _workingItems ?? order.items;
     if (actor == null) return;
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final container = ProviderScope.containerOf(context, listen: false);
     final comment = await _promptRejectReason(context);
     if (!mounted || comment == null) return;
     setState(() {
@@ -2218,15 +2236,20 @@ class _ComprasPendingPdfScreenState extends ConsumerState<ComprasPendingPdfScree
             items: effectiveItems,
             actor: actor,
           );
-      refreshOrderModuleData(ref, orderIds: <String>[order.id]);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Orden enviada a rechazadas.')),
-      );
-      Navigator.of(context).pop();
+      navigator.pop();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        refreshOrderModuleDataFromContainer(
+          container,
+          orderIds: <String>[order.id],
+        );
+        messenger?.showSnackBar(
+          const SnackBar(content: Text('Orden enviada a rechazadas.')),
+        );
+      });
     } catch (error, stack) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        messenger?.showSnackBar(
           SnackBar(
             content: Text(
               reportError(error, stack, context: 'ComprasPendingPdfScreen.reject'),
@@ -2247,6 +2270,9 @@ class _ComprasPendingPdfScreenState extends ConsumerState<ComprasPendingPdfScree
     final actor = ref.read(currentUserProfileProvider).value;
     final updatedItems = _workingItems;
     if (actor == null || updatedItems == null) return;
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final container = ProviderScope.containerOf(context, listen: false);
     setState(() {
       _sending = true;
     });
@@ -2261,15 +2287,22 @@ class _ComprasPendingPdfScreenState extends ConsumerState<ComprasPendingPdfScree
             primaryInternalOrder: _resolveSingleInternalOrder(updatedItems),
             comment: 'Datos de Compras completados y enviados al dashboard.',
           );
-      refreshOrderModuleTransitionData(ref, orderIds: <String>[order.id]);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Orden enviada al dashboard de Compras.')),
-      );
-      Navigator.of(context).pop();
+      navigator.pop();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        refreshOrderModuleTransitionDataFromContainer(
+          container,
+          orderIds: <String>[order.id],
+        );
+        messenger?.showSnackBar(
+          const SnackBar(
+            content: Text('Orden enviada al dashboard de Compras.'),
+          ),
+        );
+      });
     } catch (error, stack) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        messenger?.showSnackBar(
           SnackBar(
             content: Text(
               reportError(error, stack, context: 'ComprasPendingPdfScreen.send'),
@@ -2383,7 +2416,7 @@ class _ComprasPendingDataScreenState extends ConsumerState<ComprasPendingDataScr
                 children: [
                   Expanded(
                     child: DropdownButtonFormField<String>(
-                      value: supplierNames.contains(_selectedSupplierValue)
+                      initialValue: supplierNames.contains(_selectedSupplierValue)
                           ? _selectedSupplierValue
                           : null,
                       decoration: const InputDecoration(
@@ -2608,7 +2641,7 @@ class _ComprasPendingDataScreenState extends ConsumerState<ComprasPendingDataScr
                                   return AlertDialog(
                                     title: const Text('Confirmar nuevo proveedor'),
                                     content: Text(
-                                      'Vas a agregar \"$name\" como proveedor global. Todos los usuarios podran verlo y usarlo. Verifica bien el nombre antes de continuar.',
+                                      'Vas a agregar "$name" como proveedor global. Todos los usuarios podran verlo y usarlo. Verifica bien el nombre antes de continuar.',
                                     ),
                                     actions: [
                                       TextButton(
@@ -3946,7 +3979,7 @@ class _FollowUpWaitingOrderCard extends StatelessWidget {
                   ? stage == _PacketFollowUpStage.facturas
                       ? 'Todos los ${waitingOrder.totalTrackedCount} items ya llegaron. Ahora el solicitante debe confirmar de recibido en Ordenes en proceso.'
                       : 'Todos los ${waitingOrder.totalTrackedCount} items ya pasaron esta etapa.'
-                  : '${waitingOrder.remainingCount} ${remainingLabel}.',
+                  : '${waitingOrder.remainingCount} $remainingLabel.',
             ),
           ],
         ),

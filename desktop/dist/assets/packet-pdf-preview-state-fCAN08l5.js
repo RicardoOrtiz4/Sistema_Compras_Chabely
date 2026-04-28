@@ -1,0 +1,1 @@
+const t="desktop.packetPreviewDraft";function r(e){typeof window>"u"||window.localStorage.setItem(t,JSON.stringify(e))}function n(){if(typeof window>"u")return null;try{const e=window.localStorage.getItem(t);return e?JSON.parse(e):null}catch{return null}}function a(){typeof window>"u"||window.localStorage.removeItem(t)}export{a as c,n as r,r as s};

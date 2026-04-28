@@ -12,6 +12,7 @@ import 'package:sistema_compras/core/app_theme.dart';
 import 'package:sistema_compras/core/company_branding.dart';
 import 'package:sistema_compras/core/optimistic_action.dart';
 import 'package:sistema_compras/core/providers.dart';
+import 'package:sistema_compras/features/auth/data/auth_repository.dart';
 import 'package:sistema_compras/features/orders/application/order_providers.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_mapper.dart';
@@ -144,39 +145,82 @@ ThemeData _neutralTheme(Brightness brightness) {
   );
 }
 
-class _BrandingShield extends StatelessWidget {
+class _BrandingShield extends ConsumerStatefulWidget {
   const _BrandingShield({required this.message});
 
   final String message;
 
   @override
+  ConsumerState<_BrandingShield> createState() => _BrandingShieldState();
+}
+
+class _BrandingShieldState extends ConsumerState<_BrandingShield> {
+  bool _isSigningOut = false;
+
+  @override
   Widget build(BuildContext context) {
+    final authUser = ref.watch(authStateChangesProvider).valueOrNull;
     return ColoredBox(
       color: Colors.white,
       child: SizedBox.expand(
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(
-                width: 36,
-                height: 36,
-                child: CircularProgressIndicator(
-                  strokeWidth: 3,
-                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF6B7280)),
+        child: Stack(
+          children: [
+            Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 3,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        Color(0xFF6B7280),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    widget.message,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: const Color(0xFF374151),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (authUser != null)
+              SafeArea(
+                child: Align(
+                  alignment: Alignment.topRight,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: OutlinedButton.icon(
+                      onPressed: _isSigningOut ? null : _signOut,
+                      icon: const Icon(Icons.logout),
+                      label: Text(
+                        _isSigningOut
+                            ? 'Cerrando sesion...'
+                            : 'Cerrar sesion',
+                      ),
+                    ),
+                  ),
                 ),
               ),
-              const SizedBox(height: 12),
-              Text(
-                message,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: const Color(0xFF374151),
-                ),
-              ),
-            ],
-          ),
+          ],
         ),
       ),
     );
+  }
+
+  Future<void> _signOut() async {
+    setState(() => _isSigningOut = true);
+    try {
+      await ref.read(authRepositoryProvider).signOut();
+    } finally {
+      if (mounted) {
+        setState(() => _isSigningOut = false);
+      }
+    }
   }
 }
