@@ -49,8 +49,17 @@ const ReportsPage = lazy(async () => ({
 const AuthorizeOrdersPage = lazy(async () => ({
   default: (await import("@/features/workflow/authorize-orders-page")).AuthorizeOrdersPage,
 }));
+const AuthorizeOrderPdfPage = lazy(async () => ({
+  default: (await import("@/features/workflow/authorize-order-pdf-page")).AuthorizeOrderPdfPage,
+}));
+const ComprasHubPage = lazy(async () => ({
+  default: (await import("@/features/workflow/compras-hub-page")).ComprasHubPage,
+}));
 const ComprasPendingPage = lazy(async () => ({
   default: (await import("@/features/workflow/compras-pending-page")).ComprasPendingPage,
+}));
+const ComprasDashboardPage = lazy(async () => ({
+  default: (await import("@/features/workflow/compras-dashboard-page")).ComprasDashboardPage,
 }));
 const ComprasPendingPdfPage = lazy(async () => ({
   default: (await import("@/features/workflow/compras-pending-pdf-page")).ComprasPendingPdfPage,
@@ -162,15 +171,23 @@ export const appRouter = createBrowserRouter([
       },
       {
         path: "workflow/compras",
+        element: withSuspense(<ComprasHubPage />),
+      },
+      {
+        path: "workflow/compras/pendientes",
         element: withSuspense(<ComprasPendingPage />),
       },
       {
-        path: "workflow/compras/:orderId",
+        path: "workflow/compras/pendientes/:orderId",
         element: withSuspense(<ComprasPendingPdfPage />),
       },
       {
-        path: "workflow/compras/:orderId/data",
+        path: "workflow/compras/pendientes/:orderId/data",
         element: withSuspense(<ComprasPendingDataPage />),
+      },
+      {
+        path: "workflow/compras/dashboard",
+        element: withSuspense(<ComprasDashboardPage />),
       },
       {
         path: "purchase-packets",
@@ -221,6 +238,11 @@ export const appRouter = createBrowserRouter([
   {
     path: "/orders/create/preview",
     element: <ProtectedPage>{withSuspense(<CreateOrderPreviewPage />)}</ProtectedPage>,
+    errorElement: <RouteErrorPage />,
+  },
+  {
+    path: "/workflow/authorize/:orderId/pdf",
+    element: <ProtectedPage>{withSuspense(<AuthorizeOrderPdfPage />)}</ProtectedPage>,
     errorElement: <RouteErrorPage />,
   },
   {

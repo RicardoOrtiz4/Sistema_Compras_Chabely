@@ -1,10 +1,8 @@
 import { get, push, ref, serverTimestamp, update } from "firebase/database";
 import { database } from "@/lib/firebase/client";
 import type { PacketBundleRecord } from "@/features/purchase-packets/packet-data";
-import { uploadOrderPdf } from "@/features/orders/order-pdf-service";
 import type { PurchaseOrderItem, PurchaseOrderRecord } from "@/features/orders/orders-data";
 import { sanitizeForFirebase } from "@/lib/firebase/sanitize";
-import { useBrandingStore } from "@/store/branding-store";
 import type { AppUser } from "@/store/session-store";
 
 type TimingUpdate = {
@@ -27,29 +25,6 @@ function statusTimingUpdate(order: PurchaseOrderRecord): TimingUpdate {
     statusDurations: nextDurations,
     statusEnteredAt: now,
   };
-}
-
-function resolveCompany(order: PurchaseOrderRecord) {
-  if (order.companyId === "chabely" || order.companyId === "acerpro") {
-    return order.companyId;
-  }
-  return useBrandingStore.getState().company;
-}
-
-async function persistOrderPdf(
-  order: PurchaseOrderRecord,
-  nextOrder: PurchaseOrderRecord,
-  fileLabel: string,
-) {
-  return uploadOrderPdf({
-    company: resolveCompany(order),
-    fileLabel,
-    order: {
-      ...nextOrder,
-      paymentReceiptUrls: nextOrder.paymentReceiptUrls ?? [],
-      facturaPdfUrls: nextOrder.facturaPdfUrls ?? [],
-    },
-  });
 }
 
 async function appendEvent(
@@ -201,18 +176,9 @@ export async function registerEtaForOrderItems(
     throw new Error("No hubo items válidos para registrar ETA.");
   }
 
-  const nextOrder: PurchaseOrderRecord = {
-    ...order,
-    items: sanitizeForFirebase(items),
-    etaDate: etaTimestamp,
-    updatedAt: Date.now(),
-  };
-  const pdfUrl = await persistOrderPdf(order, nextOrder, "eta_actualizada");
-
   await update(ref(database, `purchaseOrders/${order.id}`), {
     items,
     etaDate: etaTimestamp,
-    pdfUrl,
     updatedAt: serverTimestamp(),
   });
 
@@ -247,20 +213,9 @@ export async function sendOrderItemsToFacturas(
   }
 
   const timingUpdate = statusTimingUpdate(order);
-  const nextOrder: PurchaseOrderRecord = {
-    ...order,
-    status: "contabilidad",
-    items: sanitizeForFirebase(items),
-    updatedAt: sentAt,
-    statusEnteredAt: timingUpdate.statusEnteredAt,
-    statusDurations: timingUpdate.statusDurations,
-  };
-  const pdfUrl = await persistOrderPdf(order, nextOrder, "facturas_evidencias");
-
   await update(ref(database, `purchaseOrders/${order.id}`), {
     status: "contabilidad",
     items,
-    pdfUrl,
     updatedAt: serverTimestamp(),
     ...timingUpdate,
   });
@@ -299,24 +254,12 @@ export async function attachAccountingEvidenceToOrder(
 
   const mergedFacturas = dedupeLinks(order.facturaPdfUrls, facturas);
   const mergedReceipts = dedupeLinks(order.paymentReceiptUrls, receipts);
-  const nextOrder: PurchaseOrderRecord = {
-    ...order,
-    items: sanitizeForFirebase(items),
-    facturaPdfUrls: mergedFacturas,
-    facturaPdfUrl: mergedFacturas[0] ?? undefined,
-    paymentReceiptUrls: mergedReceipts,
-    facturaUploadedAt: Date.now(),
-    updatedAt: Date.now(),
-  };
-  const pdfUrl = await persistOrderPdf(order, nextOrder, "evidencias_contables");
-
   await update(ref(database, `purchaseOrders/${order.id}`), {
     items: sanitizeForFirebase(items),
     facturaPdfUrls: mergedFacturas,
     facturaPdfUrl: mergedFacturas[0] ?? null,
     paymentReceiptUrls: mergedReceipts,
     facturaUploadedAt: serverTimestamp(),
-    pdfUrl,
     updatedAt: serverTimestamp(),
   });
 
@@ -369,30 +312,13 @@ export async function registerArrivalForOrderItems(
     updatedAt: serverTimestamp(),
   };
 
-  let nextOrder: PurchaseOrderRecord = {
-    ...order,
-    items,
-    materialArrivedAt: arrivedAt,
-    materialArrivedName: normalizedName,
-    materialArrivedArea: normalizedArea || undefined,
-    updatedAt: arrivedAt,
-  };
-
   if (allResolved) {
     payload.status = nextStatus;
     payload.completedAt = serverTimestamp();
     if (order.status !== nextStatus) {
       Object.assign(payload, statusTimingUpdate(order));
     }
-    nextOrder = {
-      ...nextOrder,
-      status: nextStatus,
-      completedAt: arrivedAt,
-    };
   }
-
-  const pdfUrl = await persistOrderPdf(order, nextOrder, "material_llegado");
-  payload.pdfUrl = pdfUrl;
 
   await update(ref(database, `purchaseOrders/${order.id}`), payload);
 
@@ -421,25 +347,12 @@ export async function confirmRequesterReceived(order: PurchaseOrderRecord, actor
 
   const normalizedName = actor.name.trim() || actor.id;
   const normalizedArea = actor.areaDisplay.trim();
-  const now = Date.now();
-  const nextOrder: PurchaseOrderRecord = {
-    ...order,
-    requesterReceivedAt: now,
-    requesterReceivedName: normalizedName,
-    requesterReceivedArea: normalizedArea || undefined,
-    requesterReceiptAutoConfirmed: false,
-    completedAt: now,
-    updatedAt: now,
-  };
-  const pdfUrl = await persistOrderPdf(order, nextOrder, "recibido_solicitante");
-
   await update(ref(database, `purchaseOrders/${order.id}`), {
     requesterReceivedAt: serverTimestamp(),
     requesterReceivedName: normalizedName,
     requesterReceivedArea: normalizedArea || null,
     requesterReceiptAutoConfirmed: null,
     completedAt: serverTimestamp(),
-    pdfUrl,
     updatedAt: serverTimestamp(),
   });
 

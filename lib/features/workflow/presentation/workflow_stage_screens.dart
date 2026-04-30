@@ -43,7 +43,9 @@ class ComprasDashboardScreen extends ConsumerStatefulWidget {
 
 class _ComprasDashboardScreenState extends ConsumerState<ComprasDashboardScreen> {
   final TextEditingController _quoteUrlController = TextEditingController();
-  final List<String> _quoteUrls = <String>[];
+  String? _primaryQuoteUrl;
+  final List<String> _additionalQuoteUrls = <String>[];
+  final Set<String> _excludedSupplierItemRefIds = <String>{};
   final Set<String> _expandedOrderIds = <String>{};
   final Map<String, DateTime> _sentAtBySupplier = <String, DateTime>{};
   String? _selectedSupplier;
@@ -53,6 +55,22 @@ class _ComprasDashboardScreenState extends ConsumerState<ComprasDashboardScreen>
   void dispose() {
     _quoteUrlController.dispose();
     super.dispose();
+  }
+
+  List<String> get _quoteUrls => <String>[
+        if ((_primaryQuoteUrl ?? '').trim().isNotEmpty) _primaryQuoteUrl!.trim(),
+        ..._additionalQuoteUrls,
+      ];
+
+  void _clearQuoteUrls() {
+    _primaryQuoteUrl = null;
+    _additionalQuoteUrls.clear();
+  }
+
+  void _resetSupplierSelectionState() {
+    _clearQuoteUrls();
+    _excludedSupplierItemRefIds.clear();
+    _expandedOrderIds.clear();
   }
 
   @override
@@ -86,8 +104,7 @@ class _ComprasDashboardScreenState extends ConsumerState<ComprasDashboardScreen>
                   if (!mounted) return;
                   setState(() {
                     _selectedSupplier = selectedSupplier;
-                    _quoteUrls.clear();
-                    _expandedOrderIds.clear();
+                    _resetSupplierSelectionState();
                   });
                 });
               }
@@ -96,6 +113,7 @@ class _ComprasDashboardScreenState extends ConsumerState<ComprasDashboardScreen>
                   : _buildSupplierBatch(
                       supplier: selectedSupplier,
                       pendingOrders: pendingOrders,
+                      excludedItemRefIds: _excludedSupplierItemRefIds,
                     );
               if (pendingOrders.isEmpty) {
                 return const Center(
@@ -127,8 +145,7 @@ class _ComprasDashboardScreenState extends ConsumerState<ComprasDashboardScreen>
                           onChanged: (value) {
                             setState(() {
                               _selectedSupplier = value;
-                              _quoteUrls.clear();
-                              _expandedOrderIds.clear();
+                              _resetSupplierSelectionState();
                             });
                           },
                         ),
@@ -139,6 +156,11 @@ class _ComprasDashboardScreenState extends ConsumerState<ComprasDashboardScreen>
                             style: Theme.of(context).textTheme.titleMedium,
                           ),
                           const SizedBox(height: 8),
+                          if (selectedBatch.items.isEmpty)
+                            Text(
+                              'Ya quitaste todos los items de este proveedor para esta agrupacion.',
+                              style: Theme.of(context).textTheme.bodyMedium,
+                            ),
                           ...selectedBatch.orderIds.map((orderId) {
                             final orderItems = selectedBatch.items
                                 .where((item) => item.orderId == orderId)
@@ -208,7 +230,24 @@ class _ComprasDashboardScreenState extends ConsumerState<ComprasDashboardScreen>
                                           subtitle: Text(
                                             '${item.description} | ${item.quantity} ${item.unit}',
                                           ),
-                                          trailing: Text(item.amountLabel),
+                                          trailing: Wrap(
+                                            spacing: 4,
+                                            crossAxisAlignment:
+                                                WrapCrossAlignment.center,
+                                            children: [
+                                              Text(item.amountLabel),
+                                              IconButton(
+                                                tooltip: 'Quitar de esta agrupacion',
+                                                onPressed: () {
+                                                  setState(() {
+                                                    _excludedSupplierItemRefIds
+                                                        .add(item.itemRefId);
+                                                  });
+                                                },
+                                                icon: const Icon(Icons.close),
+                                              ),
+                                            ],
+                                          ),
                                         ),
                                     ],
                                   ],
@@ -221,43 +260,91 @@ class _ComprasDashboardScreenState extends ConsumerState<ComprasDashboardScreen>
                             spacing: 12,
                             runSpacing: 12,
                             children: [
-                              OutlinedButton.icon(
-                                onPressed: () => _addQuoteUrl(context),
-                                icon: const Icon(Icons.add_link_outlined),
-                                label: const Text('Agregar link de cotizacion'),
-                              ),
                               FilledButton.tonalIcon(
-                                onPressed: () => _openSupplierPdf(context, selectedBatch),
+                                onPressed: selectedBatch.items.isEmpty
+                                    ? null
+                                    : () => _openSupplierPdf(context, selectedBatch),
                                 icon: const Icon(Icons.picture_as_pdf_outlined),
                                 label: const Text('Ver PDF de paquete por proveedor'),
                               ),
+                              OutlinedButton.icon(
+                                onPressed: () => _addQuoteUrl(
+                                  context,
+                                  isPrimary: true,
+                                ),
+                                icon: const Icon(Icons.add_link_outlined),
+                                label: Text(
+                                  (_primaryQuoteUrl ?? '').trim().isEmpty
+                                      ? 'Cotizacion principal'
+                                      : 'Editar principal',
+                                ),
+                              ),
+                              OutlinedButton.icon(
+                                onPressed: () => _addQuoteUrl(
+                                  context,
+                                  isPrimary: false,
+                                ),
+                                icon: const Icon(Icons.add_link_outlined),
+                                label: Text(
+                                  _additionalQuoteUrls.isEmpty
+                                      ? 'Otras cotizaciones'
+                                      : 'Editar otras (${_additionalQuoteUrls.length})',
+                                ),
+                              ),
+                              if (_excludedSupplierItemRefIds.isNotEmpty)
+                                TextButton.icon(
+                                  onPressed: () {
+                                    setState(() {
+                                      _excludedSupplierItemRefIds.clear();
+                                    });
+                                  },
+                                  icon: const Icon(Icons.refresh),
+                                  label: const Text('Restablecer items'),
+                                ),
                             ],
                           ),
                           const SizedBox(height: 12),
-                          if (_quoteUrls.isEmpty)
-                            Text(
-                              'Aun no hay links de cotizacion agregados.',
-                              style: Theme.of(context).textTheme.bodyMedium,
-                            )
-                          else
-                            Column(
+                          if ((_primaryQuoteUrl ?? '').trim().isNotEmpty ||
+                              _additionalQuoteUrls.isNotEmpty)
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
                               children: [
-                                for (final entry in _quoteUrls.asMap().entries)
-                                  ListTile(
-                                    dense: true,
-                                    contentPadding: EdgeInsets.zero,
-                                    leading: const Icon(Icons.link_outlined),
-                                    title: Text(entry.value),
-                                    trailing: IconButton(
-                                      onPressed: () {
-                                        setState(() {
-                                          _quoteUrls.removeAt(entry.key);
-                                        });
-                                      },
-                                      icon: const Icon(Icons.close),
+                                if ((_primaryQuoteUrl ?? '').trim().isNotEmpty)
+                                  InputChip(
+                                    avatar: const Icon(Icons.link_outlined, size: 18),
+                                    label: Text(
+                                      'Principal: ${_compactLinkLabel(_primaryQuoteUrl!)}',
                                     ),
+                                    onPressed: () =>
+                                        _openExternalLink(context, _primaryQuoteUrl!),
+                                    onDeleted: () {
+                                      setState(() {
+                                        _primaryQuoteUrl = null;
+                                      });
+                                    },
+                                  ),
+                                for (final entry
+                                    in _additionalQuoteUrls.asMap().entries)
+                                  InputChip(
+                                    avatar: const Icon(Icons.link_outlined, size: 18),
+                                    label: Text(
+                                      'Otra ${entry.key + 1}: ${_compactLinkLabel(entry.value)}',
+                                    ),
+                                    onPressed: () =>
+                                        _openExternalLink(context, entry.value),
+                                    onDeleted: () {
+                                      setState(() {
+                                        _additionalQuoteUrls.removeAt(entry.key);
+                                      });
+                                    },
                                   ),
                               ],
+                            )
+                          else
+                            Text(
+                              'Agrega la cotizacion principal y, si hace falta, otras cotizaciones.',
+                              style: Theme.of(context).textTheme.bodyMedium,
                             ),
                           const SizedBox(height: 16),
                           Align(
@@ -349,13 +436,18 @@ class _ComprasDashboardScreenState extends ConsumerState<ComprasDashboardScreen>
     );
   }
 
-  Future<void> _addQuoteUrl(BuildContext context) async {
+  Future<void> _addQuoteUrl(
+    BuildContext context, {
+    required bool isPrimary,
+  }) async {
     _quoteUrlController.clear();
     final added = await showDialog<String>(
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          title: const Text('Agregar link de cotizacion'),
+          title: Text(
+            isPrimary ? 'Agregar cotizacion principal' : 'Agregar otra cotizacion',
+          ),
           content: TextField(
             controller: _quoteUrlController,
             decoration: const InputDecoration(
@@ -390,8 +482,16 @@ class _ComprasDashboardScreenState extends ConsumerState<ComprasDashboardScreen>
     }
     if (!mounted) return;
     setState(() {
-      if (!_quoteUrls.contains(normalized)) {
-        _quoteUrls.add(normalized);
+      if (isPrimary) {
+        _primaryQuoteUrl = normalized;
+        _additionalQuoteUrls.removeWhere((url) => url == normalized);
+        return;
+      }
+      if ((_primaryQuoteUrl ?? '').trim() == normalized) {
+        return;
+      }
+      if (!_additionalQuoteUrls.contains(normalized)) {
+        _additionalQuoteUrls.add(normalized);
       }
     });
   }
@@ -431,9 +531,21 @@ class _ComprasDashboardScreenState extends ConsumerState<ComprasDashboardScreen>
     _SupplierDashboardBatch batch,
     List<_PendingDashboardOrder> pendingOrders,
   ) async {
-    if (_quoteUrls.isEmpty) {
+    if (batch.items.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Agrega al menos un link de cotizacion.')),
+        const SnackBar(content: Text('Selecciona al menos un item para agrupar.')),
+      );
+      return;
+    }
+    if (batch.amountCurrency == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No puedes agrupar items con monedas distintas en el mismo proveedor.')),
+      );
+      return;
+    }
+    if ((_primaryQuoteUrl ?? '').trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Agrega la cotizacion principal.')),
       );
       return;
     }
@@ -458,6 +570,7 @@ class _ComprasDashboardScreenState extends ConsumerState<ComprasDashboardScreen>
                 actor: actor,
                 supplierName: batch.supplier,
                 totalAmount: batch.totalAmount,
+                amountCurrency: batch.amountCurrency!,
                 evidenceUrls: _quoteUrls,
                 itemRefIds: batch.items
                     .map((item) => item.itemRefId)
@@ -487,9 +600,8 @@ class _ComprasDashboardScreenState extends ConsumerState<ComprasDashboardScreen>
           ),
         );
         setState(() {
-          _quoteUrls.clear();
+          _resetSupplierSelectionState();
           _selectedSupplier = null;
-          _expandedOrderIds.clear();
         });
       }
     } catch (error, stack) {
@@ -992,7 +1104,9 @@ class GeneralQuoteHistoryScreen extends ConsumerWidget {
                         runSpacing: 8,
                         children: [
                           Text('Items: ${packet.itemRefs.length}'),
-                          Text('Total: ${packet.totalAmount}'),
+                          Text(
+                            'Total: ${_formatMoneyAmount(packet.totalAmount, packet.amountCurrency)}',
+                          ),
                           Text('Fecha: ${issuedAt.toLocal().toFullDateTime()}'),
                           Text(
                             'Estado: ${isRejected ? 'rechazada' : packet.status.storageKey}',
@@ -2101,6 +2215,7 @@ class _ComprasPendingPdfScreenState extends ConsumerState<ComprasPendingPdfScree
             supplier: _resolveSingleSupplier(effectiveItems),
             internalOrder: _resolveSingleInternalOrder(effectiveItems),
             budget: totalBudget == 0 ? null : totalBudget,
+            amountCurrency: order.amountCurrency,
             supplierBudgets: supplierBudgets,
             processByName: _confirmed ? _processName : order.processByName,
             processByArea: _confirmed ? _processArea : order.processByArea,
@@ -2282,6 +2397,7 @@ class _ComprasPendingPdfScreenState extends ConsumerState<ComprasPendingPdfScree
             actor: actor,
             items: updatedItems,
             totalBudget: _sumItemBudgets(updatedItems),
+            amountCurrency: order.amountCurrency,
             supplierBudgets: _buildSupplierBudgets(updatedItems),
             primarySupplier: _resolveSingleSupplier(updatedItems),
             primaryInternalOrder: _resolveSingleInternalOrder(updatedItems),
@@ -2375,6 +2491,7 @@ class _ComprasPendingDataScreenState extends ConsumerState<ComprasPendingDataScr
   late List<PurchaseOrderItem> _workingItems;
   late Set<int> _selectedLines;
   String? _selectedSupplierValue;
+  MoneyCurrency _selectedAmountCurrency = MoneyCurrency.mxn;
 
   @override
   void initState() {
@@ -2456,6 +2573,28 @@ class _ComprasPendingDataScreenState extends ConsumerState<ComprasPendingDataScr
                   labelText: 'Monto total',
                   border: OutlineInputBorder(),
                 ),
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<MoneyCurrency>(
+                initialValue: _selectedAmountCurrency,
+                decoration: const InputDecoration(
+                  labelText: 'Moneda',
+                  border: OutlineInputBorder(),
+                ),
+                items: MoneyCurrency.values
+                    .map(
+                      (currency) => DropdownMenuItem<MoneyCurrency>(
+                        value: currency,
+                        child: Text('${currency.label} (${currency.code})'),
+                      ),
+                    )
+                    .toList(growable: false),
+                onChanged: (value) {
+                  if (value == null) return;
+                  setState(() {
+                    _selectedAmountCurrency = value;
+                  });
+                },
               ),
               const SizedBox(height: 16),
               TextField(
@@ -2750,6 +2889,7 @@ class _ComprasPendingDataScreenState extends ConsumerState<ComprasPendingDataScr
         return item.copyWith(
           supplier: supplierName,
           budget: nextBudget,
+          amountCurrency: _selectedAmountCurrency,
           internalOrder: internalOrder.isEmpty ? null : internalOrder,
           clearInternalOrder: internalOrder.isEmpty,
         );
@@ -2845,6 +2985,15 @@ class _ComprasPendingDataScreenState extends ConsumerState<ComprasPendingDataScr
       _amountController.text = '';
     }
 
+    final currencies = selectedItems
+        .map((item) => item.amountCurrency)
+        .toSet();
+    if (currencies.length == 1) {
+      _selectedAmountCurrency = currencies.first;
+    } else if (!preserveManualInput) {
+      _selectedAmountCurrency = MoneyCurrency.mxn;
+    }
+
     final internalOrders = selectedItems
         .map((item) => (item.internalOrder ?? '').trim())
         .where((value) => value.isNotEmpty)
@@ -2878,6 +3027,7 @@ class _ComprasPendingDataScreenState extends ConsumerState<ComprasPendingDataScr
     return item.copyWith(
       supplier: '',
       budget: null,
+      amountCurrency: MoneyCurrency.mxn,
       internalOrder: null,
       clearInternalOrder: true,
     );
@@ -2914,6 +3064,7 @@ String _comprasItemsSignature(List<PurchaseOrderItem> items) {
           item.supplier ?? '',
           item.internalOrder ?? '',
           item.budget?.toString() ?? '',
+          item.amountCurrency.code,
         ].join(':'),
       )
       .join('|');
@@ -2926,7 +3077,7 @@ String _comprasItemSubtitle(PurchaseOrderItem item) {
     parts.add('Proveedor: $supplier');
   }
   if (item.budget != null) {
-    parts.add('Monto: ${item.budget}');
+    parts.add('Monto: ${item.amountCurrency.code} ${item.budget}');
   }
   final internalOrder = (item.internalOrder ?? '').trim();
   if (internalOrder.isNotEmpty) {
@@ -3048,6 +3199,7 @@ class _DashboardPendingItem {
     required this.unit,
     required this.supplier,
     required this.amount,
+    required this.amountCurrency,
     required this.internalOrder,
   });
 
@@ -3060,9 +3212,10 @@ class _DashboardPendingItem {
   final String unit;
   final String supplier;
   final num amount;
+  final MoneyCurrency amountCurrency;
   final String? internalOrder;
 
-  String get amountLabel => amount.toString();
+  String get amountLabel => '${amountCurrency.code} $amount';
 }
 
 class _SupplierDashboardBatch {
@@ -3075,6 +3228,11 @@ class _SupplierDashboardBatch {
   final List<_DashboardPendingItem> items;
 
   num get totalAmount => items.fold<num>(0, (sum, item) => sum + item.amount);
+  MoneyCurrency? get amountCurrency {
+    final currencies = items.map((item) => item.amountCurrency).toSet();
+    if (currencies.length != 1) return null;
+    return currencies.first;
+  }
   List<String> get orderIds => items
       .map((item) => item.orderId)
       .toSet()
@@ -3097,6 +3255,7 @@ _SupplierDashboardBatch _supplierDashboardBatchFromPacket(PurchasePacket packet)
         unit: item.unit,
         supplier: packet.supplierName,
         amount: item.amount ?? 0,
+        amountCurrency: item.amountCurrency,
         internalOrder: null,
       ),
     );
@@ -3199,6 +3358,7 @@ _PendingDashboardOrder _buildPendingDashboardOrder(
         unit: item.unit,
         supplier: supplier,
         amount: amount,
+        amountCurrency: item.amountCurrency,
         internalOrder: null,
       ),
     );
@@ -3213,10 +3373,15 @@ _PendingDashboardOrder _buildPendingDashboardOrder(
 _SupplierDashboardBatch _buildSupplierBatch({
   required String supplier,
   required List<_PendingDashboardOrder> pendingOrders,
+  Set<String> excludedItemRefIds = const <String>{},
 }) {
   final items = pendingOrders
       .expand((order) => order.pendingItems)
-      .where((item) => item.supplier == supplier)
+      .where(
+        (item) =>
+            item.supplier == supplier &&
+            !excludedItemRefIds.contains(item.itemRefId),
+      )
       .toList(growable: false);
   return _SupplierDashboardBatch(supplier: supplier, items: items);
 }
@@ -3234,6 +3399,10 @@ String _compactLinkLabel(String value) {
   final host = uri.host.trim();
   if (host.isEmpty) return value.trim();
   return uri.pathSegments.isEmpty ? host : '$host/...';
+}
+
+String _formatMoneyAmount(num value, MoneyCurrency currency) {
+  return '${currency.code} $value';
 }
 
 Future<void> _openExternalLink(BuildContext context, String raw) async {
@@ -3384,6 +3553,7 @@ OrderPdfData _buildSupplierDashboardPdfData({
             unit: item.unit,
             supplier: batch.supplier,
             budget: item.amount,
+            amountCurrency: item.amountCurrency,
             internalOrder: item.internalOrder,
           ),
         )
@@ -3393,6 +3563,7 @@ OrderPdfData _buildSupplierDashboardPdfData({
     folio: folio,
     supplier: batch.supplier,
     budget: batch.totalAmount,
+    amountCurrency: batch.amountCurrency ?? MoneyCurrency.mxn,
     supplierBudgets: <String, num>{batch.supplier: batch.totalAmount},
     cacheSalt: cacheSalt,
   );
@@ -3558,7 +3729,10 @@ Future<Uint8List> _buildSupplierDashboardPdfDocument({
                 ),
                 pw.SizedBox(height: 6),
                 pw.Text(
-                  batch.totalAmount.toString(),
+                  _formatMoneyAmount(
+                    batch.totalAmount,
+                    batch.amountCurrency ?? MoneyCurrency.mxn,
+                  ),
                   style: pw.TextStyle(
                     fontSize: 30,
                     fontWeight: pw.FontWeight.bold,
@@ -4719,8 +4893,10 @@ Future<_AccountingEvidenceResult?> _promptAccountingEvidence(
   final facturaUrls = <String>[];
   final receiptUrls = <String>[];
   final internalOrderControllers = <int, TextEditingController>{
-    for (final item in items)
-      item.line: TextEditingController(text: (item.internalOrder ?? '').trim()),
+    for (final entry in items.asMap().entries)
+      entry.key: TextEditingController(
+        text: (entry.value.internalOrder ?? '').trim(),
+      ),
   };
   try {
     return await showDialog<_AccountingEvidenceResult>(
@@ -4834,14 +5010,20 @@ Future<_AccountingEvidenceResult?> _promptAccountingEvidence(
                         style: Theme.of(dialogContext).textTheme.titleMedium,
                       ),
                       const SizedBox(height: 8),
-                      for (final item in items) ...[
+                      for (final entry in items.asMap().entries) ...[
+                        () {
+                          final item = entry.value;
+                          final itemIndex = entry.key;
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
                         Text(
                           'Item ${item.line} - ${item.description}',
                           style: Theme.of(dialogContext).textTheme.bodyMedium,
                         ),
                         const SizedBox(height: 6),
                         TextField(
-                          controller: internalOrderControllers[item.line],
+                          controller: internalOrderControllers[itemIndex],
                           keyboardType: TextInputType.number,
                           inputFormatters: [
                             FilteringTextInputFormatter.digitsOnly,
@@ -4852,6 +5034,9 @@ Future<_AccountingEvidenceResult?> _promptAccountingEvidence(
                           ),
                         ),
                         const SizedBox(height: 12),
+                            ],
+                          );
+                        }(),
                       ],
                     ],
                   ),
@@ -4865,16 +5050,18 @@ Future<_AccountingEvidenceResult?> _promptAccountingEvidence(
                 FilledButton(
                   onPressed: facturaUrls.isEmpty ||
                           receiptUrls.isEmpty ||
-                          items.any(
-                            (item) => (internalOrderControllers[item.line]?.text.trim().isEmpty ?? true),
+                          items.asMap().entries.any(
+                            (entry) =>
+                                (internalOrderControllers[entry.key]?.text.trim().isEmpty ??
+                                    true),
                           )
                       ? null
                       : () {
-                          final updatedItems = items
+                          final updatedItems = items.asMap().entries
                               .map(
-                                (item) => item.copyWith(
+                                (entry) => entry.value.copyWith(
                                   internalOrder:
-                                      internalOrderControllers[item.line]!.text.trim(),
+                                      internalOrderControllers[entry.key]!.text.trim(),
                                   clearInternalOrder: false,
                                 ),
                               )

@@ -1,6 +1,7 @@
 import 'dart:collection';
 
 import 'package:sistema_compras/core/company_branding.dart';
+import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/features/orders/application/create_order_controller.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 import 'package:sistema_compras/features/orders/presentation/preview/order_pdf_builder.dart';
@@ -13,6 +14,7 @@ OrderPdfData buildPdfDataFromOrder(
   String? supplier,
   String? internalOrder,
   num? budget,
+  MoneyCurrency? amountCurrency,
   Map<String, num>? supplierBudgets,
   String? pendingResubmissionLabel,
   String? authorizedByName,
@@ -32,6 +34,7 @@ OrderPdfData buildPdfDataFromOrder(
     supplier: supplier,
     internalOrder: internalOrder,
     budget: budget,
+    amountCurrency: amountCurrency,
     supplierBudgets: supplierBudgets,
     pendingResubmissionLabel: pendingResubmissionLabel,
     authorizedByName: authorizedByName,
@@ -60,6 +63,7 @@ OrderPdfData buildPdfDataFromOrder(
       supplier: supplier,
       internalOrder: internalOrder,
       budget: budget,
+      amountCurrency: amountCurrency,
       supplierBudgets: supplierBudgets,
       pendingResubmissionLabel: pendingResubmissionLabel,
       authorizedByName: authorizedByName,
@@ -91,6 +95,7 @@ OrderPdfData buildPdfDataFromOrder(
     supplier: supplier,
     internalOrder: internalOrder,
     budget: budget,
+    amountCurrency: amountCurrency,
     supplierBudgets: supplierBudgets,
     pendingResubmissionLabel: pendingResubmissionLabel,
     authorizedByName: authorizedByName,
@@ -116,6 +121,7 @@ OrderPdfData _buildPdfDataFromOrderImpl(
   String? supplier,
   String? internalOrder,
   num? budget,
+  MoneyCurrency? amountCurrency,
   Map<String, num>? supplierBudgets,
   String? pendingResubmissionLabel,
   String? authorizedByName,
@@ -168,6 +174,7 @@ OrderPdfData _buildPdfDataFromOrderImpl(
     supplier: supplier ?? order.supplier ?? '',
     internalOrder: internalOrder ?? order.internalOrder ?? '',
     budget: effectiveBudget,
+    amountCurrency: amountCurrency ?? order.amountCurrency,
     supplierBudgets: effectiveSupplierBudgets,
     pendingResubmissionLabel: effectivePendingResubmissionLabel,
     authorizedByName: authorizedByName ?? order.authorizedByName,
@@ -185,6 +192,7 @@ bool _canUseDefaultPdfDataCache({
   required String? supplier,
   required String? internalOrder,
   required num? budget,
+  required MoneyCurrency? amountCurrency,
   required Map<String, num>? supplierBudgets,
   required String? pendingResubmissionLabel,
   required String? authorizedByName,
@@ -203,6 +211,7 @@ bool _canUseDefaultPdfDataCache({
   return supplier == null &&
       internalOrder == null &&
       budget == null &&
+      amountCurrency == null &&
       supplierBudgets == null &&
       pendingResubmissionLabel == null &&
       authorizedByName == null &&
@@ -227,6 +236,7 @@ String _defaultPdfDataCacheKey(PurchaseOrder order, CompanyBranding branding) {
     order.status.name,
     (order.updatedAt ?? order.createdAt)?.millisecondsSinceEpoch ?? 0,
     order.items.length,
+    order.amountCurrency.code,
     order.facturaPdfUrls.length,
   ].join('|');
 }

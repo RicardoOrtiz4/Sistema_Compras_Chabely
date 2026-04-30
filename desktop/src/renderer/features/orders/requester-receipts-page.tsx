@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useRtdbValue } from "@/lib/firebase/hooks";
 import {
@@ -11,6 +11,7 @@ import {
 import { confirmRequesterReceived } from "@/features/workflow/packet-follow-up-service";
 import { StatusBadge } from "@/shared/ui/status-badge";
 import { useSessionStore } from "@/store/session-store";
+import { Snackbar } from "@/shared/ui/snackbar";
 
 function formatDateTime(value?: number) {
   if (!value) return "Sin fecha";
@@ -40,6 +41,18 @@ export function RequesterReceiptsPage() {
         .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0)),
     [ordersState.data, profile?.id],
   );
+
+  useEffect(() => {
+    if (!actionError) return;
+    const timer = window.setTimeout(() => setActionError(null), 3600);
+    return () => window.clearTimeout(timer);
+  }, [actionError]);
+
+  useEffect(() => {
+    if (!actionMessage) return;
+    const timer = window.setTimeout(() => setActionMessage(null), 3600);
+    return () => window.clearTimeout(timer);
+  }, [actionMessage]);
 
   async function handleConfirm(orderId: string) {
     if (!profile) return;
@@ -76,16 +89,6 @@ export function RequesterReceiptsPage() {
           <StatusBadge label={`${orders.length} pendiente(s)`} tone="warning" />
         </div>
 
-        {actionError ? (
-          <div className="mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {actionError}
-          </div>
-        ) : null}
-        {actionMessage ? (
-          <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-            {actionMessage}
-          </div>
-        ) : null}
       </section>
 
       <section className="space-y-3">
@@ -155,6 +158,8 @@ export function RequesterReceiptsPage() {
           ))
         )}
       </section>
+      <Snackbar message={actionError} tone="error" />
+      <Snackbar message={actionMessage} tone="success" />
     </div>
   );
 }

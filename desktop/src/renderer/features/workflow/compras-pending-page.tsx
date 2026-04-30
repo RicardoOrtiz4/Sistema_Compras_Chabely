@@ -1,15 +1,10 @@
-import { useMemo, useState } from "react";
 import { Download, FileText, Search } from "lucide-react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { hasComprasAccess } from "@/lib/access-control";
 import { useRtdbValue } from "@/lib/firebase/hooks";
 import { buildOrderCsv, downloadTextFile } from "@/lib/downloads";
-import {
-  mapOrders,
-  type PurchaseOrderEvent,
-  type PurchaseOrderRecord,
-} from "@/features/orders/orders-data";
-import { getOrderStatusLabel } from "@/features/orders/order-status";
+import { mapOrders, type PurchaseOrderRecord } from "@/features/orders/orders-data";
 import { useSessionStore } from "@/store/session-store";
 import { StatusBadge } from "@/shared/ui/status-badge";
 
@@ -17,17 +12,18 @@ type UrgencyFilter = "all" | "normal" | "urgente";
 
 function formatDuration(ms?: number) {
   if (!ms || ms <= 0) return "0 min";
-  const totalMinutes = Math.max(Math.round(ms / 60000), 0);
-  if (totalMinutes < 60) return `${totalMinutes} min`;
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return minutes > 0 ? `${hours} h ${minutes} min` : `${hours} h`;
-}
+  const totalSeconds = Math.max(Math.floor(ms / 1000), 0);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
 
-function latestEventToStatus(events: PurchaseOrderEvent[], status: string) {
-  return [...events]
-    .reverse()
-    .find((event) => (event.toStatus ?? "").trim() === status);
+  if (hours > 0) {
+    return `${hours} h ${minutes} min ${seconds} s`;
+  }
+  if (minutes > 0) {
+    return `${minutes} min ${seconds} s`;
+  }
+  return `${seconds} s`;
 }
 
 function buildSearch(order: PurchaseOrderRecord) {
@@ -50,6 +46,14 @@ function exportOrderCsv(order: PurchaseOrderRecord) {
   downloadTextFile(buildOrderCsv(order), `orden_compra_${order.id}.csv`, "text/csv");
 }
 
+function urgencyLine(order: PurchaseOrderRecord) {
+  return order.urgentJustification?.trim() ?? "";
+}
+
+function urgencyTone(order: PurchaseOrderRecord) {
+  return order.urgency === "urgente" ? "danger" : "info";
+}
+
 export function ComprasPendingPage() {
   const profile = useSessionStore((state) => state.profile);
   const canOperate = hasComprasAccess(profile);
@@ -57,6 +61,15 @@ export function ComprasPendingPage() {
 
   const [search, setSearch] = useState("");
   const [urgencyFilter, setUrgencyFilter] = useState<UrgencyFilter>("all");
+
+  const urgencyCounts = useMemo(() => {
+    const sourcingOrders = (ordersState.data ?? []).filter((order) => order.status === "sourcing");
+    return {
+      all: sourcingOrders.length,
+      normal: sourcingOrders.filter((order) => order.urgency === "normal").length,
+      urgente: sourcingOrders.filter((order) => order.urgency === "urgente").length,
+    };
+  }, [ordersState.data]);
 
   const orders = useMemo(
     () =>
@@ -84,35 +97,35 @@ export function ComprasPendingPage() {
       <section className="rounded-[22px] border border-slate-200 bg-white px-5 py-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <p className="text-[20px] font-semibold text-slate-900">Compras</p>
+            <p className="text-[20px] font-semibold text-slate-900">Compras / Pendientes</p>
             <p className="mt-1 text-sm text-slate-600">
               Revisa el PDF, completa datos de proveedor y manda la orden al dashboard.
             </p>
           </div>
-          <StatusBadge label={`${orders.length} orden(es) en preparacion`} tone="warning" />
-        </div>
-
-        <div className="mt-5 inline-flex overflow-hidden rounded-full border border-slate-500 bg-white">
-          {[
-            { key: "all", label: "Todas" },
-            { key: "normal", label: "Normal" },
-            { key: "urgente", label: "Urgente" },
-          ].map((option) => {
-            const active = urgencyFilter === option.key;
-            return (
-              <button
-                key={option.key}
-                type="button"
-                onClick={() => setUrgencyFilter(option.key as UrgencyFilter)}
-                className={[
-                  "px-5 py-2 text-sm font-medium transition",
-                  active ? "bg-slate-900 text-white" : "bg-white text-slate-700 hover:bg-slate-50",
-                ].join(" ")}
-              >
-                {option.label}
-              </button>
-            );
-          })}
+          <div className="flex flex-wrap items-center gap-2">
+            {([
+              { key: "all", label: "Totales", count: urgencyCounts.all },
+              { key: "normal", label: "Normales", count: urgencyCounts.normal },
+              { key: "urgente", label: "Urgentes", count: urgencyCounts.urgente },
+            ] as const).map((option) => {
+              const active = urgencyFilter === option.key;
+              return (
+                <button
+                  key={option.key}
+                  type="button"
+                  onClick={() => setUrgencyFilter(option.key)}
+                  className={[
+                    "rounded-full border px-4 py-2 text-sm font-medium transition",
+                    active
+                      ? "border-slate-900 bg-slate-900 text-white"
+                      : "border-slate-400 bg-white text-slate-700 hover:bg-slate-50",
+                  ].join(" ")}
+                >
+                  {option.label} ({option.count})
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         <label className="relative mt-5 block">
@@ -143,55 +156,55 @@ export function ComprasPendingPage() {
             No hay ordenes pendientes en Compras.
           </div>
         ) : (
-          orders.map((order) => {
-            const sender = latestEventToStatus(order.events, "sourcing");
-            return (
-              <article
-                key={order.id}
-                className="rounded-[22px] border border-slate-200 bg-white px-5 py-5"
-              >
-                <p className="text-[18px] font-semibold text-slate-900">Folio: {order.id}</p>
-                <p className="mt-2 text-sm text-slate-600">
-                  {order.requesterName} · {order.areaName}
-                </p>
-
-                <div className="mt-3 flex flex-wrap gap-2">
+          orders.map((order) => (
+            <article
+              key={order.id}
+              className="rounded-[20px] border border-slate-200 bg-white px-5 py-5"
+            >
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-[19px] font-semibold text-slate-900">Folio: {order.id}</p>
+                  <p className="mt-2 text-sm text-slate-700">
+                    Solicitante: {order.requesterName} | Area del solicitante: {order.areaName}
+                  </p>
+                  {urgencyLine(order) ? (
+                    <p className="mt-1 text-sm font-medium text-red-700">{urgencyLine(order)}</p>
+                  ) : null}
+                </div>
+                <div className="flex flex-wrap gap-2 lg:justify-end">
                   <StatusBadge
                     label={order.urgency === "urgente" ? "Urgente" : "Normal"}
-                    tone={order.urgency === "urgente" ? "danger" : "neutral"}
+                    tone={urgencyTone(order)}
                   />
-                  <StatusBadge label={getOrderStatusLabel(order.status)} tone="info" />
                 </div>
+              </div>
 
-                {order.urgentJustification ? (
-                  <p className="mt-3 text-sm text-red-700">{order.urgentJustification}</p>
-                ) : null}
+              <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+                <Link
+                  to={`/workflow/compras/pendientes/${order.id}`}
+                  className="inline-flex items-center rounded-2xl border border-slate-700 bg-[#f7f7f7] px-3 py-2 text-sm font-medium text-slate-800"
+                >
+                  <FileText size={15} className="mr-2" />
+                  Ver PDF
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => exportOrderCsv(order)}
+                  className="inline-flex items-center rounded-2xl border border-slate-300 bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700"
+                >
+                  <Download size={15} className="mr-2" />
+                  Descargar CSV
+                </button>
+              </div>
 
-                <div className="mt-3 space-y-1 text-sm text-slate-500">
-                  <p>Tiempo en Revision operativa: {formatDuration(order.statusDurations.intakeReview)}</p>
-                  <p>Enviada por: {sender?.byRole || sender?.byUserId || "No disponible"}</p>
-                </div>
-
-                <div className="mt-4 flex flex-wrap justify-end gap-2">
-                  <Link
-                    to={`/workflow/compras/${order.id}`}
-                    className="inline-flex items-center rounded-2xl border border-slate-700 bg-[#f7f7f7] px-3 py-2 text-sm font-medium text-slate-800"
-                  >
-                    <FileText size={15} className="mr-2" />
-                    Ver PDF
-                  </Link>
-                  <button
-                    type="button"
-                    onClick={() => exportOrderCsv(order)}
-                    className="inline-flex items-center rounded-2xl border border-slate-300 bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700"
-                  >
-                    <Download size={15} className="mr-2" />
-                    Descargar CSV
-                  </button>
-                </div>
-              </article>
-            );
-          })
+              <div className="mt-4 flex justify-end">
+                <p className="text-sm text-slate-500">
+                  <span className="font-semibold text-slate-700">Tiempo en revision operativa:</span>{" "}
+                  {formatDuration(order.statusDurations.intakeReview)}
+                </p>
+              </div>
+            </article>
+          ))
         )}
       </section>
     </div>

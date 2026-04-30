@@ -457,6 +457,7 @@ class PurchaseOrderRepository {
     required AppUser actor,
     required List<PurchaseOrderItem> items,
     required num totalBudget,
+    required MoneyCurrency amountCurrency,
     required Map<String, num> supplierBudgets,
     required String? primarySupplier,
     required String? primaryInternalOrder,
@@ -472,6 +473,7 @@ class PurchaseOrderRepository {
       'supplier': primarySupplier,
       'internalOrder': primaryInternalOrder,
       'budget': totalBudget,
+      'amountCurrency': amountCurrency.code,
       'supplierBudgets': supplierBudgets,
       'processByName': normalizedName,
       'processByArea': normalizedArea.isEmpty ? null : normalizedArea,
@@ -981,7 +983,7 @@ class PurchaseOrderRepository {
       'status': nextStatus.name,
       'requesterReceivedAt': appServerTimestamp,
       'requesterReceivedName': 'Sistema',
-      'requesterReceivedArea': 'Autocierre 10 dias',
+      'requesterReceivedArea': 'Autocierre 5 dias habiles',
       'requesterReceiptAutoConfirmed': true,
       'completedAt': appServerTimestamp,
       'updatedAt': appServerTimestamp,
@@ -1001,7 +1003,7 @@ class PurchaseOrderRepository {
         byRole: 'Sistema',
         type: 'received_timeout',
         comment:
-            'Autocierre por 10 dias sin confirmacion del solicitante. Estado final: llegado pero no confirmado.',
+            'Autocierre por 5 dias habiles sin reaccion del solicitante. El sistema marco el item como enterado por falta de reaccion humana.',
       ),
     );
   }
@@ -1108,6 +1110,7 @@ String _orderSignature(PurchaseOrder order) {
           item.customer ?? '',
           item.supplier ?? '',
           item.budget?.toString() ?? '',
+          item.amountCurrency.code,
           item.internalOrder ?? '',
           estimatedDate.toString(),
           deliveryEtaDate.toString(),
@@ -1146,6 +1149,7 @@ String _orderSignature(PurchaseOrder order) {
     order.supplier ?? '',
     order.internalOrder ?? '',
     order.budget?.toString() ?? '',
+    order.amountCurrency.code,
     (order.supplierBudgets.entries.toList()
           ..sort((left, right) => left.key.compareTo(right.key)))
         .map((entry) => '${entry.key}=${entry.value}')

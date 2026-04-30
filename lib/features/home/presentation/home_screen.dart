@@ -251,7 +251,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               icon: Icons.approval_outlined,
               color: scheme.tertiaryContainer,
               foreground: scheme.onTertiaryContainer,
-              enabled: hasDireccionApprovalAccess(user),
+              enabled: canAccessDireccionGeneralModule(user),
               countProvider: pendingDireccionPacketsCountProvider,
               onTap: () => guardedPush(context, '/orders/direccion-general'),
             ),

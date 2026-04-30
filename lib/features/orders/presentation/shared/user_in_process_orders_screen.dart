@@ -1448,7 +1448,7 @@ class _RequesterReceiptTimelineTile extends StatelessWidget {
                     padding: const EdgeInsets.only(top: 4),
                     child: Text(
                       order.isRequesterReceiptAutoConfirmed
-                          ? 'La orden se cerro automaticamente despues de 10 dias sin confirmacion del solicitante.'
+                          ? 'La orden se cerro automaticamente despues de 5 dias habiles sin reaccion del solicitante. El sistema la marco como enterada por falta de reaccion humana.'
                           : order.isClosedWithoutPurchase
                           ? 'Todos los items quedaron resueltos sin compra y la orden ya se cerro.'
                           : isCompleted
@@ -1880,21 +1880,21 @@ String _orderTrackingStatusLabel(PurchaseOrder order) {
 String _trackingStageLabel(PurchaseOrderStatus status) {
   switch (status) {
     case PurchaseOrderStatus.intakeReview:
-      return 'Autorizar ordenes';
+      return 'Compras/Cotización';
     case PurchaseOrderStatus.sourcing:
       return 'Compras / Pendientes';
     case PurchaseOrderStatus.readyForApproval:
       return 'Compras / Dashboard';
     case PurchaseOrderStatus.approvalQueue:
-      return 'Direccion General';
+      return 'Proceso de liberación de pago';
     case PurchaseOrderStatus.paymentDone:
-      return 'Agregar fecha estimada';
+      return 'Confirmación de compra / Fecha estimada de entrega';
     case PurchaseOrderStatus.contabilidad:
-      return 'Facturas y evidencias';
+      return 'Transito';
     case PurchaseOrderStatus.eta:
-      return 'Ordenes en proceso';
+      return 'Material en almacen';
     case PurchaseOrderStatus.orderPlaced:
-      return 'Ordenes en proceso';
+      return 'Material en almacen';
     case PurchaseOrderStatus.draft:
       return 'Requiere correccion';
   }

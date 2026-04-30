@@ -24,6 +24,7 @@ import {
 } from "@/features/orders/create-order-data";
 import {
   readCreateOrderFormDraft,
+  readCreateOrderPreviewDraft,
   saveCreateOrderPreviewDraft,
   saveCreateOrderFormDraft,
   type CreateOrderPreviewDraft,
@@ -81,9 +82,7 @@ export function CreateOrderPage() {
   const hydratedDraftRef = useRef(false);
 
   const [urgency, setUrgency] = useState<OrderUrgency>("normal");
-  const [requestedDate, setRequestedDate] = useState<Date | null>(
-    firstAllowedNormalRequestedDeliveryDate(),
-  );
+  const [requestedDate, setRequestedDate] = useState<Date | null>(null);
   const [notes, setNotes] = useState("");
   const [urgentJustification, setUrgentJustification] = useState("");
   const [items, setItems] = useState<OrderDraftItem[]>([emptyOrderItem(1)]);
@@ -222,6 +221,7 @@ export function CreateOrderPage() {
       return;
     }
 
+    const previousPreviewDraft = readCreateOrderPreviewDraft();
     const previewDraft: CreateOrderPreviewDraft = {
       company,
       requester: profile!,
@@ -231,6 +231,7 @@ export function CreateOrderPage() {
       urgentJustification,
       items,
       createdAt: Date.now(),
+      reservedOrderId: previousPreviewDraft?.reservedOrderId,
     };
 
     saveCreateOrderPreviewDraft(previewDraft);
@@ -256,18 +257,11 @@ export function CreateOrderPage() {
                     type="button"
                     onClick={() => {
                       setUrgency(option);
-                      if (
-                        option === "normal" &&
-                        requestedDate &&
-                        !isAllowedNormalRequestedDeliveryDate(requestedDate)
-                      ) {
+                      if (option === "normal" && requestedDate && !isAllowedNormalRequestedDeliveryDate(requestedDate)) {
                         setRequestedDate(firstAllowedNormalRequestedDeliveryDate());
                       }
-                      if (
-                        option === "urgente" &&
-                        (!requestedDate || !isAllowedUrgentRequestedDeliveryDate(requestedDate))
-                      ) {
-                        setRequestedDate(normalizeCalendarDate(new Date()));
+                      if (option === "urgente" && requestedDate && !isAllowedUrgentRequestedDeliveryDate(requestedDate)) {
+                        setRequestedDate(null);
                       }
                     }}
                     className={[

@@ -10,6 +10,7 @@ import {
   clearPacketPreviewDraft,
   readPacketPreviewDraft,
 } from "@/features/purchase-packets/packet-pdf-preview-state";
+import { Snackbar } from "@/shared/ui/snackbar";
 
 function mapBundleToPdfInput(bundle: PacketBundleRecord, company: "chabely" | "acerpro") {
   return {
@@ -42,6 +43,12 @@ export function PurchasePacketPreviewPage() {
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
   const [isLoadingPdf, setIsLoadingPdf] = useState(true);
+
+  useEffect(() => {
+    if (!pageError) return;
+    const timeoutId = window.setTimeout(() => setPageError(null), 3600);
+    return () => window.clearTimeout(timeoutId);
+  }, [pageError]);
 
   const source = useMemo(() => {
     if (packetId) {
@@ -108,12 +115,6 @@ export function PurchasePacketPreviewPage() {
         </div>
       </section>
 
-      {pageError ? (
-        <div className="mx-5 mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {pageError}
-        </div>
-      ) : null}
-
       <section className="flex-1 overflow-hidden bg-white">
         {isLoadingPdf ? (
           <div className="flex h-[calc(100vh-90px)] items-center justify-center text-sm text-slate-500">
@@ -127,6 +128,8 @@ export function PurchasePacketPreviewPage() {
           </div>
         )}
       </section>
+
+      <Snackbar message={pageError} tone="error" />
     </div>
   );
 }

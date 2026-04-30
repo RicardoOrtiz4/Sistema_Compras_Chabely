@@ -58,6 +58,7 @@ class _PurchasePacketsScreenState extends ConsumerState<PurchasePacketsScreen> {
   Timer? _searchDebounce;
   String _searchQuery = '';
   DateTimeRange? _createdDateRangeFilter;
+  MoneyCurrency _selectedAmountCurrency = MoneyCurrency.mxn;
   bool _creating = false;
 
   @override
@@ -111,9 +112,10 @@ class _PurchasePacketsScreenState extends ConsumerState<PurchasePacketsScreen> {
   Widget build(BuildContext context) {
     final user = ref.watch(currentUserProfileProvider).value;
     final allOrdersAsync = ref.watch(allOrdersProvider);
+    final canApproveDireccionActions = hasDireccionApprovalAccess(user);
     final canUseModule = switch (widget.mode) {
       PurchasePacketsViewMode.comprasDashboard => hasComprasAccess(user),
-      PurchasePacketsViewMode.direccionGeneral => hasDireccionApprovalAccess(user),
+      PurchasePacketsViewMode.direccionGeneral => canAccessDireccionGeneralModule(user),
       PurchasePacketsViewMode.combined =>
         hasComprasAccess(user) || hasDireccionApprovalAccess(user),
     };
@@ -192,10 +194,67 @@ class _PurchasePacketsScreenState extends ConsumerState<PurchasePacketsScreen> {
                     supplierController: _supplierController,
                     amountController: _amountController,
                     evidenceController: _evidenceController,
+                    amountCurrency: _selectedAmountCurrency,
                     selectedCount: _selectedItemRefIds.length,
                     creating: _creating,
                     shrinkWrap: isNarrow,
+                    onAmountCurrencyChanged: (value) {
+                      setState(() => _selectedAmountCurrency = value);
+                    },
                     onCreate: () => _createPacket(context),
+                  ),
+                );
+                final packetsContent = packetsAsync.when(
+                  data: (bundles) {
+                    final allOrders = allOrdersAsync.valueOrNull;
+                    final baseVisibleBundles = widget.mode ==
+                            PurchasePacketsViewMode.direccionGeneral
+                        ? bundles
+                            .where(
+                              _bundleCountsAsPendingDireccion,
+                            )
+                            .toList(growable: false)
+                        : bundles;
+                    final visibleBundles = widget.mode ==
+                            PurchasePacketsViewMode.direccionGeneral
+                        ? _filterDireccionGeneralBundlesByUrgency(
+                            baseVisibleBundles,
+                            allOrders ?? const <PurchaseOrder>[],
+                            _urgencyFilter,
+                          ).where(
+                            (bundle) => allOrders == null
+                                ? true
+                                : _bundleMatchesOrderFilters(
+                                    bundle,
+                                    allOrders,
+                                    searchQuery: _searchQuery,
+                                    createdDateRangeFilter: _createdDateRangeFilter,
+                                  ),
+                          ).toList(growable: false)
+                        : baseVisibleBundles;
+                    return _PacketList(
+                      bundles: visibleBundles,
+                      isDireccionView:
+                          widget.mode == PurchasePacketsViewMode.direccionGeneral,
+                      canSubmit: widget.mode != PurchasePacketsViewMode.direccionGeneral &&
+                          hasComprasAccess(user),
+                      canApprove: widget.mode != PurchasePacketsViewMode.comprasDashboard &&
+                          canApproveDireccionActions,
+                      shrinkWrap: widget.mode == PurchasePacketsViewMode.direccionGeneral
+                          ? false
+                          : isNarrow,
+                      onSubmit: (bundle) => _submitPacket(context, bundle),
+                      onApprove: (bundle) => _approvePacket(context, bundle),
+                      onReturn: (bundle) => _returnPacket(context, bundle),
+                      onCloseItems: (bundle) => _closeItems(context, bundle),
+                      onViewEvidence: (bundle) => _showEvidenceLinks(context, bundle),
+                    );
+                  },
+                  loading: () => const Center(child: CircularProgressIndicator()),
+                  error: (error, stack) => Center(
+                    child: Text(
+                      reportError(error, stack, context: 'PurchasePacketsScreen.packets'),
+                    ),
                   ),
                 );
                 final packetsPanel = _Panel(
@@ -206,59 +265,14 @@ class _PurchasePacketsScreenState extends ConsumerState<PurchasePacketsScreen> {
                       ? 'Revision ejecutiva separada de Compras.'
                       : 'Versionados, con decisiones append-only y telemetria.',
                   expandChild: !isNarrow,
-                  child: packetsAsync.when(
-                    data: (bundles) {
-                      final allOrders = allOrdersAsync.valueOrNull;
-                      final baseVisibleBundles = widget.mode ==
-                              PurchasePacketsViewMode.direccionGeneral
-                          ? bundles
-                              .where(
-                                _bundleCountsAsPendingDireccion,
-                              )
-                              .toList(growable: false)
-                          : bundles;
-                      final visibleBundles = widget.mode ==
-                              PurchasePacketsViewMode.direccionGeneral
-                          ? _filterDireccionGeneralBundlesByUrgency(
-                              baseVisibleBundles,
-                              allOrders ?? const <PurchaseOrder>[],
-                              _urgencyFilter,
-                            ).where(
-                              (bundle) => allOrders == null
-                                  ? true
-                                  : _bundleMatchesOrderFilters(
-                                      bundle,
-                                      allOrders,
-                                      searchQuery: _searchQuery,
-                                      createdDateRangeFilter: _createdDateRangeFilter,
-                                    ),
-                            ).toList(growable: false)
-                          : baseVisibleBundles;
-                      return _PacketList(
-                      bundles: visibleBundles,
-                      canSubmit: widget.mode != PurchasePacketsViewMode.direccionGeneral &&
-                          hasComprasAccess(user),
-                      canApprove: widget.mode != PurchasePacketsViewMode.comprasDashboard &&
-                          hasDireccionApprovalAccess(user),
-                      shrinkWrap: isNarrow,
-                      onSubmit: (bundle) => _submitPacket(context, bundle),
-                      onApprove: (bundle) => _approvePacket(context, bundle),
-                      onReturn: (bundle) => _returnPacket(context, bundle),
-                      onCloseItems: (bundle) => _closeItems(context, bundle),
-                      onViewEvidence: (bundle) => _showEvidenceLinks(context, bundle),
-                    );
-                    },
-                    loading: () => const Center(child: CircularProgressIndicator()),
-                    error: (error, stack) => Center(
-                      child: Text(reportError(error, stack, context: 'PurchasePacketsScreen.packets')),
-                    ),
-                  ),
+                  child: packetsContent,
                 );
 
                 if (widget.mode == PurchasePacketsViewMode.direccionGeneral) {
                   return Padding(
                     padding: const EdgeInsets.all(16),
                     child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _PacketOrderSearchDateToolbar(
                           controller: _searchController,
@@ -270,7 +284,17 @@ class _PurchasePacketsScreenState extends ConsumerState<PurchasePacketsScreen> {
                           onClearDate: _clearCreatedDateFilter,
                         ),
                         const SizedBox(height: 16),
-                        Expanded(child: packetsPanel),
+                        Text(
+                          'Paquetes por aprobar',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Revision ejecutiva separada de Compras.',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 16),
+                        Expanded(child: packetsContent),
                       ],
                     ),
                   );
@@ -330,6 +354,7 @@ class _PurchasePacketsScreenState extends ConsumerState<PurchasePacketsScreen> {
             actor: actor,
             supplierName: _supplierController.text,
             totalAmount: totalAmount,
+            amountCurrency: _selectedAmountCurrency,
             evidenceUrls: _evidenceController.text
                 .split('\n')
                 .map((line) => line.trim())
@@ -343,6 +368,7 @@ class _PurchasePacketsScreenState extends ConsumerState<PurchasePacketsScreen> {
         _supplierController.clear();
         _amountController.clear();
         _evidenceController.clear();
+        _selectedAmountCurrency = MoneyCurrency.mxn;
       });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Paquete creado.')),
@@ -541,6 +567,7 @@ class _PurchasePacketsScreenState extends ConsumerState<PurchasePacketsScreen> {
     BuildContext context,
     PacketBundle bundle,
   ) async {
+    final evidenceUrls = _normalizedPacketEvidenceUrls(bundle.packet);
     await showDialog<void>(
       context: context,
       builder: (dialogContext) {
@@ -548,13 +575,13 @@ class _PurchasePacketsScreenState extends ConsumerState<PurchasePacketsScreen> {
           title: Text('Links de cotizacion - ${bundle.packet.supplierName}'),
           content: SizedBox(
             width: 560,
-            child: bundle.packet.evidenceUrls.isEmpty
+            child: evidenceUrls.isEmpty
                 ? const Text('Este paquete no tiene links de cotizacion.')
                 : Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      for (final url in bundle.packet.evidenceUrls)
+                      for (final url in evidenceUrls)
                         Padding(
                           padding: const EdgeInsets.only(bottom: 12),
                           child: InkWell(
@@ -657,6 +684,13 @@ bool _bundleCountsAsPendingDireccion(PacketBundle bundle) {
   final sorted = [...bundle.decisions]
     ..sort((left, right) => right.timestamp.compareTo(left.timestamp));
   return sorted.first.action != PacketDecisionAction.returnForRework;
+}
+
+List<String> _normalizedPacketEvidenceUrls(PurchasePacket packet) {
+  return packet.evidenceUrls
+      .map((value) => value.trim())
+      .where((value) => value.isNotEmpty)
+      .toList(growable: false);
 }
 
 String _compactLinkLabel(String value) {
@@ -878,7 +912,7 @@ class _ReadyOrdersList extends StatelessWidget {
                       },
                 title: Text('${item.partNumber} · ${item.description}'),
                 subtitle: Text(
-                  'Item ${item.id} | ${item.quantity} ${item.unit} | Prov: ${item.supplierName ?? 'sin definir'} | Monto: ${item.estimatedAmount ?? 0}',
+                  'Item ${item.id} | ${item.quantity} ${item.unit} | Prov: ${item.supplierName ?? 'sin definir'} | Monto: ${_formatMoneyAmount(item.estimatedAmount ?? 0, item.amountCurrency)}',
                 ),
               ),
           ],
@@ -893,18 +927,22 @@ class _CreatePacketForm extends StatelessWidget {
     required this.supplierController,
     required this.amountController,
     required this.evidenceController,
+    required this.amountCurrency,
     required this.selectedCount,
     required this.creating,
     this.shrinkWrap = false,
+    required this.onAmountCurrencyChanged,
     required this.onCreate,
   });
 
   final TextEditingController supplierController;
   final TextEditingController amountController;
   final TextEditingController evidenceController;
+  final MoneyCurrency amountCurrency;
   final int selectedCount;
   final bool creating;
   final bool shrinkWrap;
+  final ValueChanged<MoneyCurrency> onAmountCurrencyChanged;
   final VoidCallback onCreate;
 
   @override
@@ -925,6 +963,27 @@ class _CreatePacketForm extends StatelessWidget {
           labelText: 'Monto total',
           border: OutlineInputBorder(),
         ),
+      ),
+      const SizedBox(height: 12),
+      DropdownButtonFormField<MoneyCurrency>(
+        value: amountCurrency,
+        decoration: const InputDecoration(
+          labelText: 'Moneda',
+          border: OutlineInputBorder(),
+        ),
+        items: MoneyCurrency.values
+            .map(
+              (currency) => DropdownMenuItem<MoneyCurrency>(
+                value: currency,
+                child: Text(currency.label),
+              ),
+            )
+            .toList(growable: false),
+        onChanged: (value) {
+          if (value != null) {
+            onAmountCurrencyChanged(value);
+          }
+        },
       ),
       const SizedBox(height: 12),
       TextField(
@@ -1042,6 +1101,7 @@ class _DireccionGeneralPacketPdfScreen extends ConsumerWidget {
 class _PacketList extends StatelessWidget {
   const _PacketList({
     required this.bundles,
+    required this.isDireccionView,
     required this.canSubmit,
     required this.canApprove,
     this.shrinkWrap = false,
@@ -1053,6 +1113,7 @@ class _PacketList extends StatelessWidget {
   });
 
   final List<PacketBundle> bundles;
+  final bool isDireccionView;
   final bool canSubmit;
   final bool canApprove;
   final bool shrinkWrap;
@@ -1079,15 +1140,13 @@ class _PacketList extends StatelessWidget {
       itemBuilder: (context, index) {
         final bundle = bundles[index];
         final packet = bundle.packet;
+        final evidenceUrls = _normalizedPacketEvidenceUrls(packet);
         final orderIds = packet.itemRefs
             .map((item) => item.orderId)
             .toSet()
             .toList(growable: false)
           ..sort();
-        final isDireccionCard = canApprove && !canSubmit;
-        final direccionGeneralDuration = packet.submittedAt == null
-            ? Duration.zero
-            : DateTime.now().difference(packet.submittedAt!);
+        final isDireccionCard = isDireccionView;
         return Card(
           margin: EdgeInsets.zero,
           child: Padding(
@@ -1108,7 +1167,9 @@ class _PacketList extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 if (!isDireccionCard)
-                  Text('Monto ${packet.totalAmount} | Items ${packet.itemRefs.length}'),
+                  Text(
+                    'Monto ${_formatMoneyAmount(packet.totalAmount, packet.amountCurrency)} | Items ${packet.itemRefs.length}',
+                  ),
                 if (isDireccionCard) ...[
                   Text(
                     'TOTAL A PAGAR',
@@ -1118,23 +1179,18 @@ class _PacketList extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    packet.totalAmount.toString(),
+                    _formatMoneyAmount(packet.totalAmount, packet.amountCurrency),
                     style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                           fontWeight: FontWeight.w900,
                         ),
                   ),
-                  const SizedBox(height: 12),
-                  StatusDurationPill(
-                    text:
-                        'Tiempo en Compras: ${formatDurationLabel(direccionGeneralDuration)}',
-                  ),
-                  if (packet.evidenceUrls.isNotEmpty) ...[
+                  if (evidenceUrls.isNotEmpty) ...[
                     const SizedBox(height: 12),
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
                       children: [
-                        for (final link in packet.evidenceUrls)
+                        for (final link in evidenceUrls)
                           ActionChip(
                             avatar: const Icon(Icons.link_outlined, size: 18),
                             label: Text(_compactLinkLabel(link)),
@@ -1202,7 +1258,7 @@ class _PacketList extends StatelessWidget {
                         onPressed: () => unawaited(onReturn(bundle)),
                         child: const Text('Regresar'),
                       ),
-                    if (isDireccionCard)
+                    if (isDireccionCard && canApprove)
                       FilledButton(
                         style: _positiveFilledButtonStyle(context),
                         onPressed: () => unawaited(onApprove(bundle)),
@@ -1236,7 +1292,7 @@ class _PacketList extends StatelessWidget {
                         onPressed: () => unawaited(onCloseItems(bundle)),
                         child: const Text('Cerrar no comprables'),
                       ),
-                    if (packet.evidenceUrls.isNotEmpty)
+                    if (evidenceUrls.isNotEmpty)
                       OutlinedButton(
                         onPressed: () => unawaited(onViewEvidence(bundle)),
                         child: const Text('Ver links'),
@@ -1304,6 +1360,7 @@ _PacketPdfBatch _packetBatchFromBundle(PacketBundle bundle) {
   return _PacketPdfBatch(
     supplier: bundle.packet.supplierName,
     items: rows,
+    amountCurrency: bundle.packet.amountCurrency,
   );
 }
 
@@ -1330,6 +1387,7 @@ OrderPdfData _buildPacketPdfData({
             unit: item.unit,
             supplier: batch.supplier,
             budget: item.amount,
+            amountCurrency: batch.amountCurrency,
           ),
         )
         .toList(growable: false),
@@ -1338,6 +1396,7 @@ OrderPdfData _buildPacketPdfData({
     folio: bundle.packet.folio,
     supplier: batch.supplier,
     budget: batch.totalAmount,
+    amountCurrency: batch.amountCurrency,
     supplierBudgets: <String, num>{batch.supplier: batch.totalAmount},
     cacheSalt: 'direccion:${bundle.packet.id}:${bundle.packet.version}:${bundle.packet.folio ?? ''}',
   );
@@ -1497,7 +1556,7 @@ Future<Uint8List> _buildPacketPdfDocument({
                 ),
                 pw.SizedBox(height: 6),
                 pw.Text(
-                  batch.totalAmount.toString(),
+                  _formatMoneyAmount(batch.totalAmount, batch.amountCurrency),
                   style: pw.TextStyle(
                     fontSize: 30,
                     fontWeight: pw.FontWeight.bold,
@@ -1568,7 +1627,12 @@ Future<Uint8List> _buildPacketPdfDocument({
                     _packetPdfCell(batch.items[index].description),
                     _packetPdfCell('${batch.items[index].quantity}'),
                     _packetPdfCell(batch.items[index].unit),
-                    _packetPdfCell(batch.items[index].amount.toString()),
+                    _packetPdfCell(
+                      _formatMoneyAmount(
+                        batch.items[index].amount,
+                        batch.amountCurrency,
+                      ),
+                    ),
                   ],
                 ),
             ],
@@ -1607,14 +1671,20 @@ class _PacketPdfBatch {
   const _PacketPdfBatch({
     required this.supplier,
     required this.items,
+    required this.amountCurrency,
   });
 
   final String supplier;
   final List<_PacketPdfItem> items;
+  final MoneyCurrency amountCurrency;
 
   num get totalAmount => items.fold<num>(0, (sum, item) => sum + item.amount);
   List<String> get orderIds => items.map((item) => item.orderId).toSet().toList(growable: false)
     ..sort();
+}
+
+String _formatMoneyAmount(num amount, MoneyCurrency currency) {
+  return '${currency.code} $amount';
 }
 
 pw.Widget _packetPdfSectionTitle(

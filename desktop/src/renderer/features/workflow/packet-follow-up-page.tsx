@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { FileText, Search } from "lucide-react";
 import { Link } from "react-router-dom";
 import { hasComprasAccess, hasDireccionApprovalAccess } from "@/lib/access-control";
@@ -21,6 +21,7 @@ import {
 } from "@/features/workflow/packet-follow-up-service";
 import { StatusBadge } from "@/shared/ui/status-badge";
 import { useSessionStore } from "@/store/session-store";
+import { Snackbar } from "@/shared/ui/snackbar";
 
 type FollowUpTab = "eta" | "facturas";
 type UrgencyFilter = "all" | "normal" | "urgente";
@@ -178,6 +179,18 @@ export function PacketFollowUpPage() {
     [orders, search, tab, urgencyFilter],
   );
 
+  useEffect(() => {
+    if (!actionError) return;
+    const timer = window.setTimeout(() => setActionError(null), 3600);
+    return () => window.clearTimeout(timer);
+  }, [actionError]);
+
+  useEffect(() => {
+    if (!actionMessage) return;
+    const timer = window.setTimeout(() => setActionMessage(null), 3600);
+    return () => window.clearTimeout(timer);
+  }, [actionMessage]);
+
   if (!canViewModule) {
     return (
       <div className="rounded-[18px] border border-slate-200 bg-white px-5 py-4 text-sm text-slate-600">
@@ -205,17 +218,6 @@ export function PacketFollowUpPage() {
             <StatusBadge label={`${waitingOrders.length} orden(es) activas`} tone="warning" />
           </div>
         </div>
-
-        {actionError ? (
-          <div className="mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {actionError}
-          </div>
-        ) : null}
-        {actionMessage ? (
-          <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-            {actionMessage}
-          </div>
-        ) : null}
 
         <div className="mt-5 flex flex-wrap gap-3">
           <button
@@ -390,6 +392,8 @@ export function PacketFollowUpPage() {
           </div>
         </aside>
       </section>
+      <Snackbar message={actionError} tone="error" />
+      <Snackbar message={actionMessage} tone="success" />
     </div>
   );
 }

@@ -27,6 +27,7 @@ import { useSessionStore } from "@/store/session-store";
 export function AppShell() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [brandMenuOpen, setBrandMenuOpen] = useState(false);
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
   const profile = useSessionStore((state) => state.profile);
@@ -35,6 +36,9 @@ export function AppShell() {
   const selectCompany = useBrandingStore((state) => state.selectCompany);
 
   const currentSection = useMemo(() => {
+    if (location.pathname.startsWith("/workflow/compras")) {
+      return "Compras";
+    }
     const match = navigationItems.find((item) =>
       item.to === "/" ? location.pathname === "/" : location.pathname.startsWith(item.to),
     );
@@ -59,12 +63,16 @@ export function AppShell() {
               className="text-white hover:bg-white/10"
               onClick={() => {
                 if (showBackHome) {
+                  if (location.pathname.startsWith("/workflow/compras/")) {
+                    navigate("/workflow/compras");
+                    return;
+                  }
                   navigate("/");
                   return;
                 }
                 setDrawerOpen(true);
               }}
-              title={showBackHome ? "Volver a Inicio" : "Abrir menú de navegación"}
+              title={showBackHome ? "Volver a Inicio" : "Abrir menu de navegacion"}
             >
               {showBackHome ? <ArrowLeft size={22} /> : <Menu size={22} />}
             </Button>
@@ -73,14 +81,20 @@ export function AppShell() {
               className="flex h-[76px] w-[76px] items-center justify-center overflow-hidden rounded-2xl shadow-sm"
               style={{ background: "#ffffff" }}
             >
-              <img src={branding.logoPath} alt={branding.displayName} className="h-full w-full object-contain" />
+              <img
+                src={branding.logoPath}
+                alt={branding.displayName}
+                className="h-full w-full object-contain"
+              />
             </div>
 
             <div>
               <p className="text-[24px] font-semibold leading-tight text-white sm:text-[28px]">
                 {location.pathname === "/" ? "Inicio" : currentSection}
               </p>
-              <p className="text-sm text-white/78">{profile?.name ?? "Sin sesión"} · {branding.displayName}</p>
+              <p className="text-sm text-white/78">
+                {profile?.name ?? "Sin sesion"} | {branding.displayName}
+              </p>
             </div>
           </div>
 
@@ -122,7 +136,11 @@ export function AppShell() {
                           setBrandMenuOpen(false);
                         }}
                       >
-                        <img src={company.logoPath} alt={company.displayName} className="h-8 w-8 object-contain" />
+                        <img
+                          src={company.logoPath}
+                          alt={company.displayName}
+                          className="h-8 w-8 object-contain"
+                        />
                         <span>{company.displayName}</span>
                       </button>
                     ))}
@@ -151,22 +169,9 @@ export function AppShell() {
                 background: "color-mix(in srgb, white 12%, transparent)",
               }}
             >
-              <p className="text-sm font-semibold text-white">{profile?.name ?? "Sin sesión"}</p>
+              <p className="text-sm font-semibold text-white">{profile?.name ?? "Sin sesion"}</p>
               <p className="text-xs text-white/72">{profile?.areaDisplay ?? "Sin perfil"}</p>
             </div>
-
-            <Button
-              type="button"
-              variant="ghost"
-              className="text-white hover:bg-white/10"
-              onClick={async () => {
-                await signOut();
-                navigate("/login");
-              }}
-            >
-              <LogOut size={16} className="mr-2" />
-              Cerrar sesión
-            </Button>
           </div>
         </div>
       </header>
@@ -191,14 +196,18 @@ export function AppShell() {
                   className="inline-flex h-11 w-11 items-center justify-center rounded-full"
                   style={{ color: branding.secondary }}
                   onClick={() => setDrawerOpen(false)}
-                  title="Cerrar menú de navegación"
+                  title="Cerrar menu de navegacion"
                 >
                   <Menu size={22} />
                 </button>
-                <img src={branding.logoPath} alt={branding.displayName} className="h-9 w-9 object-contain" />
+                <img
+                  src={branding.logoPath}
+                  alt={branding.displayName}
+                  className="h-9 w-9 object-contain"
+                />
                 <div>
                   <p className="text-lg font-semibold" style={{ color: branding.primary }}>
-                    Menú
+                    Menu
                   </p>
                   <p className="text-xs" style={{ color: branding.secondary }}>
                     {branding.displayName}
@@ -218,7 +227,7 @@ export function AppShell() {
               />
               <DrawerLink
                 to="/orders/history"
-                label="Historial de mis órdenes"
+                label="Historial de mis ordenes"
                 icon={<Clock3 size={18} />}
                 onClick={() => setDrawerOpen(false)}
                 color={branding.secondary}
@@ -241,16 +250,74 @@ export function AppShell() {
                   color={branding.secondary}
                 />
               ) : null}
-              <DrawerLink
-                to="/profile"
+              <DrawerAction
                 label="Perfil"
                 icon={<User size={18} />}
-                onClick={() => setDrawerOpen(false)}
-                disabled
+                onClick={() => {
+                  setDrawerOpen(false);
+                  setProfileModalOpen(true);
+                }}
                 color={branding.secondary}
               />
             </div>
           </aside>
+        </div>
+      ) : null}
+
+      {profileModalOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4"
+          onClick={() => setProfileModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-[460px] rounded-[28px] border bg-white p-6 shadow-[0_30px_80px_rgba(15,23,42,0.24)]"
+            style={{ borderColor: "color-mix(in srgb, var(--app-primary) 12%, white)" }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start gap-4">
+              <div
+                className="flex h-14 w-14 items-center justify-center rounded-full"
+                style={{
+                  background: "color-mix(in srgb, var(--app-primary) 10%, white)",
+                  color: branding.primary,
+                }}
+              >
+                <User size={22} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[20px] font-semibold text-slate-900">Perfil</p>
+                <p className="mt-1 text-sm text-slate-500">Informacion de la sesion actual</p>
+              </div>
+            </div>
+
+            <div className="mt-6 space-y-4 rounded-[24px] bg-slate-50 px-5 py-5">
+              <ProfileRow label="Nombre" value={profile?.name ?? "Sin sesion"} />
+              <ProfileRow label="Area" value={profile?.areaDisplay ?? "Sin perfil"} />
+              <ProfileRow label="Correo" value={profile?.email ?? "Sin correo"} breakAll />
+            </div>
+
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setProfileModalOpen(false)}
+                className="rounded-2xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700"
+              >
+                Cerrar
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  setProfileModalOpen(false);
+                  await signOut();
+                  navigate("/login");
+                }}
+                className="inline-flex items-center justify-center rounded-2xl border border-slate-900 bg-slate-900 px-4 py-2.5 text-sm font-medium text-white"
+              >
+                <LogOut size={16} className="mr-2" />
+                Cerrar sesion
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
 
@@ -296,35 +363,72 @@ function DrawerLink({
   label,
   icon,
   onClick,
-  disabled = false,
   color,
 }: {
   to: string;
   label: string;
   icon: ReactNode;
   onClick: () => void;
-  disabled?: boolean;
   color: string;
 }) {
-  if (disabled) {
-    return (
-      <div className="mb-1 flex items-center justify-between rounded-2xl px-4 py-3 text-sm opacity-50" style={{ color }}>
-        <span className="flex items-center gap-3">
-          {icon}
-          <span>{label}</span>
-        </span>
-        <ChevronRight size={16} />
-      </div>
-    );
-  }
-
   return (
-    <Link to={to} onClick={onClick} className="mb-1 flex items-center justify-between rounded-2xl px-4 py-3 text-sm" style={{ color }}>
+    <Link
+      to={to}
+      onClick={onClick}
+      className="mb-1 flex items-center justify-between rounded-2xl px-4 py-3 text-sm"
+      style={{ color }}
+    >
       <span className="flex items-center gap-3">
         {icon}
         <span>{label}</span>
       </span>
       <ChevronRight size={16} />
     </Link>
+  );
+}
+
+function DrawerAction({
+  label,
+  icon,
+  onClick,
+  color,
+}: {
+  label: string;
+  icon: ReactNode;
+  onClick: () => void;
+  color: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="mb-1 flex w-full items-center justify-between rounded-2xl px-4 py-3 text-sm"
+      style={{ color }}
+    >
+      <span className="flex items-center gap-3">
+        {icon}
+        <span>{label}</span>
+      </span>
+      <ChevronRight size={16} />
+    </button>
+  );
+}
+
+function ProfileRow({
+  label,
+  value,
+  breakAll = false,
+}: {
+  label: string;
+  value: string;
+  breakAll?: boolean;
+}) {
+  return (
+    <div>
+      <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">{label}</p>
+      <p className={["mt-1 text-sm font-medium text-slate-900", breakAll ? "break-all" : ""].join(" ")}>
+        {value}
+      </p>
+    </div>
   );
 }

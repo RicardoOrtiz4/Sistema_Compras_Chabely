@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { submitPurchaseOrder } from "@/features/orders/create-order-service";
-import { hasComprasAccess, hasDireccionApprovalAccess } from "@/lib/access-control";
 import {
   buildOrderPdfBytes,
   type BuildOrderPdfInput,
@@ -11,9 +10,10 @@ import {
   clearCreateOrderFormDraft,
   clearCreateOrderPreviewDraft,
   readCreateOrderPreviewDraft,
+  updateCreateOrderPreviewDraft,
 } from "@/features/orders/create-order-preview-state";
 import { Button } from "@/components/ui/button";
-import { useSessionStore } from "@/store/session-store";
+import { Snackbar } from "@/shared/ui/snackbar";
 
 function buildDraftPdfInput(): BuildOrderPdfInput | null {
   const draft = readCreateOrderPreviewDraft();
@@ -58,13 +58,17 @@ function buildDraftPdfInput(): BuildOrderPdfInput | null {
 
 export function CreateOrderPreviewPage() {
   const navigate = useNavigate();
-  const profile = useSessionStore((state) => state.profile);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
-  const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(null);
   const [isLoadingPdf, setIsLoadingPdf] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
   const draft = useMemo(() => readCreateOrderPreviewDraft(), []);
+
+  useEffect(() => {
+    if (!pageError) return;
+    const timeoutId = window.setTimeout(() => setPageError(null), 3600);
+    return () => window.clearTimeout(timeoutId);
+  }, [pageError]);
 
   useEffect(() => {
     const input = buildDraftPdfInput();
@@ -83,7 +87,6 @@ export function CreateOrderPreviewPage() {
         if (!active) return;
         const blob = new Blob([Uint8Array.from(bytes)], { type: "application/pdf" });
         revokedUrl = URL.createObjectURL(blob);
-        setPdfBytes(bytes);
         setPdfUrl(revokedUrl);
       } catch (error) {
         if (!active) return;
@@ -113,6 +116,13 @@ export function CreateOrderPreviewPage() {
     setIsSubmitting(true);
     try {
       await submitPurchaseOrder({
+        reservedOrderId: draft.reservedOrderId,
+        onOrderIdReserved: (orderId) => {
+          updateCreateOrderPreviewDraft((current) => ({
+            ...current,
+            reservedOrderId: orderId,
+          }));
+        },
         requester: draft.requester,
         urgency: draft.urgency,
         requestedDeliveryDate: new Date(draft.requestedDeliveryDate),
@@ -122,9 +132,12 @@ export function CreateOrderPreviewPage() {
       });
       clearCreateOrderFormDraft();
       clearCreateOrderPreviewDraft();
-      navigate(
-        hasComprasAccess(profile) || hasDireccionApprovalAccess(profile) ? "/workflow/authorize" : "/",
-      );
+      navigate("/", {
+        replace: true,
+        state: {
+          notice: "La requisicion se envio correctamente y quedo pendiente de autorizacion.",
+        },
+      });
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "No se pudo enviar la requisicion.");
     } finally {
@@ -166,6 +179,8 @@ export function CreateOrderPreviewPage() {
           </div>
         )}
       </section>
+
+      <Snackbar message={pageError} tone="error" />
 
       <section className="sticky bottom-0 z-20 border-t border-slate-300 bg-white/94 px-5 py-4 backdrop-blur">
         <button

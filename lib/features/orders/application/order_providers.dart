@@ -241,6 +241,7 @@ String _orderSignature(PurchaseOrder order) {
           item.customer ?? '',
           item.supplier ?? '',
           item.budget?.toString() ?? '',
+          item.amountCurrency.code,
           item.internalOrder ?? '',
           estimatedDate.toString(),
           deliveryEtaDate.toString(),
@@ -280,6 +281,7 @@ String _orderSignature(PurchaseOrder order) {
     order.supplier ?? '',
     order.internalOrder ?? '',
     order.budget?.toString() ?? '',
+    order.amountCurrency.code,
     (order.supplierBudgets.entries.toList()
           ..sort((left, right) => left.key.compareTo(right.key)))
         .map((entry) => '${entry.key}=${entry.value}')

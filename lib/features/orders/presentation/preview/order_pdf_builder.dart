@@ -26,6 +26,7 @@ class OrderPdfData {
     this.supplier,
     this.internalOrder,
     this.budget,
+    this.amountCurrency = MoneyCurrency.mxn,
     this.supplierBudgets = const {},
     this.urgentJustification,
     this.requestedDeliveryDate,
@@ -57,6 +58,7 @@ class OrderPdfData {
   final String? internalOrder;
 
   final num? budget;
+  final MoneyCurrency amountCurrency;
   final Map<String, num> supplierBudgets;
   final String? urgentJustification;
 
@@ -1053,7 +1055,7 @@ pw.Widget _buildItemsTable(
         label: 'COSTO',
         width: 0.9,
         alignment: pw.Alignment.centerRight,
-        value: (item) => _formatCost(item.budget),
+        value: (item) => _formatCost(item.budget, data.amountCurrency),
       ),
   ];
 
@@ -1130,7 +1132,7 @@ pw.Widget _buildItemsTable(
             pw.Expanded(flex: spacerFlex, child: pw.SizedBox.shrink()),
           pw.Expanded(
             flex: costFlex > 0 ? costFlex : 1,
-            child: _totalCostCell(totalCost, bodyStyle),
+            child: _totalCostCell(totalCost, bodyStyle, data.amountCurrency),
           ),
         ],
       ),
@@ -1486,20 +1488,21 @@ String _formatBudget(num? value) {
   return formatter.format(value);
 }
 
-String _formatCost(num? value) {
+String _formatCost(num? value, MoneyCurrency currency) {
   if (value == null) return '';
-  return '\$${_formatBudget(value)}';
+  return '${currency.code} ${_formatBudget(value)}';
 }
 
 pw.Widget _totalCostCell(
   num totalCost,
   pw.TextStyle baseStyle,
+  MoneyCurrency currency,
 ) {
   final totalStyle = pw.TextStyle(
     fontSize: baseStyle.fontSize,
     fontWeight: pw.FontWeight.bold,
   );
-  final label = 'TOTAL A PAGAR: \$${_formatBudget(totalCost)}';
+  final label = 'TOTAL A PAGAR: ${currency.code} ${_formatBudget(totalCost)}';
   return pw.Container(
     padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 3),
     decoration: pw.BoxDecoration(
@@ -1610,6 +1613,8 @@ String _pdfCacheKey(OrderPdfData data, PdfPageFormat? format) {
     ..write(data.internalOrder ?? '')
     ..write(';budget:')
     ..write(data.budget?.toString() ?? '')
+    ..write(';amountCurrency:')
+    ..write(data.amountCurrency.code)
     ..write(';supplierBudgets:');
 
   if (data.supplierBudgets.isNotEmpty) {
@@ -1942,6 +1947,7 @@ OrderPdfData _sanitizePdfData(OrderPdfData data) {
     supplier: _sanitizePdfOptional(data.supplier),
     internalOrder: _sanitizePdfOptional(data.internalOrder),
     budget: data.budget,
+    amountCurrency: data.amountCurrency,
     supplierBudgets: _sanitizeBudgets(data.supplierBudgets),
     urgentJustification: _sanitizePdfOptional(data.urgentJustification),
     requestedDeliveryDate: data.requestedDeliveryDate,
@@ -2122,6 +2128,7 @@ Map<String, dynamic> _serializePdfPayload(
     'supplier': data.supplier,
     'internalOrder': data.internalOrder,
     'budget': data.budget,
+    'amountCurrency': data.amountCurrency.code,
     'supplierBudgets': data.supplierBudgets,
     'urgentJustification': data.urgentJustification,
     'requestedDeliveryDate': data.requestedDeliveryDate?.millisecondsSinceEpoch,
@@ -2252,6 +2259,9 @@ OrderPdfData _deserializeOrderPdfData(
     supplier: payload['supplier'] as String?,
     internalOrder: payload['internalOrder'] as String?,
     budget: payload['budget'] as num?,
+    amountCurrency:
+        moneyCurrencyFromString(payload['amountCurrency'] as String?) ??
+        MoneyCurrency.mxn,
     supplierBudgets: _parseSupplierBudgets(payload['supplierBudgets']),
     urgentJustification: payload['urgentJustification'] as String?,
     requestedDeliveryDate: _parseMillis(payload['requestedDeliveryDate']),

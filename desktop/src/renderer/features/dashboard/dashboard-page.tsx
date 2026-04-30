@@ -1,8 +1,7 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   AlertTriangle,
-  CheckCheck,
   CalendarClock,
   FileSpreadsheet,
   ReceiptText,
@@ -10,18 +9,14 @@ import {
   ShoppingCart,
   TimerReset,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { hasComprasAccess, hasDireccionApprovalAccess } from "@/lib/access-control";
 import { useRtdbValue } from "@/lib/firebase/hooks";
 import type { CompanyBranding } from "@/lib/branding";
 import { emptyCounts, mapDashboardCounts } from "@/features/dashboard/dashboard-data";
-import {
-  isArrivalPendingConfirmation,
-  isRequesterReceiptConfirmed,
-  mapOrders,
-} from "@/features/orders/orders-data";
 import { useBrandingStore } from "@/store/branding-store";
 import { useSessionStore } from "@/store/session-store";
+import { Snackbar } from "@/shared/ui/snackbar";
 
 type HomeBlock = {
   key: string;
@@ -77,7 +72,6 @@ function buildBlocks(
   branding: CompanyBranding,
   counts: ReturnType<typeof mapDashboardCounts>,
   profile: ReturnType<typeof useSessionStore.getState>["profile"],
-  pendingReceiptCount: number,
 ): HomeBlock[] {
   const palette = brandHomePalette(branding);
 
@@ -149,17 +143,6 @@ function buildBlocks(
       enabled: hasFacturasAccess(profile),
     },
     {
-      key: "receipts",
-      title: "Confirmar recibido",
-      subtitle: "Cierre final por parte del solicitante",
-      icon: CheckCheck,
-      to: "/orders/receipts",
-      background: palette.mediumGray,
-      foreground: "#FFFFFF",
-      count: pendingReceiptCount,
-      enabled: true,
-    },
-    {
       key: "in-process",
       title: "Ordenes en proceso",
       subtitle: "Seguimiento y cierre final de tus solicitudes",
@@ -186,27 +169,27 @@ function buildBlocks(
 
 export function DashboardPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const profile = useSessionStore((state) => state.profile);
   const branding = useBrandingStore((state) => state.branding);
-  const countsState = useRtdbValue("purchaseOrderCounters", mapDashboardCounts, Boolean(profile));
-  const ordersState = useRtdbValue("purchaseOrders", mapOrders, Boolean(profile));
+  const [notice, setNotice] = useState<string | null>(null);
+  const countsState = useRtdbValue("purchaseOrders", mapDashboardCounts, Boolean(profile));
   const counts = countsState.data ?? emptyCounts;
-  const pendingReceiptCount = useMemo(
-    () =>
-      (ordersState.data ?? []).filter(
-        (order) =>
-          order.requesterId === profile?.id &&
-          order.status === "eta" &&
-          !isRequesterReceiptConfirmed(order) &&
-          isArrivalPendingConfirmation(order),
-      ).length,
-    [ordersState.data, profile?.id],
-  );
 
-  const blocks = useMemo(
-    () => buildBlocks(branding, counts, profile, pendingReceiptCount),
-    [branding, counts, pendingReceiptCount, profile],
-  );
+  const blocks = useMemo(() => buildBlocks(branding, counts, profile), [branding, counts, profile]);
+
+  useEffect(() => {
+    const nextNotice =
+      typeof (location.state as { notice?: unknown } | null)?.notice === "string"
+        ? ((location.state as { notice?: string }).notice ?? null)
+        : null;
+    if (!nextNotice) return;
+
+    setNotice(nextNotice);
+    navigate(location.pathname + location.search, { replace: true, state: null });
+    const timer = window.setTimeout(() => setNotice(null), 3600);
+    return () => window.clearTimeout(timer);
+  }, [location.pathname, location.search, location.state, navigate]);
 
   return (
     <div className="app-page">
@@ -272,6 +255,8 @@ export function DashboardPage() {
           );
         })}
       </section>
+
+      <Snackbar message={notice} tone="success" />
     </div>
   );
 }

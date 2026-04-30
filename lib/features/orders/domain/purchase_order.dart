@@ -1,4 +1,5 @@
 import 'package:sistema_compras/core/area_labels.dart';
+import 'package:sistema_compras/core/business_calendar.dart';
 import 'package:sistema_compras/core/constants.dart';
 
 class PurchaseOrderItem {
@@ -12,6 +13,7 @@ class PurchaseOrderItem {
     this.customer,
     this.supplier,
     this.budget,
+    this.amountCurrency = MoneyCurrency.mxn,
     this.internalOrder,
     this.estimatedDate,
     this.deliveryEtaDate,
@@ -38,6 +40,7 @@ class PurchaseOrderItem {
   final String? customer;
   final String? supplier;
   final num? budget;
+  final MoneyCurrency amountCurrency;
   final String? internalOrder;
   final DateTime? estimatedDate;
   final DateTime? deliveryEtaDate;
@@ -69,6 +72,7 @@ class PurchaseOrderItem {
     String? customer,
     String? supplier,
     num? budget,
+    MoneyCurrency? amountCurrency,
     String? internalOrder,
     DateTime? estimatedDate,
     DateTime? deliveryEtaDate,
@@ -108,6 +112,7 @@ class PurchaseOrderItem {
       customer: customer ?? this.customer,
       supplier: supplier ?? this.supplier,
       budget: budget ?? this.budget,
+      amountCurrency: amountCurrency ?? this.amountCurrency,
       internalOrder: clearInternalOrder ? null : (internalOrder ?? this.internalOrder),
       estimatedDate: estimatedDate ?? this.estimatedDate,
       deliveryEtaDate: clearDeliveryEtaDate
@@ -149,6 +154,7 @@ class PurchaseOrderItem {
       'customer': customer,
       'supplier': supplier,
       'budget': budget,
+      'amountCurrency': amountCurrency.code,
       'internalOrder': internalOrder,
       'estimatedDate': estimatedDate?.millisecondsSinceEpoch,
       'deliveryEtaDate': deliveryEtaDate?.millisecondsSinceEpoch,
@@ -185,6 +191,9 @@ class PurchaseOrderItem {
       customer: data['customer'] as String?,
       supplier: data['supplier'] as String?,
       budget: budget,
+      amountCurrency:
+          moneyCurrencyFromString(data['amountCurrency'] as String?) ??
+          MoneyCurrency.mxn,
       internalOrder: data['internalOrder'] as String?,
       estimatedDate: _parseDateTime(data['estimatedDate']),
       deliveryEtaDate: _parseDateTime(data['deliveryEtaDate']),
@@ -289,6 +298,7 @@ class PurchaseOrder {
     this.supplier,
     this.internalOrder,
     this.budget,
+    this.amountCurrency = MoneyCurrency.mxn,
     this.supplierBudgets = const {},
     this.requestedDeliveryDate,
     this.etaDate,
@@ -343,6 +353,7 @@ class PurchaseOrder {
   final String? supplier;
   final String? internalOrder;
   final num? budget;
+  final MoneyCurrency amountCurrency;
   final Map<String, num> supplierBudgets;
   final DateTime? requestedDeliveryDate;
   final DateTime? etaDate;
@@ -425,6 +436,7 @@ class PurchaseOrder {
     String? supplier,
     String? internalOrder,
     num? budget,
+    MoneyCurrency? amountCurrency,
     Map<String, num>? supplierBudgets,
     DateTime? requestedDeliveryDate,
     DateTime? etaDate,
@@ -480,6 +492,7 @@ class PurchaseOrder {
       supplier: supplier ?? this.supplier,
       internalOrder: internalOrder ?? this.internalOrder,
       budget: budget ?? this.budget,
+      amountCurrency: amountCurrency ?? this.amountCurrency,
       supplierBudgets: supplierBudgets ?? this.supplierBudgets,
       requestedDeliveryDate: requestedDeliveryDate ?? this.requestedDeliveryDate,
       etaDate: etaDate ?? this.etaDate,
@@ -540,6 +553,7 @@ class PurchaseOrder {
       'supplier': supplier,
       'internalOrder': internalOrder,
       'budget': budget,
+      'amountCurrency': amountCurrency.code,
       'supplierBudgets': supplierBudgets.isEmpty ? null : supplierBudgets,
       'requestedDeliveryDate': requestedDeliveryDate?.millisecondsSinceEpoch,
       'etaDate': etaDate?.millisecondsSinceEpoch,
@@ -653,6 +667,9 @@ class PurchaseOrder {
       supplier: data['supplier'] as String?,
       internalOrder: data['internalOrder'] as String?,
       budget: data['budget'] as num?,
+      amountCurrency:
+          moneyCurrencyFromString(data['amountCurrency'] as String?) ??
+          MoneyCurrency.mxn,
       supplierBudgets: _parseSupplierBudgets(data['supplierBudgets']),
       requestedDeliveryDate: _parseDateTime(data['requestedDeliveryDate']),
       etaDate: _parseDateTime(data['etaDate']),
@@ -825,7 +842,7 @@ DateTime? orderAutoReceiptDueDate(PurchaseOrder order) {
   if (!hasAllItemsArrived(order)) return null;
   final latestArrival = resolveLatestArrivalDate(order);
   if (latestArrival == null) return null;
-  return latestArrival.add(const Duration(days: 10));
+  return addBusinessDays(latestArrival, 5);
 }
 
 bool isOrderAutoReceiptDue(PurchaseOrder order, {DateTime? now}) {

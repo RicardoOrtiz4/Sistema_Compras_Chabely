@@ -266,12 +266,12 @@ function mapLegacyOrderItems(items: PurchaseOrderItem[]): RequestOrderItemRecord
 function buildAssignedPacketItemRefSet(
   rawPackets: Record<string, Record<string, unknown>>,
   rawPacketItems: Record<string, Record<string, unknown>>,
+  rawDecisions: Record<string, Record<string, unknown>>,
 ) {
   const assigned = new Set<string>();
 
   for (const [packetId, packet] of Object.entries(rawPackets)) {
-    const status = normalizePacketStatus(asString(packet.status));
-    if (status === "completed") continue;
+    if (!bundleCountsAsActiveForDashboard(packetId, packet, rawDecisions)) continue;
 
     const packetItems = rawPacketItems[packetId] ?? {};
     for (const [itemRefId, rawItem] of Object.entries(packetItems)) {
@@ -289,15 +289,56 @@ function buildAssignedPacketItemRefSet(
   return assigned;
 }
 
+function isReturnedDraftBundle(
+  packetId: string,
+  rawPacket: Record<string, unknown>,
+  rawDecisions: Record<string, Record<string, unknown>>,
+) {
+  if (normalizePacketStatus(asString(rawPacket.status)) !== "draft") {
+    return false;
+  }
+
+  const decisions = Object.values(rawDecisions[packetId] ?? {})
+    .filter((raw) => raw && typeof raw === "object")
+    .map((raw) => raw as Record<string, unknown>)
+    .sort((left, right) => (asNumber(right.timestamp) ?? 0) - (asNumber(left.timestamp) ?? 0));
+
+  if (!decisions.length) return false;
+  return normalizeDecisionAction(asString(decisions[0].action)) === "return_for_rework";
+}
+
+function bundleCountsAsActiveForDashboard(
+  packetId: string,
+  rawPacket: Record<string, unknown>,
+  rawDecisions: Record<string, Record<string, unknown>>,
+) {
+  const status = normalizePacketStatus(asString(rawPacket.status));
+  if (status === "approval_queue" || status === "execution_ready" || status === "completed") {
+    return true;
+  }
+
+  const isSubmitted =
+    asBoolean(rawPacket.isSubmitted) ||
+    asNumber(rawPacket.submittedAt) !== undefined ||
+    asString(rawPacket.submittedBy).length > 0;
+
+  return status === "draft" && isSubmitted && !isReturnedDraftBundle(packetId, rawPacket, rawDecisions);
+}
+
 function buildReadyOrders(
   rawOrders: Record<string, Record<string, unknown>>,
   rawOrderItems: Record<string, Record<string, unknown>>,
   legacyOrders: PurchaseOrderRecord[],
   rawPackets: Record<string, Record<string, unknown>>,
   rawPacketItems: Record<string, Record<string, unknown>>,
+  rawDecisions: Record<string, Record<string, unknown>>,
 ) {
   const merged = new Map<string, RequestOrderRecord>();
-  const assignedPacketItemRefIds = buildAssignedPacketItemRefSet(rawPackets, rawPacketItems);
+  const assignedPacketItemRefIds = buildAssignedPacketItemRefSet(
+    rawPackets,
+    rawPacketItems,
+    rawDecisions,
+  );
 
   for (const legacy of legacyOrders) {
     const status = legacyStatusToNew(legacy.status);
@@ -531,6 +572,7 @@ export function usePacketWorkflowData(enabled: boolean, legacyOrders: PurchaseOr
         legacyOrders,
         packetsNode,
         packetItemsNode,
+        packetDecisionsNode,
       ),
       packets: buildPackets(packetsNode, packetItemsNode, packetDecisionsNode),
       legacyOrders,

@@ -20,6 +20,10 @@ bool hasDireccionApprovalAccess(AppUser? user) {
           isContraloriaLabel(user.areaDisplay));
 }
 
+bool canAccessDireccionGeneralModule(AppUser? user) {
+  return hasComprasAccess(user) || hasDireccionApprovalAccess(user);
+}
+
 bool hasAuthorizeOrdersAccess(AppUser? user) {
   return hasComprasAccess(user) || hasDireccionApprovalAccess(user);
 }
@@ -99,7 +103,7 @@ bool canAccessRoute(AppUser? user, String location) {
   if (location == '/orders/compras/dashboard') return hasComprasAccess(user);
   if (location == '/orders/compras/historial-pdfs') return hasComprasAccess(user);
   if (location == '/orders/direccion-general') {
-    return hasDireccionApprovalAccess(user);
+    return canAccessDireccionGeneralModule(user);
   }
   if (location == '/orders/agregar-fecha-estimada') return hasEtaAccess(user);
   if (location == '/orders/facturas-evidencias') {

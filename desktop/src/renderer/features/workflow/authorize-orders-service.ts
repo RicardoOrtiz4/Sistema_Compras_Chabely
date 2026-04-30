@@ -1,9 +1,7 @@
 import { push, ref, serverTimestamp, update } from "firebase/database";
 import { database } from "@/lib/firebase/client";
-import { uploadOrderPdf } from "@/features/orders/order-pdf-service";
 import type { PurchaseOrderItem, PurchaseOrderRecord } from "@/features/orders/orders-data";
 import { sanitizeForFirebase } from "@/lib/firebase/sanitize";
-import { useBrandingStore } from "@/store/branding-store";
 import type { AppUser } from "@/store/session-store";
 
 type TimingUpdate = {
@@ -26,13 +24,6 @@ function statusTimingUpdate(order: PurchaseOrderRecord): TimingUpdate {
     statusDurations: nextDurations,
     statusEnteredAt: now,
   };
-}
-
-function resolveCompany(order: PurchaseOrderRecord) {
-  if (order.companyId === "chabely" || order.companyId === "acerpro") {
-    return order.companyId;
-  }
-  return useBrandingStore.getState().company;
 }
 
 async function appendEvent(
@@ -72,26 +63,12 @@ export async function authorizeOrderToCompras(order: PurchaseOrderRecord, actor:
   const normalizedName = actor.name.trim() || actor.id;
   const normalizedArea = actor.areaDisplay.trim();
   const timingUpdate = statusTimingUpdate(order);
-  const now = Date.now();
-  const pdfUrl = await uploadOrderPdf({
-    company: resolveCompany(order),
-    fileLabel: "autorizada_compras",
-    order: {
-      ...order,
-      status: "sourcing",
-      authorizedByName: normalizedName,
-      authorizedByArea: normalizedArea || undefined,
-      authorizedAt: now,
-      updatedAt: now,
-    },
-  });
 
   await update(ref(database, `purchaseOrders/${order.id}`), {
     status: "sourcing",
     authorizedByName: normalizedName,
     authorizedByArea: normalizedArea || null,
     authorizedAt: serverTimestamp(),
-    pdfUrl,
     updatedAt: serverTimestamp(),
     ...timingUpdate,
   });
@@ -194,24 +171,6 @@ export async function processOrderToDashboard(
   const supplierBudgets = buildSupplierBudgets(items);
   const primarySupplier = resolveSingleSupplier(items);
   const primaryInternalOrder = resolveSingleInternalOrder(items);
-  const now = Date.now();
-  const pdfUrl = await uploadOrderPdf({
-    company: resolveCompany(order),
-    fileLabel: "compras_dashboard",
-    order: {
-      ...order,
-      status: "readyForApproval",
-      items,
-      supplier: primarySupplier ?? undefined,
-      internalOrder: primaryInternalOrder ?? undefined,
-      budget: totalBudget,
-      supplierBudgets,
-      processByName: normalizedName,
-      processByArea: normalizedArea || undefined,
-      processAt: now,
-      updatedAt: now,
-    },
-  });
 
   await update(ref(database, `purchaseOrders/${order.id}`), {
     status: "readyForApproval",
@@ -223,7 +182,6 @@ export async function processOrderToDashboard(
     processByName: normalizedName,
     processByArea: normalizedArea || null,
     processAt: serverTimestamp(),
-    pdfUrl,
     updatedAt: serverTimestamp(),
     ...timingUpdate,
   });

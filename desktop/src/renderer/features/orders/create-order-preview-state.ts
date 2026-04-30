@@ -14,6 +14,7 @@ export type CreateOrderPreviewDraft = {
   urgentJustification: string;
   items: OrderDraftItem[];
   createdAt: number;
+  reservedOrderId?: string;
 };
 
 export type CreateOrderFormDraft = {
@@ -41,6 +42,16 @@ export function readCreateOrderPreviewDraft() {
 
 export function clearCreateOrderPreviewDraft() {
   sessionStorage.removeItem(previewStorageKey);
+}
+
+export function updateCreateOrderPreviewDraft(
+  updater: (draft: CreateOrderPreviewDraft) => CreateOrderPreviewDraft,
+) {
+  const current = readCreateOrderPreviewDraft();
+  if (!current) return null;
+  const next = updater(current);
+  saveCreateOrderPreviewDraft(next);
+  return next;
 }
 
 export function saveCreateOrderFormDraft(draft: CreateOrderFormDraft) {

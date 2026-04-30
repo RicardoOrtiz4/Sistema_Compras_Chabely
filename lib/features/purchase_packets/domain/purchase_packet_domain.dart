@@ -1,5 +1,6 @@
 ﻿import 'dart:convert';
 
+import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/features/auth/domain/app_user.dart';
 
 String _normalizedStorageKey(String raw) {
@@ -141,6 +142,7 @@ class RequestOrderItem {
     required this.unit,
     this.supplierName,
     this.estimatedAmount,
+    this.amountCurrency = MoneyCurrency.mxn,
     this.customer,
     this.isClosed = false,
   });
@@ -153,6 +155,7 @@ class RequestOrderItem {
   final String unit;
   final String? supplierName;
   final num? estimatedAmount;
+  final MoneyCurrency amountCurrency;
   final String? customer;
   final bool isClosed;
 
@@ -160,6 +163,7 @@ class RequestOrderItem {
     bool? isClosed,
     String? supplierName,
     num? estimatedAmount,
+    MoneyCurrency? amountCurrency,
   }) {
     return RequestOrderItem(
       id: id,
@@ -170,6 +174,7 @@ class RequestOrderItem {
       unit: unit,
       supplierName: supplierName ?? this.supplierName,
       estimatedAmount: estimatedAmount ?? this.estimatedAmount,
+      amountCurrency: amountCurrency ?? this.amountCurrency,
       customer: customer,
       isClosed: isClosed ?? this.isClosed,
     );
@@ -185,6 +190,7 @@ class RequestOrderItem {
       'unit': unit,
       'supplierName': supplierName,
       'estimatedAmount': estimatedAmount,
+      'amountCurrency': amountCurrency.code,
       'customer': customer,
       'isClosed': isClosed,
     };
@@ -206,6 +212,9 @@ class RequestOrderItem {
           ? (data['supplierName'] as String).trim()
           : (data['supplier'] as String?)?.trim(),
       estimatedAmount: data['estimatedAmount'] as num? ?? data['budget'] as num?,
+      amountCurrency:
+          moneyCurrencyFromString(data['amountCurrency'] as String?) ??
+          MoneyCurrency.mxn,
       customer: (data['customer'] as String?)?.trim(),
       isClosed: data['isClosed'] == true,
     );
@@ -372,6 +381,7 @@ class PurchasePacket {
     required this.status,
     required this.version,
     required this.totalAmount,
+    this.amountCurrency = MoneyCurrency.mxn,
     required this.evidenceUrls,
     required this.itemRefs,
     this.createdAt,
@@ -387,6 +397,7 @@ class PurchasePacket {
   final PurchasePacketStatus status;
   final int version;
   final num totalAmount;
+  final MoneyCurrency amountCurrency;
   final List<String> evidenceUrls;
   final List<PacketItemRef> itemRefs;
   final DateTime? createdAt;
@@ -404,6 +415,7 @@ class PurchasePacket {
       'status': status.storageKey,
       'version': version,
       'totalAmount': totalAmount,
+      'amountCurrency': amountCurrency.code,
       'evidenceUrls': evidenceUrls,
       'createdAt': createdAt?.millisecondsSinceEpoch,
       'updatedAt': updatedAt?.millisecondsSinceEpoch,
@@ -426,6 +438,9 @@ class PurchasePacket {
           PurchasePacketStatus.draft,
       version: (data['version'] as num?)?.toInt() ?? 0,
       totalAmount: (data['totalAmount'] as num?) ?? 0,
+      amountCurrency:
+          moneyCurrencyFromString(data['amountCurrency'] as String?) ??
+          MoneyCurrency.mxn,
       evidenceUrls: _parseStringList(data['evidenceUrls']),
       itemRefs: itemRefs,
       createdAt: _parseDateTime(data['createdAt']),

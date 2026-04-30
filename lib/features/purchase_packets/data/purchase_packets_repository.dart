@@ -154,6 +154,7 @@ class PurchasePacketsRepository {
     required AppUser actor,
     required String supplierName,
     required num totalAmount,
+    required MoneyCurrency amountCurrency,
     required List<String> evidenceUrls,
     required List<String> itemRefIds,
   }) async {
@@ -177,6 +178,7 @@ class PurchasePacketsRepository {
       status: PurchasePacketStatus.draft,
       version: 1,
       totalAmount: totalAmount,
+      amountCurrency: amountCurrency,
       evidenceUrls: evidenceUrls
           .map((url) => url.trim())
           .where((url) => url.isNotEmpty)
@@ -201,6 +203,7 @@ class PurchasePacketsRepository {
     required AppUser actor,
     required String supplierName,
     required num totalAmount,
+    required MoneyCurrency amountCurrency,
     required List<String> evidenceUrls,
     required List<String> itemRefIds,
   }) async {
@@ -224,6 +227,7 @@ class PurchasePacketsRepository {
       status: PurchasePacketStatus.approvalQueue,
       version: 1,
       totalAmount: totalAmount,
+      amountCurrency: amountCurrency,
       evidenceUrls: evidenceUrls
           .map((url) => url.trim())
           .where((url) => url.isNotEmpty)
@@ -278,6 +282,7 @@ class PurchasePacketsRepository {
         status: PurchasePacketStatus.approvalQueue,
         version: packet.version + 1,
         totalAmount: packet.totalAmount,
+        amountCurrency: packet.amountCurrency,
         evidenceUrls: packet.evidenceUrls,
         itemRefs: packet.itemRefs,
         createdAt: packet.createdAt,
@@ -779,18 +784,19 @@ class PurchasePacketsRepository {
     final legacy = PurchaseOrder.fromMap(orderId, data);
     final items = legacy.items.map((item) {
       final itemId = 'line_${item.line}';
-      return RequestOrderItem(
-        id: itemId,
-        lineNumber: item.line,
-        partNumber: item.partNumber,
-        description: item.description,
-        quantity: item.quantity,
-        unit: item.unit,
-        supplierName: item.supplier,
-        estimatedAmount: item.budget,
-        customer: item.customer,
-        isClosed: item.isNotPurchased,
-      );
+        return RequestOrderItem(
+          id: itemId,
+          lineNumber: item.line,
+          partNumber: item.partNumber,
+          description: item.description,
+          quantity: item.quantity,
+          unit: item.unit,
+          supplierName: item.supplier,
+          estimatedAmount: item.budget,
+          amountCurrency: item.amountCurrency,
+          customer: item.customer,
+          isClosed: item.isNotPurchased,
+        );
     }).toList(growable: false);
     return RequestOrder(
       id: orderId,

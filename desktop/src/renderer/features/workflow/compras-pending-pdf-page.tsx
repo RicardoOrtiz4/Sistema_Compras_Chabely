@@ -16,6 +16,7 @@ import {
 } from "@/features/workflow/authorize-orders-service";
 import { hasComprasAccess } from "@/lib/access-control";
 import { useRtdbValue } from "@/lib/firebase/hooks";
+import { Snackbar } from "@/shared/ui/snackbar";
 import { useBrandingStore } from "@/store/branding-store";
 import { useSessionStore } from "@/store/session-store";
 
@@ -76,6 +77,12 @@ export function ComprasPendingPdfPage() {
   const confirmed = draft?.confirmed ?? false;
   const processName = draft?.processName;
   const processArea = draft?.processArea;
+
+  useEffect(() => {
+    if (!pageError) return;
+    const timeoutId = window.setTimeout(() => setPageError(null), 3600);
+    return () => window.clearTimeout(timeoutId);
+  }, [pageError]);
 
   useEffect(() => {
     if (!order) {
@@ -147,7 +154,7 @@ export function ComprasPendingPdfPage() {
     try {
       await processOrderToDashboard(order, profile, effectiveItems);
       clearComprasPendingDraft(order.id);
-      navigate("/purchase-packets");
+      navigate("/workflow/compras/dashboard");
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "No se pudo mandar la orden al dashboard.");
     } finally {
@@ -167,7 +174,7 @@ export function ComprasPendingPdfPage() {
     try {
       await returnOrderToRequester({ ...order, items: effectiveItems }, profile, returnComment);
       clearComprasPendingDraft(order.id);
-      navigate("/workflow/compras");
+      navigate("/workflow/compras/pendientes");
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "No se pudo regresar la orden.");
     } finally {
@@ -180,7 +187,7 @@ export function ComprasPendingPdfPage() {
       <section className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 border-b border-slate-300 bg-white/94 px-5 py-4 shadow-sm backdrop-blur">
         <div className="flex flex-wrap gap-3">
           <Link
-            to="/workflow/compras"
+            to="/workflow/compras/pendientes"
             className="inline-flex items-center rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700"
           >
             <ArrowLeft size={16} className="mr-2" />
@@ -188,7 +195,7 @@ export function ComprasPendingPdfPage() {
           </Link>
           {order ? (
             <Link
-              to={`/workflow/compras/${order.id}/data`}
+              to={`/workflow/compras/pendientes/${order.id}/data`}
               className="inline-flex items-center rounded-2xl border border-slate-700 bg-white px-4 py-2 text-sm font-medium text-slate-800"
             >
               {draft ? "Editar datos" : "Completar datos"}
@@ -196,12 +203,6 @@ export function ComprasPendingPdfPage() {
           ) : null}
         </div>
       </section>
-
-      {pageError ? (
-        <div className="mx-5 mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {pageError}
-        </div>
-      ) : null}
 
       <section className="flex-1 overflow-hidden bg-white">
         {ordersState.isLoading || isLoadingPdf ? (
@@ -262,6 +263,8 @@ export function ComprasPendingPdfPage() {
           </button>
         </div>
       </section>
+
+      <Snackbar message={pageError} tone="error" />
     </div>
   );
 }

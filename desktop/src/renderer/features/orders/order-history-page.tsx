@@ -2,7 +2,12 @@ import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { hasReportsAccess } from "@/lib/access-control";
 import { useRtdbValue } from "@/lib/firebase/hooks";
-import { type PurchaseOrderRecord, mapOrders } from "@/features/orders/orders-data";
+import {
+  isArrivalPendingConfirmation,
+  isRequesterReceiptConfirmed,
+  type PurchaseOrderRecord,
+  mapOrders,
+} from "@/features/orders/orders-data";
 import { getOrderStatusLabel } from "@/features/orders/order-status";
 import { useSessionStore } from "@/store/session-store";
 import { StatusBadge } from "@/shared/ui/status-badge";
@@ -127,7 +132,7 @@ export function OrderHistoryPage() {
         ) : (
           <div className="space-y-3">
             {visibleOrders.map((order) => (
-              <OrderHistoryRow key={order.id} order={order} />
+              <OrderHistoryRow key={order.id} order={order} mode={initialMode} profileId={profile?.id ?? ""} />
             ))}
           </div>
         )}
@@ -136,7 +141,22 @@ export function OrderHistoryPage() {
   );
 }
 
-function OrderHistoryRow({ order }: { order: PurchaseOrderRecord }) {
+function OrderHistoryRow({
+  order,
+  mode,
+  profileId,
+}: {
+  order: PurchaseOrderRecord;
+  mode: HistoryMode;
+  profileId: string;
+}) {
+  const canConfirmReceipt =
+    mode === "in-process" &&
+    order.requesterId === profileId &&
+    order.status === "eta" &&
+    !isRequesterReceiptConfirmed(order) &&
+    isArrivalPendingConfirmation(order);
+
   return (
     <article className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -152,14 +172,24 @@ function OrderHistoryRow({ order }: { order: PurchaseOrderRecord }) {
             tone={order.urgency === "urgente" ? "danger" : "neutral"}
           />
           <StatusBadge label={getOrderStatusLabel(order.status)} tone="info" />
+          {canConfirmReceipt ? (
+            <StatusBadge label="Lista para confirmar recibido" tone="success" />
+          ) : null}
         </div>
       </div>
 
       <div className="mt-4 flex flex-col gap-3 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between">
         <span>{formatDateTime(order.updatedAt ?? order.createdAt)}</span>
-        <Link to={`/orders/history/${order.id}`} className="app-button-secondary">
-          Ver detalle
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          {canConfirmReceipt ? (
+            <Link to={`/orders/history/${order.id}`} className="app-button-primary">
+              Confirmar recibido
+            </Link>
+          ) : null}
+          <Link to={`/orders/history/${order.id}`} className="app-button-secondary">
+            Ver detalle
+          </Link>
+        </div>
       </div>
     </article>
   );

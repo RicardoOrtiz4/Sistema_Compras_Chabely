@@ -103,6 +103,55 @@ extension PurchaseOrderUrgencyX on PurchaseOrderUrgency {
     }
   }
 }
+
+enum MoneyCurrency { mxn, usd }
+
+extension MoneyCurrencyX on MoneyCurrency {
+  String get code {
+    switch (this) {
+      case MoneyCurrency.mxn:
+        return 'MXN';
+      case MoneyCurrency.usd:
+        return 'USD';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case MoneyCurrency.mxn:
+        return 'Pesos mexicanos';
+      case MoneyCurrency.usd:
+        return 'Dolares';
+    }
+  }
+
+  String get symbol {
+    switch (this) {
+      case MoneyCurrency.mxn:
+        return 'MX\$';
+      case MoneyCurrency.usd:
+        return 'USD\$';
+    }
+  }
+}
+
+MoneyCurrency? moneyCurrencyFromString(String? raw) {
+  final value = raw?.trim().toLowerCase();
+  switch (value) {
+    case 'mxn':
+    case 'peso':
+    case 'pesos':
+    case 'pesos mexicanos':
+      return MoneyCurrency.mxn;
+    case 'usd':
+    case 'dolar':
+    case 'dolares':
+    case 'dolares americanos':
+      return MoneyCurrency.usd;
+  }
+  return null;
+}
+
 const appLogoAsset = 'evidencias/LOGO CHABELY.png';
 const int defaultOrderPageSize = 10;
 const int orderPageSizeStep = 10;

@@ -1,6 +1,7 @@
 ﻿import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod/legacy.dart';
 
+import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/features/auth/domain/app_user.dart';
 import 'package:sistema_compras/features/purchase_packets/data/purchase_packets_repository.dart';
 import 'package:sistema_compras/features/purchase_packets/domain/purchase_packet_domain.dart';
@@ -14,6 +15,7 @@ class CreatePacketFromReadyOrders {
     required AppUser actor,
     required String supplierName,
     required num totalAmount,
+    required MoneyCurrency amountCurrency,
     required List<String> evidenceUrls,
     required List<String> itemRefIds,
   }) {
@@ -21,6 +23,7 @@ class CreatePacketFromReadyOrders {
       actor: actor,
       supplierName: supplierName,
       totalAmount: totalAmount,
+      amountCurrency: amountCurrency,
       evidenceUrls: evidenceUrls,
       itemRefIds: itemRefIds,
     );
@@ -54,6 +57,7 @@ class CreateAndSubmitPacketFromReadyOrders {
     required AppUser actor,
     required String supplierName,
     required num totalAmount,
+    required MoneyCurrency amountCurrency,
     required List<String> evidenceUrls,
     required List<String> itemRefIds,
   }) {
@@ -61,6 +65,7 @@ class CreateAndSubmitPacketFromReadyOrders {
       actor: actor,
       supplierName: supplierName,
       totalAmount: totalAmount,
+      amountCurrency: amountCurrency,
       evidenceUrls: evidenceUrls,
       itemRefIds: itemRefIds,
     );

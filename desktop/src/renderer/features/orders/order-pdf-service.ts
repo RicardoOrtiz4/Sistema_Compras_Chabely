@@ -785,6 +785,10 @@ export async function buildOrderPdfBytes(input: BuildOrderPdfInput) {
 
 export async function uploadOrderPdf(input: BuildOrderPdfInput) {
   const bytes = await buildOrderPdfBytes(input);
+  return uploadOrderPdfBytes(input, bytes);
+}
+
+export async function uploadOrderPdfBytes(input: BuildOrderPdfInput, bytes: Uint8Array) {
   const fileName = `${input.fileLabel}_${Date.now()}.pdf`;
   const fileRef = storageRef(storage, `purchase_orders/${input.order.id}/${fileName}`);
   await uploadBytes(fileRef, bytes, {

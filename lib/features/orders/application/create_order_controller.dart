@@ -21,6 +21,7 @@ class OrderItemDraft {
     this.customer,
     this.supplier,
     this.budget,
+    this.amountCurrency = MoneyCurrency.mxn,
     this.internalOrder,
     this.estimatedDate,
     this.reviewFlagged = false,
@@ -38,6 +39,7 @@ class OrderItemDraft {
   final String? customer;
   final String? supplier;
   final num? budget;
+  final MoneyCurrency amountCurrency;
   final String? internalOrder;
   final DateTime? estimatedDate;
   final bool reviewFlagged;
@@ -55,6 +57,7 @@ class OrderItemDraft {
     String? customer,
     String? supplier,
     num? budget,
+    MoneyCurrency? amountCurrency,
     String? internalOrder,
     DateTime? estimatedDate,
     bool? reviewFlagged,
@@ -82,6 +85,7 @@ class OrderItemDraft {
       customer: clearCustomer ? null : (customer ?? this.customer),
       supplier: clearSupplier ? null : (supplier ?? this.supplier),
       budget: clearBudget ? null : (budget ?? this.budget),
+      amountCurrency: amountCurrency ?? this.amountCurrency,
       internalOrder: clearInternalOrder ? null : (internalOrder ?? this.internalOrder),
       estimatedDate: removeEstimatedDate ? null : (estimatedDate ?? this.estimatedDate),
       reviewFlagged: reviewFlagged ?? this.reviewFlagged,
@@ -102,6 +106,7 @@ class OrderItemDraft {
       customer: customer,
       supplier: supplier,
       budget: budget,
+      amountCurrency: amountCurrency,
       internalOrder: internalOrder,
       estimatedDate: estimatedDate,
       reviewFlagged: reviewFlagged,
@@ -138,6 +143,7 @@ class OrderItemDraft {
       customer: item.customer,
       supplier: item.supplier,
       budget: item.budget,
+      amountCurrency: item.amountCurrency,
       internalOrder: item.internalOrder,
       estimatedDate: item.estimatedDate,
       reviewFlagged: item.reviewFlagged,

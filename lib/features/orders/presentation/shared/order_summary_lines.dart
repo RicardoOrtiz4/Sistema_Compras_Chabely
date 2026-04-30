@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'package:sistema_compras/core/constants.dart';
 import 'package:sistema_compras/features/orders/domain/purchase_order.dart';
 
 class OrderSummaryLines extends StatelessWidget {
@@ -50,7 +51,8 @@ class OrderSummaryLines extends StatelessWidget {
         itemInternalOrders.length > 1
             ? 'OC internas: $internalOrder'
             : 'OC interna: $internalOrder',
-      if (includeBudget && order.budget != null) 'Presupuesto: ${order.budget}',
+      if (includeBudget && order.budget != null)
+        'Presupuesto: ${order.amountCurrency.code} ${order.budget}',
       if (notPurchasedCount > 0)
         'Items cerrados sin compra: $notPurchasedCount',
       if (includeClientNote && clientNote.isNotEmpty) 'Nota: $clientNote',

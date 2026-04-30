@@ -14,6 +14,21 @@ bool isBusinessDay(DateTime value) {
   return !isMandatoryRestDayInMexico(date);
 }
 
+DateTime addBusinessDays(
+  DateTime value,
+  int businessDays,
+) {
+  var cursor = normalizeCalendarDate(value);
+  if (businessDays <= 0) return cursor;
+  var remaining = businessDays;
+  while (remaining > 0) {
+    cursor = cursor.add(const Duration(days: 1));
+    if (!isBusinessDay(cursor)) continue;
+    remaining -= 1;
+  }
+  return cursor;
+}
+
 DateTime firstAllowedNormalRequestedDeliveryDate({
   DateTime? today,
 }) {

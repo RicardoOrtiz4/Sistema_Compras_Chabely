@@ -19,6 +19,7 @@ import { useRtdbValue } from "@/lib/firebase/hooks";
 import { useSessionStore } from "@/store/session-store";
 import { StatusBadge } from "@/shared/ui/status-badge";
 import { savePacketPreviewDraft } from "@/features/purchase-packets/packet-pdf-preview-state";
+import { Snackbar } from "@/shared/ui/snackbar";
 
 type PendingDashboardItem = {
   refId: string;
@@ -207,6 +208,18 @@ export function PurchasePacketsPage() {
     }
   }, [selectedSupplier, suppliers]);
 
+  useEffect(() => {
+    if (!actionError) return;
+    const timer = window.setTimeout(() => setActionError(null), 3600);
+    return () => window.clearTimeout(timer);
+  }, [actionError]);
+
+  useEffect(() => {
+    if (!actionMessage) return;
+    const timer = window.setTimeout(() => setActionMessage(null), 3600);
+    return () => window.clearTimeout(timer);
+  }, [actionMessage]);
+
   const selectedBatch = useMemo(
     () => (selectedSupplier ? buildSupplierBatch(selectedSupplier, pendingOrders) : null),
     [pendingOrders, selectedSupplier],
@@ -391,16 +404,6 @@ export function PurchasePacketsPage() {
           </div>
         </div>
 
-        {actionError ? (
-          <div className="mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {actionError}
-          </div>
-        ) : null}
-        {actionMessage ? (
-          <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-            {actionMessage}
-          </div>
-        ) : null}
       </section>
 
       <section className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
@@ -757,6 +760,8 @@ export function PurchasePacketsPage() {
           )}
         </article>
       </section>
+      <Snackbar message={actionError} tone="error" />
+      <Snackbar message={actionMessage} tone="success" />
     </div>
   );
 }

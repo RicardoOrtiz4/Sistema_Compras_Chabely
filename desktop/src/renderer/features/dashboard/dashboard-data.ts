@@ -34,18 +34,50 @@ export function mapDashboardCounts(value: unknown): DashboardCounts {
   }
 
   const data = value as Record<string, unknown>;
-  const status = asMap(data.status);
-  const sourcing = asMap(data.sourcing);
+  if ("status" in data || "sourcing" in data) {
+    const status = asMap(data.status);
+    const sourcing = asMap(data.sourcing);
 
-  return {
-    intakeReview: asInt(status.intakeReview),
-    sourcing: asInt(status.sourcing),
-    sourcingReadyToSend: asInt(sourcing.readyToSend),
-    pendingDireccion: asInt(status.approvalQueue),
-    pendingEta: asInt(status.paymentDone),
-    contabilidad: asInt(status.contabilidad),
-    hasRemoteCounters: Object.keys(status).length > 0 || Object.keys(sourcing).length > 0,
-  };
+    return {
+      intakeReview: asInt(status.intakeReview),
+      sourcing: asInt(status.sourcing),
+      sourcingReadyToSend: asInt(sourcing.readyToSend),
+      pendingDireccion: asInt(status.approvalQueue),
+      pendingEta: asInt(status.paymentDone),
+      contabilidad: asInt(status.contabilidad),
+      hasRemoteCounters: Object.keys(status).length > 0 || Object.keys(sourcing).length > 0,
+    };
+  }
+
+  const counts = { ...emptyCounts };
+  for (const orderValue of Object.values(data)) {
+    if (!orderValue || typeof orderValue !== "object") continue;
+    const order = orderValue as Record<string, unknown>;
+    switch (asString(order.status)) {
+      case "intakeReview":
+        counts.intakeReview += 1;
+        break;
+      case "sourcing":
+        counts.sourcing += 1;
+        break;
+      case "readyForApproval":
+        counts.sourcingReadyToSend += 1;
+        break;
+      case "approvalQueue":
+        counts.pendingDireccion += 1;
+        break;
+      case "paymentDone":
+        counts.pendingEta += 1;
+        break;
+      case "contabilidad":
+        counts.contabilidad += 1;
+        break;
+      default:
+        break;
+    }
+  }
+
+  return counts;
 }
 
 export function mapOrdersList(value: unknown): PurchaseOrderSummary[] {

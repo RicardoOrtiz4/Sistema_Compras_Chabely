@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useRtdbValue } from "@/lib/firebase/hooks";
 import {
@@ -12,6 +12,7 @@ import { confirmRequesterReceived } from "@/features/workflow/packet-follow-up-s
 import { buildOrderCsv, downloadTextFile, openExternalUrl } from "@/lib/downloads";
 import { StatusBadge } from "@/shared/ui/status-badge";
 import { useSessionStore } from "@/store/session-store";
+import { Snackbar } from "@/shared/ui/snackbar";
 
 function formatDateTime(value?: number) {
   if (!value) return "Sin fecha";
@@ -55,20 +56,20 @@ export function OrderDetailPage() {
     }
   }
 
+  useEffect(() => {
+    if (!actionError) return;
+    const timer = window.setTimeout(() => setActionError(null), 3600);
+    return () => window.clearTimeout(timer);
+  }, [actionError]);
+
+  useEffect(() => {
+    if (!actionMessage) return;
+    const timer = window.setTimeout(() => setActionMessage(null), 3600);
+    return () => window.clearTimeout(timer);
+  }, [actionMessage]);
+
   return (
     <div className="app-page">
-      {actionError ? (
-        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {actionError}
-        </div>
-      ) : null}
-
-      {actionMessage ? (
-        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-          {actionMessage}
-        </div>
-      ) : null}
-
       {ordersState.isLoading ? (
         <div className="app-card text-sm text-slate-500">Cargando detalle...</div>
       ) : ordersState.error ? (
@@ -235,6 +236,8 @@ export function OrderDetailPage() {
           </section>
         </>
       )}
+      <Snackbar message={actionError} tone="error" />
+      <Snackbar message={actionMessage} tone="success" />
     </div>
   );
 }

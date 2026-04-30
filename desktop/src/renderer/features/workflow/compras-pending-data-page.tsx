@@ -12,6 +12,7 @@ import {
   readComprasPendingDraft,
   saveComprasPendingDraft,
 } from "@/features/workflow/compras-pending-state";
+import { Snackbar } from "@/shared/ui/snackbar";
 import { useSessionStore } from "@/store/session-store";
 import { StatusBadge } from "@/shared/ui/status-badge";
 
@@ -39,6 +40,12 @@ export function ComprasPendingDataPage() {
   const [selectedInternalOrder, setSelectedInternalOrder] = useState("");
   const [workingItems, setWorkingItems] = useState<PurchaseOrderItem[]>([]);
   const [pageError, setPageError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!pageError) return;
+    const timeoutId = window.setTimeout(() => setPageError(null), 3600);
+    return () => window.clearTimeout(timeoutId);
+  }, [pageError]);
 
   useEffect(() => {
     if (!order) return;
@@ -137,7 +144,7 @@ export function ComprasPendingDataPage() {
       processName: currentDraft?.processName,
       processArea: currentDraft?.processArea,
     });
-    navigate(`/workflow/compras/${order.id}`);
+    navigate(`/workflow/compras/pendientes/${order.id}`);
   }
 
   return (
@@ -151,7 +158,7 @@ export function ComprasPendingDataPage() {
         </div>
         {order ? (
           <Link
-            to={`/workflow/compras/${order.id}`}
+            to={`/workflow/compras/pendientes/${order.id}`}
             className="inline-flex items-center rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700"
           >
             <ArrowLeft size={16} className="mr-2" />
@@ -159,12 +166,6 @@ export function ComprasPendingDataPage() {
           </Link>
         ) : null}
       </section>
-
-      {pageError ? (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {pageError}
-        </div>
-      ) : null}
 
       {!order ? (
         <div className="rounded-[18px] border border-slate-200 bg-white px-5 py-6 text-sm text-slate-500">
@@ -309,6 +310,8 @@ export function ComprasPendingDataPage() {
           </article>
         </section>
       )}
+
+      <Snackbar message={pageError} tone="error" />
     </div>
   );
 }
